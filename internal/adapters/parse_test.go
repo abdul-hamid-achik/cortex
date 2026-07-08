@@ -440,7 +440,7 @@ func TestGlyphContractHashMismatchIsActionable(t *testing.T) {
 func TestFcheapSaveRetriesWithoutIndexOnOldBinary(t *testing.T) {
 	// New fcheap indexes on save; an old fcheap rejects --index at parse time, so
 	// Save must retry without it and still archive.
-	f := &Fcheap{tool: tool{bin: "fcheap", redact: redact.New(), timeout: time.Second,
+	f := &Fcheap{tool: tool{bin: "git", redact: redact.New(), timeout: time.Second,
 		run: argAwareRunner{rejectFlag: "--index", stdoutWithout: `{"id":"rb_1","tool":"cortex"}`}}}
 	id, err := f.Save(context.Background(), "/repo", "/bundle", []string{"t"}, "cortex")
 	if err != nil || id != "rb_1" {
@@ -568,7 +568,7 @@ func TestTvaultVaultLockedIsUnavailable(t *testing.T) {
 func TestTvaultNamesOnlyFallsBackOnOldBinary(t *testing.T) {
 	// An old tvault rejects --names-only; the adapter retries the plain form and
 	// still answers from the shape-identical output.
-	tv := &Tvault{tool: tool{bin: "tvault", redact: redact.New(), timeout: time.Second,
+	tv := &Tvault{tool: tool{bin: "git", redact: redact.New(), timeout: time.Second,
 		run: argAwareRunner{rejectFlag: "--names-only", stdoutWithout: `[{"name":"app"},{"name":"api"}]`}}}
 	res, _ := tv.Execute(context.Background(), Request{Operation: "availability", Input: map[string]any{"project": "api"}})
 	if res.Status != StatusAuthoritative || !strings.Contains(res.Summary, "true") {
@@ -677,7 +677,7 @@ func TestCairntraceSelectSpecs(t *testing.T) {
 	fixture := `{"$schema":"urn:cairntrace.dev:selection:v1","version":"1","codemapAvailable":true,
 	  "selected":[{"name":"checkout","path":"/repo/specs/checkout.yml"},{"name":"login","path":"/repo/specs/login.yml"}],
 	  "skipped":[{"name":"admin","reason":"no coverage"}]}`
-	c := &Cairntrace{tool: tool{bin: "cairn", redact: redact.New(), timeout: time.Second,
+	c := &Cairntrace{tool: tool{bin: "git", redact: redact.New(), timeout: time.Second,
 		run: needArgRunner{need: ".", okOut: fixture, errOut: "error: missing required argument 'spec'"}}}
 	paths, err := c.SelectSpecs(context.Background(), "/repo", "HEAD~1")
 	if err != nil || len(paths) != 2 || paths[0] != "/repo/specs/checkout.yml" {

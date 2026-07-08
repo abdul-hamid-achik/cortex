@@ -463,7 +463,9 @@ func TestReceiptSensitivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k.writeReceipt(id, receiptSpec{Claim: "claim", Surface: domain.SurfaceCode, Tool: "codemap", Status: domain.VerifyPassed, Evidence: []string{ev.ID}})
+	if err := k.writeReceipt(id, receiptSpec{Claim: "claim", Surface: domain.SurfaceCode, Tool: "codemap", Status: domain.VerifyPassed, Evidence: []string{ev.ID}}); err != nil {
+		t.Fatalf("writeReceipt: %v", err)
+	}
 	recs, _ := k.Store().Verifications(id)
 	if len(recs) == 0 || !recs[len(recs)-1].Sensitive {
 		t.Errorf("receipt linked to sensitive evidence should be flagged sensitive; recs=%+v", recs)
