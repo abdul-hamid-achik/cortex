@@ -24,14 +24,23 @@ builds:
       - -X github.com/abdul-hamid-achik/cortex/internal/version.Date={{.Date}}
 
 archives:
-  - formats: [tar.gz]
-    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
         formats: [zip]
+    files:
+      - README.md
+      - AGENTS.md
+      - CHANGELOG.md
+      - LICENSE*
 
 checksum:
   name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
@@ -39,7 +48,41 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
+      - "^ci:"
       - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+homebrew_casks:
+  - name: cortex
+    binaries:
+      - cortex
+    repository:
+      owner: abdul-hamid-achik
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/abdul-hamid-achik/cortex"
+    description: "Local-first agent kernel: a durable case file + phase machine between an LLM and a specialist tool ecosystem"
+    # Keep this a SINGLE line: GoReleaser renders each caveat line as a separate
+    # Ruby string literal in the `caveats do … end` block, and the block returns
+    # only its last expression — a multi-line caveat drops all but the last line.
+    caveats: "Run `cortex serve` to expose the kernel as an MCP server (8 tools), or use the `cortex` CLI (`--json` for agents). Sibling tools (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault) are optional — every adapter degrades safely when its binary is absent."
+    # The released binary is unsigned (pure-Go, CGO_ENABLED=0, not notarized), so
+    # strip the Gatekeeper quarantine attribute on install — otherwise macOS
+    # refuses to run a cask-installed unsigned binary ("damaged and can't be opened").
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cortex"]
+          end
+    skip_upload: "{{ if .Env.HOMEBREW_TAP_TOKEN }}false{{ else }}true{{ end }}"
 
 release:
+  github:
+    owner: abdul-hamid-achik
+    name: cortex
   draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
