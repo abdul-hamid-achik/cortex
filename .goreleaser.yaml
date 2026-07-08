@@ -1,0 +1,45 @@
+version: 2
+
+project_name: cortex
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: cortex
+    main: ./cmd/cortex
+    binary: cortex
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/abdul-hamid-achik/cortex/internal/version.Version={{.Version}}
+      - -X github.com/abdul-hamid-achik/cortex/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/abdul-hamid-achik/cortex/internal/version.Date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false

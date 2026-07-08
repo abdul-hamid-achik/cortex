@@ -1,0 +1,74 @@
+version: 1
+name: studio
+intent: |
+    cortex studio opens a read-only terminal UI over the case store: it renders
+    the "Cortex studio" header, lists the workspace's tasks with their phase, and
+    shows the selected case's detail (goal + evidence). It navigates with the
+    arrow/j-k keys and quits cleanly on q, restoring the screen.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-lc"
+        - |
+          set -e
+          ROOT=$(pwd)
+          CX="$ROOT/bin/cortex"
+          WS=$(mktemp -d)
+          cd "$WS"
+          git init -q && git config user.email t@t.co && git config user.name t
+          printf 'package a\nfunc HandleCallback(){}\n' > callback.go
+          git add -A && git commit -qm init >/dev/null
+          "$CX" -C "$WS" start "fix the checkout redirect" --json >/dev/null
+          exec "$CX" -C "$WS" studio
+    cwd: "."
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Cortex studio"
+        timeoutMs: 8000
+    - wait:
+        screen:
+            contains: "investigating"
+        timeoutMs: 8000
+    - snapshot: opened
+    # The selected case's detail pane shows the goal + an Evidence section.
+    - wait:
+        screen:
+            contains: "Evidence"
+        timeoutMs: 5000
+    - snapshot: detail
+    # Navigation keys are handled, then quit restores the screen.
+    - press: "j"
+    - press: "k"
+    - press: "q"
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: renders_header
+      description: the studio renders its header
+      verify:
+        screen:
+            contains: "Cortex studio"
+    - id: lists_task
+      description: the workspace's task appears with its phase
+      verify:
+        screen:
+            contains: "fix the checkout redirect"
+    - id: shows_detail
+      description: the selected case's evidence section is shown
+      verify:
+        screen:
+            contains: "Evidence"
+    - id: quits_clean
+      description: q quits without error
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:d0cd4b8172be98583a37ace12a164445ce43e1ce10bce585150fcd5bdc3436d5

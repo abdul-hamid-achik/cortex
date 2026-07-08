@@ -1,0 +1,37 @@
+version: 1
+name: help
+intent: |
+    cortex --help lists the six cognitive actions so an operator can discover the workflow.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-lc"
+        - "ROOT=$(pwd); \"$ROOT/bin/cortex\" --help"
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 40
+    profile: xterm-256color
+steps:
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+    - snapshot: help
+outcomes:
+    - id: lists_investigate
+      description: help lists the investigate action
+      verify:
+        screen:
+            contains: "investigate"
+    - id: lists_verify
+      description: help lists the verify action
+      verify:
+        screen:
+            contains: "verify"
+    - id: lists_serve
+      description: help lists the MCP serve command
+      verify:
+        screen:
+            contains: "serve"
+contractHash: sha256:7c9f1578b447dfc3ee8a61cfe80efe92eaead34d3752fe5f61379bda71b7b5b2

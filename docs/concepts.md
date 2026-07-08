@@ -1,0 +1,166 @@
+# Concepts
+
+Cortex is an **agent kernel**: the runtime contract between a model and a tool ecosystem. It owns
+task lifecycle, state, tool-routing policy, result normalization, safety gates, evidence scoring,
+and verification policy. It does **not** own language understanding, coding style, or the
+internals of downstream tools.
+
+## The reasoning loop
+
+Every non-trivial task moves through the same loop, and Cortex enforces it:
+
+```
+orient → investigate → form hypotheses → declare a boundary → change → verify → preserve evidence
+```
+
+This reduces four expensive failure modes of tool-rich agents:
+
+1. **Tool-context dilution** — too many overlapping tools burn context. Cortex exposes six
+   cognitive actions instead.
+2. **Evidence collapse** — search results and logs treated as transient chat text. Cortex records
+   them as durable, provenance-bearing evidence.
+3. **Hypothesis/proof confusion** — editing before a falsifiable explanation exists. The planning
+   gate requires a disproof path.
+4. **Verification substitution** — a green compile mistaken for proof that the browser works.
+   Verification is matched to the user-visible surface.
+
+## The phase machine
+
+A task lives in exactly one phase. Transitions are legal only along a fixed graph, and each is
+guarded by a data precondition.
+
+```
+new → orienting → investigating → planned → changing → verifying → persisting → complete
+
+terminal alternatives: blocked | abandoned | needs_human_decision
+```
+
+| Transition | Requires |
+|---|---|
+| new → orienting | a goal and workspace exist |
+| orienting → investigating | repository identity and tool health are known |
+| investigating → planned | at least one hypothesis **with a disproof path** + a verification plan |
+| planned → changing | a change boundary is declared |
+| changing → verifying | a diff/change record exists |
+| verifying → persisting | required verification passed, **or** failure is explicitly recorded |
+| persisting → complete | summary, evidence references, and uncertainty are saved |
+
+Investigate-only tasks may skip `changing` (planned → verifying). A failed verify can loop back
+(verifying → changing). These rules live in `internal/domain/case.go` and are covered by tests —
+they are structural, not advisory.
+
+## Core objects
+
+### Case file
+
+The durable state of one task: goal, repository identity, evidence records, hypotheses, the plan,
+verification receipts, and the outcome. It is **working memory, not a transcript**. See
+[The case file](/case-file).
+
+### Evidence
+
+A structured claim backed by a locatable source. *A model statement without a source is an
+assertion, not evidence.* Every record carries a kind, source/provenance, a human-readable claim,
+a location or artifact reference, a confidence band, and a sensitivity flag.
+
+Confidence is a **policy band**, not the model's rhetorical certainty:
+
+| Band | Meaning |
+|---|---|
+| high | direct evidence confirms the claim |
+| medium | evidence strongly suggests it but one layer is unverified |
+| low | a plausible lead (e.g. a search hit) needing more evidence |
+| unknown | only a user report or model inference |
+
+`model_inference` and `human_report` evidence **cannot satisfy a verification requirement on their
+own**.
+
+### Hypothesis
+
+A falsifiable explanation. It must state the proposed cause, its supporting evidence, a confidence
+band, and — critically — **what result would disprove it**. The planning gate rejects hypotheses
+with no disproof path.
+
+As evidence accumulates, `cortex resolve` marks a hypothesis **confirmed**, **challenged**, or
+**rejected**. History is retained — the prior status and the reason are appended to the evidence
+ledger rather than silently overwritten, so a later agent can learn from a failed line of
+reasoning (SPEC §9.3 contradiction handling).
+
+### Change boundary
+
+The declared set of files and symbols expected to change. It is a reasoning and review guardrail,
+not a security boundary. After a change, Cortex compares the real diff against it and flags
+**scope drift** — accidental expansion becomes visible instead of silent.
+
+### Verification surface & receipts
+
+The user-visible layer a change affects picks the verifier:
+
+| Surface | Verifier |
+|---|---|
+| code graph / change impact | codemap |
+| browser / UI behavior | cairntrace |
+| terminal CLI/TUI behavior | glyphrun |
+| artifact content | fcheap |
+| secret-dependent runtime | tvault-assisted execution |
+
+A **verification receipt** names the exact claim it supports and its status: `passed`, `failed`,
+`inconclusive`, `blocked`, `not_applicable`, or `not_run`. **`not_run` is never rendered as
+`passed`.**
+
+## Three layers of memory
+
+A proven behavior is preserved in three places so it survives beyond the current context window:
+
+| Layer | Where | What |
+|---|---|---|
+| working | the case file | the current task's state, evidence, and receipts |
+| structural | codemap annotations | the proven/failed behavior attached to its owning code symbol |
+| semantic | vecgrep memory | a compact, cross-session recall of the outcome |
+
+After a definitive browser or terminal verification, Cortex annotates the code symbols the task
+declared it would change with the behavior and its evidence reference — so the next agent asking
+codemap about that symbol sees what it's known to do. A failed behavioral run is also archived to
+fcheap and linked on its receipt, turning an ephemeral run into durable, discoverable evidence.
+
+## Tool routing
+
+Cortex routes questions to the smallest appropriate tool set rather than exposing everything:
+
+| Signal | First tool | Then | Why |
+|---|---|---|---|
+| vague behavior | vecgrep | codemap | discover by meaning, then resolve structure |
+| known symbol | codemap | vecgrep | a known symbol resolves directly in the graph |
+| "what breaks if…" | codemap | review | blast radius is structural, not semantic |
+| browser bug | cairntrace | codemap | prove the failure, then map to code |
+| terminal bug | glyphrun | codemap | prove terminal behavior, then map to code |
+| old artifact | fcheap | vecgrep | recover prior evidence, then link to code |
+| secret-dependent | tvault | codemap | check capability without exposing values |
+
+## Action classes & approval
+
+Every tool operation is classified by side-effect risk, and the class drives what's allowed:
+
+| Class | Examples | Policy |
+|---|---|---|
+| `read_only` | search, inspect, status, graph query, behavioral verification | always allowed |
+| `local_mutation` | write a durable memory, stash an fcheap bundle, add a codemap annotation | allowed within an active task |
+| `external_mutation` | send, deploy, publish, push | **refused by default** — requires explicit approval |
+| `secreted_execution` | run with injected secrets | requires the tvault capability (values stay redacted) |
+
+The class is recorded in the case's command audit trail, so the security posture is inspectable.
+A harness can install an approver to grant external mutations — the explicit approval integration
+point. Cortex v0.1 issues no external mutations itself (it's an evidence layer; the agent edits
+code), so the gate is a guard rail for future capabilities and any adapter that gains an
+outward-facing verb.
+
+## Budget
+
+Each workflow gets a budget (parallel calls, investigation rounds, raw bytes per tool, evidence
+items returned). Its purpose is not just cost — it prevents frantic, indiscriminate tool use.
+
+The investigation-rounds budget (default 3) is tracked per case: each `cortex investigate` round
+increments a counter, and exceeding the budget warns and nudges the agent to form a hypothesis and
+plan. Exceeding is *allowed* — a legitimately deep investigation isn't blocked — but the reason is
+recorded on the case, and `cortex status` surfaces the round count (`rounds N/budget`). Evidence
+returned per call is likewise capped so a single query can't flood the model's context.

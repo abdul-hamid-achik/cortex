@@ -1,0 +1,21 @@
+# Build artifacts
+/bin/
+/dist/
+coverage.out
+coverage.html
+
+# Cortex local state (case files) — should also be ignored per-workspace by
+# the .agent/.gitignore Cortex writes; listed here for this repo's own dogfooding.
+/.agent/
+
+# glyphrun run artifacts
+/.glyphrun/
+
+# VitePress
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+node_modules/
+
+# OS / editor
+.DS_Store
+*.swp

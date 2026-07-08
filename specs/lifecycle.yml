@@ -1,0 +1,66 @@
+version: 1
+name: lifecycle
+intent: |
+    A full task lifecycle runs end to end: cortex starts a case, rejects a plan with no
+    disproof path, accepts a valid plan, verifies, and completes — so the phase machine and
+    its gates work through the real CLI, not just unit tests.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-lc"
+        - |
+          set -e
+          ROOT=$(pwd)
+          CX="$ROOT/bin/cortex"
+          WS=$(mktemp -d)
+          cd "$WS"
+          git init -q && git config user.email t@t.co && git config user.name t
+          mkdir -p src
+          printf 'package src\nfunc HandleCallback(){}\n' > src/callback.go
+          git add -A && git commit -qm init >/dev/null
+
+          TASK=$("$CX" -C "$WS" start "Fix redirect" --json | grep -o '"taskId": "[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "STARTED $TASK"
+
+          # A plan with no disproof path must be rejected.
+          if "$CX" -C "$WS" plan "$TASK" --hypothesis "returnTo dropped" --file src/callback.go --uncertainty u >/dev/null 2>&1; then
+            echo "GATE-FAILED: no-disproof plan was accepted"
+          else
+            echo "GATE-OK: no-disproof plan rejected"
+          fi
+
+          # A valid plan is accepted.
+          "$CX" -C "$WS" plan "$TASK" --hypothesis "returnTo dropped :: review the diff" --file src/callback.go --uncertainty u >/dev/null
+          printf 'package src\nfunc HandleCallback(){ _ = 1 }\n' > src/callback.go
+          "$CX" -C "$WS" verify "$TASK" --claim "the diff is sound" >/dev/null
+          "$CX" -C "$WS" remember "$TASK" "fixed returnTo" >/dev/null
+          PHASE=$("$CX" -C "$WS" status "$TASK" --json | grep -o '"phase": "[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "FINAL-PHASE $PHASE"
+    cwd: "."
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+steps:
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 30000
+    - snapshot: lifecycle
+outcomes:
+    - id: task_started
+      description: a task id is minted at start
+      verify:
+        screen:
+            contains: "STARTED task_"
+    - id: disproof_gate_enforced
+      description: a plan with no disproof path is rejected
+      verify:
+        screen:
+            contains: "GATE-OK"
+    - id: completes
+      description: the task reaches the complete phase
+      verify:
+        screen:
+            contains: "FINAL-PHASE complete"
+contractHash: sha256:b072014f355cd7fac036d3515b3f393d746f0fd044e6fed4e195f47a420b81d3

@@ -1,0 +1,27 @@
+version: 1
+name: version
+intent: |
+    cortex reports its version and exits cleanly.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-lc"
+        - "ROOT=$(pwd); \"$ROOT/bin/cortex\" --version"
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 30
+    profile: xterm-256color
+steps:
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+    - snapshot: version
+outcomes:
+    - id: prints_name
+      description: the output includes the cortex binary name
+      verify:
+        screen:
+            contains: "cortex"
+contractHash: sha256:44b703e79674273425acfd470b2cf84a83aa56c1c0c759ac3a46797edbdb2fcf
