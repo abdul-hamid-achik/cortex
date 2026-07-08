@@ -359,6 +359,22 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 	if len(r.Hotspots) > 0 {
 		warns = append(warns, fmt.Sprintf("change touches %s (high fan-in)", pluralize(len(r.Hotspots), "hotspot")))
 	}
+	// SPEC §13.3 escalation: surface when the diff touches an exported (public-
+	// contract) symbol so the change gets the scrutiny an API/permission boundary
+	// change warrants. An exported name starts with an uppercase rune (Go) or an
+	// ASCII letter (TS/JS, where a leading underscore marks private). Only
+	// counts indexed symbols — an unindexed review has no ChangedSymbols.
+	if r.Indexed {
+		exported := 0
+		for _, s := range r.ChangedSymbols {
+			if isExportedSymbol(s.Symbol) {
+				exported++
+			}
+		}
+		if exported > 0 {
+			warns = append(warns, fmt.Sprintf("diff touches %s — confirm no API/permission/public-contract change, or add behavioral verification (SPEC §13.3)", pluralize(exported, "exported symbol")))
+		}
+	}
 	// A structural review is only authoritative when the project is indexed;
 	// otherwise it is a plain changed-file list (blast radius unavailable).
 	status, conf := StatusAuthoritative, "high"
@@ -428,6 +444,19 @@ func noteWarnings(note string, untested bool, symbol string) []string {
 		w = append(w, symbol+" has no covering tests")
 	}
 	return w
+}
+
+// isExportedSymbol reports whether a symbol name is exported (public contract).
+// Conservative: only an uppercase first rune counts (Go public; TS/JS class/
+// PascalCase public). A lowercase name is ambiguous (Go private, TS public) so
+// it is NOT flagged, to avoid false escalation noise on Go unexported helpers.
+// A leading underscore (TS/JS private) never counts. SPEC §13.3.
+func isExportedSymbol(name string) bool {
+	if name == "" {
+		return false
+	}
+	r := name[0]
+	return 'A' <= r && r <= 'Z'
 }
 
 // degraded builds a partial result when a tool returned output we couldn't

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
@@ -86,8 +87,14 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 			"connect": true, "limit": candLimit,
 		}}}, steps...)
 	}
-	for _, step := range steps {
-		res := k.run(ctx, step.tool, adapters.Request{TaskID: c.ID, Operation: step.op, Input: step.input})
+	// Execute the routed tool sequence with bounded parallelism (SPEC §7.3
+	// max_parallel_calls). The steps are independent adapter calls — step N's
+	// result does not feed step N+1's input — so they can run concurrently.
+	// Results are collected back in step order so the evidence/warnings order
+	// stays deterministic. The expensive part (subprocess spawn) parallelizes;
+	// evidence stamping runs sequentially after, serializing store writes.
+	results := k.runStepsParallel(ctx, c.ID, steps)
+	for _, res := range results {
 		// A non-authoritative result (partial/unavailable/error) means this step's
 		// facts (if any) are stale, incomplete, or a fallback — never silently as
 		// trustworthy as a clean search. Surfaced as a top-level flag, not just a
@@ -138,6 +145,34 @@ type step struct {
 	tool  string
 	op    string
 	input map[string]any
+}
+
+// runStepsParallel executes the investigation steps concurrently, bounded by
+// max_parallel_calls (SPEC §7.3). Steps are independent adapter calls, so they
+// can fan out; results are returned in the original step order so evidence and
+// warnings stay deterministic. A non-positive budget runs sequentially.
+func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []step) []adapters.Result {
+	results := make([]adapters.Result, len(steps))
+	maxParallel := k.cfg.Budget.MaxParallelCalls
+	if maxParallel < 1 || len(steps) <= 1 {
+		for i, s := range steps {
+			results[i] = k.run(ctx, s.tool, adapters.Request{TaskID: taskID, Operation: s.op, Input: s.input})
+		}
+		return results
+	}
+	sem := make(chan struct{}, maxParallel)
+	var wg sync.WaitGroup
+	for i, s := range steps {
+		wg.Add(1)
+		go func(i int, s step) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i] = k.run(ctx, s.tool, adapters.Request{TaskID: taskID, Operation: s.op, Input: s.input})
+		}(i, s)
+	}
+	wg.Wait()
+	return results
 }
 
 // routeSteps expands a Route into concrete adapter operations for the question.

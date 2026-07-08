@@ -439,6 +439,32 @@ func TestActionGateBlocksExternal(t *testing.T) {
 	}
 }
 
+// TestEnvApproverGatesExternal guards the SPEC §16.2 #4 env-gated approver:
+// CORTEX_APPROVE_EXTERNAL=1 lets an external mutation run; unset keeps the deny.
+func TestEnvApproverGatesExternal(t *testing.T) {
+	dep := &fakeAdapter{name: "deployer", result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "deployed"}}
+
+	t.Run("approved when env set", func(t *testing.T) {
+		t.Setenv("CORTEX_APPROVE_EXTERNAL", "1")
+		k := newTestKernel(t, testRepo(t), dep)
+		env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+		res := k.run(context.Background(), "deployer", adapters.Request{TaskID: env.TaskID, Operation: "deploy"})
+		if res.Status == adapters.StatusBlocked {
+			t.Errorf("with CORTEX_APPROVE_EXTERNAL=1, external mutation should run, got %s", res.Status)
+		}
+	})
+
+	t.Run("denied when env unset", func(t *testing.T) {
+		t.Setenv("CORTEX_APPROVE_EXTERNAL", "")
+		k := newTestKernel(t, testRepo(t), dep)
+		env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+		res := k.run(context.Background(), "deployer", adapters.Request{TaskID: env.TaskID, Operation: "deploy"})
+		if res.Status != adapters.StatusBlocked {
+			t.Errorf("with env unset, external mutation should be blocked, got %s", res.Status)
+		}
+	})
+}
+
 func TestAuditRecordsActionClass(t *testing.T) {
 	vg := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
 		result: adapters.Result{Status: adapters.StatusAuthoritative}}

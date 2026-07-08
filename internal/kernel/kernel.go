@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
@@ -53,7 +54,34 @@ func New(cfg config.Config) (*Kernel, error) {
 		adapters.NewTvault(),
 	)
 	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls) // SPEC §7.3
-	return &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now}, nil
+	k := &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now}
+	// SPEC §16.2 #4: wire an env-gated approver so a harness/CI can allow
+	// external mutations without code changes. Default (unset) keeps the
+	// built-in deny — external actions stay blocked until explicitly approved.
+	if approveExternal() {
+		k.SetApprover(envApprover{})
+	}
+	return k, nil
+}
+
+// envApprover approves external-mutation and secreted-execution actions when
+// CORTEX_APPROVE_EXTERNAL is set (truthy: 1, true, yes). It never weakens
+// read-only or local-mutation classes (those are always allowed). The action is
+// still recorded in the audit trail by run() — approval is not silent.
+type envApprover struct{}
+
+func (envApprover) Approve(_, _, _ string, class domain.ActionClass) bool {
+	return class == domain.ActionExternalMutation || class == domain.ActionSecretedExecution
+}
+
+// approveExternal reads CORTEX_APPROVE_EXTERNAL; truthy values enable the env
+// approver. Unset or any other value keeps the default deny.
+func approveExternal() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CORTEX_APPROVE_EXTERNAL"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // ensureStateIgnored writes a .gitignore containing "*" at the .agent/ root so
@@ -76,6 +104,9 @@ func NewWith(cfg config.Config, store *casefs.Store, reg *adapters.Registry) *Ke
 	k := &Kernel{cfg: cfg, store: store, reg: reg, red: redact.New(cfg.RedactLiterals...), now: time.Now}
 	if g, ok := reg.Get("git").(*adapters.Git); ok {
 		k.git = g
+	}
+	if approveExternal() {
+		k.SetApprover(envApprover{})
 	}
 	return k
 }

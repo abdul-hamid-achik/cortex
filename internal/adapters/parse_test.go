@@ -555,6 +555,32 @@ func TestCodemapReviewRiskBand(t *testing.T) {
 	}
 }
 
+// TestCodemapReviewExportedSymbolEscalation guards the SPEC §13.3 public-
+// contract escalation: an indexed review with an exported changed symbol warns
+// that the diff touches a public-contract surface.
+func TestCodemapReviewExportedSymbolEscalation(t *testing.T) {
+	exported := `{"indexed":true,"is_repo":true,"changed_files":[{"path":"a.go","status":"M","symbols":2}],
+	  "changed_symbols":[{"symbol":"HandleCallback"},{"symbol":"helper"}],"covering_tests":[],"call_graph":"resolved"}`
+	res, _ := (&Codemap{tool: fakeTool(exported, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	joined := strings.Join(res.Warnings, " ")
+	if !strings.Contains(joined, "exported symbol") || !strings.Contains(joined, "SPEC §13.3") {
+		t.Errorf("an exported changed symbol should trigger the §13.3 escalation warning, got: %s", joined)
+	}
+	// Only-private symbols (leading lowercase/underscore) do NOT trigger it.
+	priv := `{"indexed":true,"is_repo":true,"changed_files":[{"path":"a.go","status":"M","symbols":1}],
+	  "changed_symbols":[{"symbol":"helper"},{"symbol":"_internal"}],"covering_tests":[],"call_graph":"resolved"}`
+	r2, _ := (&Codemap{tool: fakeTool(priv, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	if strings.Contains(strings.Join(r2.Warnings, " "), "exported symbol") {
+		t.Errorf("non-exported symbols must not trigger the §13.3 escalation, got: %v", r2.Warnings)
+	}
+	// An unindexed review has no changed_symbols, so no escalation.
+	unindexed := `{"indexed":false,"is_repo":true,"changed_files":[{"path":"a.go","status":"M"}],"changed_symbols":[],"note":"not indexed"}`
+	r3, _ := (&Codemap{tool: fakeTool(unindexed, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	if strings.Contains(strings.Join(r3.Warnings, " "), "exported symbol") {
+		t.Errorf("unindexed review must not emit an exported-symbol warning, got: %v", r3.Warnings)
+	}
+}
+
 func TestTvaultVaultLockedIsUnavailable(t *testing.T) {
 	// tvault ≥0.16 signals a locked vault deterministically (exit 3); it must be
 	// an honest "unavailable", not an opaque degrade.
