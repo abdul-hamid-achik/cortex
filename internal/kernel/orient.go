@@ -13,12 +13,11 @@ import (
 
 // StartInput parameterizes StartTask (SPEC §10.2 cortex_start_task).
 type StartInput struct {
-	Goal      string
-	Workspace string
-	Mode      domain.Mode
-	Surfaces  []domain.Surface
-	Risk      string
-	BaseRef   string // diff base for a review task (empty = working-tree diff)
+	Goal     string
+	Mode     domain.Mode
+	Surfaces []domain.Surface
+	Risk     string
+	BaseRef  string // diff base for a review task (empty = working-tree diff)
 }
 
 // StartTask creates a case file and performs lightweight orientation: it reads

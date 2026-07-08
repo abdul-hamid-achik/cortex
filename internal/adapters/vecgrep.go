@@ -9,8 +9,8 @@ import (
 
 // Vecgrep adapts the vecgrep CLI for semantic/keyword discovery and cross-
 // session memory (SPEC §11.3, §12.3). Unlike codemap it uses `-f json` (an enum
-// flag, not a boolean) and `-n` for the limit, and has no `doctor` subcommand —
-// health is probed via `status -f json`.
+// flag, not a boolean) and `-n` for the limit. vecgrep has no `doctor`
+// subcommand — health is probed via `vecgrep --version`.
 type Vecgrep struct{ tool }
 
 // NewVecgrep builds a vecgrep adapter. Timeout is the SPEC §17.2 code_search
@@ -21,7 +21,7 @@ func (v *Vecgrep) Name() string { return "vecgrep" }
 
 func (v *Vecgrep) Capabilities() []Capability { return []Capability{CapabilityDiscover} }
 
-// Health probes vecgrep via `status -f json` (no doctor subcommand exists).
+// Health probes vecgrep via `vecgrep --version` (no doctor subcommand exists).
 func (v *Vecgrep) Health(ctx context.Context) error {
 	if !binExists(v.bin) {
 		return ErrToolMissing

@@ -15,6 +15,8 @@ type PlanInput struct {
 	ChangeBoundary domain.ChangeBoundary
 	Verification   []string
 	Uncertainty    string
+	// TimeoutOverrides maps a tool name to a per-task timeout (SPEC §17.2).
+	TimeoutOverrides map[string]string
 }
 
 // HypothesisInput is the model-facing hypothesis shape (disproveBy is free text
@@ -89,7 +91,7 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 	}
 	c.ChangeBoundary = in.ChangeBoundary
 	c.VerificationRequired = verification
-
+	c.TimeoutOverrides = in.TimeoutOverrides
 	// investigating → planned (a hypothesis + disproof + verification plan exist).
 	if err := k.transition(c, domain.PhasePlanned); err != nil {
 		return errEnvelope(c.ID, err.Error()), nil
@@ -97,7 +99,6 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 	if err := k.store.Save(c); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
-
 	env := domain.Envelope{
 		OK:     true,
 		TaskID: c.ID,
@@ -111,6 +112,17 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 			"cortex verify — run the required verifiers and check for scope drift",
 		},
 		RawAvailable: false,
+	}
+	// §13.1: a change task should have evidence supporting each hypothesis
+	// before it enters changing. This is surfaced as a warning (not a hard
+	// gate) so a hypothesis can be recorded before formal evidence exists, but
+	// the gap is visible to the model.
+	if c.Mode == domain.ModeChange {
+		for _, h := range hyps {
+			if len(h.Supports) == 0 {
+				env.Warnings = append(env.Warnings, fmt.Sprintf("hypothesis %q has no supporting evidence — investigate to gather evidence before changing (SPEC §13.1)", h.ID))
+			}
+		}
 	}
 	for _, h := range hyps {
 		env.Hypotheses = append(env.Hypotheses, domain.ToHypView(h))

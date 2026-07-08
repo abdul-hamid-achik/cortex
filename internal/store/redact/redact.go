@@ -37,7 +37,7 @@ var builtins = []pattern{
 	// explicit three-way alternation). The optional ["'] after the key name lets
 	// a JSON field ("api_key":"…") match — otherwise the key's closing quote sits
 	// between the name and the ':' and defeats the separator, leaking the value.
-	{"assigned-secret", regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)[A-Z0-9_]*)["']?\s*[:=]\s*(?:"[^"\n]{3,}"|'[^'\n]{3,}'|[^\s]{6,})`)},
+	{"assigned-secret", regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)[A-Z0-9_]*)["']?\s*([:=])\s*(?:"[^"\n]{3,}"|'[^'\n]{3,}'|[^\s]{6,})`)},
 }
 
 // Redactor masks secrets. Extra literal values (e.g. secret names/values known
@@ -70,9 +70,12 @@ func (r *Redactor) String(s string) string {
 	}
 	for _, p := range r.patterns {
 		if p.name == "assigned-secret" {
-			// Keep the key name; replace the whole value (any quoting) with the
-			// mask so nothing of the secret survives.
-			s = p.re.ReplaceAllString(s, `${1}=`+Mask)
+			// Keep the key name and the original separator so the redacted line
+			// stays readable and structurally intact — `KEY=«redacted»` for an
+			// env assignment, `"api_key":«redacted»` for a JSON field (the closing
+			// key quote is consumed by the optional ["'] in the pattern). The mask
+			// replaces the whole value regardless of quoting so nothing survives.
+			s = p.re.ReplaceAllString(s, `${1}${2}`+Mask)
 			continue
 		}
 		s = p.re.ReplaceAllString(s, Mask)

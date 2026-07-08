@@ -38,17 +38,19 @@ position) or inline with the "statement :: disproof" form:
 		reason, _ := cmd.Flags().GetString("boundary-reason")
 		verify, _ := cmd.Flags().GetStringArray("verify")
 		uncertainty, _ := cmd.Flags().GetString("uncertainty")
+		timeouts, _ := cmd.Flags().GetStringArray("timeout")
 
 		hyps, err := buildHypotheses(statements, disproofs, confidence)
 		if err != nil {
 			return err
 		}
 		env, err := k.Plan(kernel.PlanInput{
-			TaskID:         args[0],
-			Hypotheses:     hyps,
-			ChangeBoundary: domain.ChangeBoundary{Files: files, Symbols: symbols, Reason: reason},
-			Verification:   verify,
-			Uncertainty:    uncertainty,
+			TaskID:           args[0],
+			Hypotheses:       hyps,
+			ChangeBoundary:   domain.ChangeBoundary{Files: files, Symbols: symbols, Reason: reason},
+			Verification:     verify,
+			Uncertainty:      uncertainty,
+			TimeoutOverrides: parseTimeouts(timeouts),
 		})
 		if err != nil {
 			return err
@@ -81,6 +83,22 @@ func buildHypotheses(statements, disproofs []string, confidence string) ([]kerne
 	return out, nil
 }
 
+// parseTimeouts turns repeated "tool=duration" flags into a per-tool timeout
+// override map (SPEC §17.2). Malformed entries are silently skipped so a typo
+// never blocks planning.
+func parseTimeouts(flags []string) map[string]string {
+	if len(flags) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(flags))
+	for _, f := range flags {
+		if idx := strings.Index(f, "="); idx > 0 {
+			m[f[:idx]] = strings.TrimSpace(f[idx+1:])
+		}
+	}
+	return m
+}
+
 func init() {
 	planCmd.Flags().StringArray("hypothesis", nil, "a hypothesis statement (repeatable; supports 'statement :: disproof')")
 	planCmd.Flags().StringArray("disprove", nil, "disproof path for the matching --hypothesis (repeatable)")
@@ -89,6 +107,7 @@ func init() {
 	planCmd.Flags().StringArray("symbol", nil, "a symbol in the change boundary (repeatable)")
 	planCmd.Flags().String("boundary-reason", "", "why these files/symbols are the expected change set")
 	planCmd.Flags().StringArray("verify", nil, "a required verifier (repeatable): codemap_review, cairntrace_flow, glyphrun_flow, …")
+	planCmd.Flags().StringArray("timeout", nil, "per-task timeout override as tool=duration (repeatable, e.g. codemap=45s) — written to the case file (SPEC §17.2)")
 	planCmd.Flags().String("uncertainty", "", "explicit statement of what remains uncertain (required)")
 	rootCmd.AddCommand(planCmd)
 }

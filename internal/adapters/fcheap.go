@@ -20,7 +20,7 @@ func (f *Fcheap) Name() string { return "fcheap" }
 
 func (f *Fcheap) Capabilities() []Capability { return []Capability{CapabilityArtifacts} }
 
-// Health runs `fcheap doctor --json`.
+// Health probes fcheap via `fcheap --version`.
 func (f *Fcheap) Health(ctx context.Context) error {
 	if !binExists(f.bin) {
 		return ErrToolMissing

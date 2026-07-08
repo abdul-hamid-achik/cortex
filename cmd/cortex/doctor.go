@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -85,7 +86,7 @@ blocked rather than fabricated.`,
 }
 
 func init() {
-	doctorCmd.Flags().String("gateway-server", "cortex", "the mcphub-registered server name to self-check")
+	doctorCmd.Flags().String("gateway-server", adapters.DefaultServerName, "the mcphub-registered server name to self-check")
 	doctorCmd.Flags().Bool("probe", false, "complete a real MCP handshake when checking gateway registration")
 	rootCmd.AddCommand(doctorCmd)
 }

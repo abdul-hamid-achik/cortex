@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
@@ -25,7 +26,8 @@ var ErrNotFound = errors.New("not found")
 
 // Store is a filesystem-backed case-file store rooted at a cases directory.
 type Store struct {
-	root string // e.g. <workspace>/.agent/cases
+	root string     // e.g. <workspace>/.agent/cases
+	mu   sync.Mutex // guards AppendVerification read-modify-write
 }
 
 // New opens (creating if needed) a case store under the given cases root.
@@ -54,7 +56,7 @@ func (s *Store) Create(c *domain.CaseFile) error {
 	if _, err := os.Stat(dir); err == nil {
 		return fmt.Errorf("case %s already exists", c.ID)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "refs"), 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	return s.Save(c)
@@ -209,10 +211,14 @@ func (s *Store) Hypotheses(taskID string) ([]domain.Hypothesis, error) {
 
 // AppendVerification appends a verification receipt to verification.json,
 // which is maintained as a JSON array (read-modify-write; receipts are few).
+// The store mutex guards the read-modify-write so concurrent receipts for the
+// same task can't lose one another (both reading N then writing N+1).
 func (s *Store) AppendVerification(taskID string, vr domain.VerificationRecord) error {
 	if err := vr.Validate(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	recs, err := s.Verifications(taskID)
 	if err != nil {
 		return err
@@ -296,6 +302,7 @@ func writeJSON(path string, v any) error {
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
 		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {

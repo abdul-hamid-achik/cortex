@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -130,8 +131,11 @@ func vaultLocked(code int, stdout, stderr string) bool {
 	return code == 3 || containsFold(stdout, "vault_locked") || containsFold(stderr, "vault_locked")
 }
 
-// containsProject checks whether the project name appears in the listing. It is
-// a deliberately loose match over already-redacted, values-free output.
+// containsProject checks whether the project name appears in the listing. It
+// is a deliberately loose match over already-redacted, values-free output.
+// The JSON path matches exact names; the fallback (old tvault without --json)
+// tokenizes by whitespace/newlines and compares whole tokens so a project
+// named "api" does not substring-match inside "prod-api-gateway".
 func containsProject(listing, project string) bool {
 	var ps []tvProject
 	if err := decodeJSON(listing, &ps); err == nil {
@@ -142,8 +146,13 @@ func containsProject(listing, project string) bool {
 		}
 		return false
 	}
-	// Fall back to substring when the shape isn't an array of {name}.
-	return containsFold(listing, project)
+	// Fall back to whole-token comparison when the shape isn't an array.
+	for _, tok := range strings.Fields(listing) {
+		if strings.EqualFold(tok, project) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsFold(haystack, needle string) bool {

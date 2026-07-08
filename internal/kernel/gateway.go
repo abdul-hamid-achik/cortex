@@ -14,7 +14,7 @@ import (
 // not task evidence), so the kernel constructs it here to keep cmd thin.
 func (k *Kernel) GatewaySelfCheck(ctx context.Context, serverName string, probe bool) adapters.GatewayReport {
 	if serverName == "" {
-		serverName = "cortex"
+		serverName = adapters.DefaultServerName
 	}
 	return adapters.NewMcphub().GatewaySelfCheck(ctx, serverName, probe)
 }

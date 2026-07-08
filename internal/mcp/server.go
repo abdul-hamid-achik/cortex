@@ -106,23 +106,25 @@ type hypothesisArg struct {
 }
 
 type planInput struct {
-	TaskID         string          `json:"taskId" jsonschema:"the task to plan"`
-	Hypotheses     []hypothesisArg `json:"hypotheses" jsonschema:"one or more hypotheses, each with a disproof path"`
-	Files          []string        `json:"files,omitempty" jsonschema:"files you expect to change (the change boundary)"`
-	Symbols        []string        `json:"symbols,omitempty" jsonschema:"symbols you expect to change"`
-	BoundaryReason string          `json:"boundaryReason,omitempty" jsonschema:"why these files/symbols are the expected change set"`
-	Verification   []string        `json:"verification,omitempty" jsonschema:"required verifiers (e.g. codemap_review, cairntrace_flow)"`
-	Uncertainty    string          `json:"uncertainty" jsonschema:"explicit statement of what remains uncertain (required)"`
-	Workspace      string          `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	TaskID           string            `json:"taskId" jsonschema:"the task to plan"`
+	Hypotheses       []hypothesisArg   `json:"hypotheses" jsonschema:"one or more hypotheses, each with a disproof path"`
+	Files            []string          `json:"files,omitempty" jsonschema:"files you expect to change (the change boundary)"`
+	Symbols          []string          `json:"symbols,omitempty" jsonschema:"symbols you expect to change"`
+	BoundaryReason   string            `json:"boundaryReason,omitempty" jsonschema:"why these files/symbols are the expected change set"`
+	Verification     []string          `json:"verification,omitempty" jsonschema:"required verifiers (e.g. codemap_review, cairntrace_flow)"`
+	Uncertainty      string            `json:"uncertainty" jsonschema:"explicit statement of what remains uncertain (required)"`
+	TimeoutOverrides map[string]string `json:"timeoutOverrides,omitempty" jsonschema:"per-task timeout override as tool→duration (e.g. {\"codemap\":\"45s\"}) — written to the case file (SPEC §17.2)"`
+	Workspace        string            `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
 type verifyInput struct {
-	TaskID       string   `json:"taskId" jsonschema:"the task to verify"`
-	Claims       []string `json:"claims,omitempty" jsonschema:"the user-facing claims to prove"`
-	ChangedFiles []string `json:"changedFiles,omitempty" jsonschema:"changed files; derived from git when omitted"`
-	BrowserSpec  string   `json:"browserSpec,omitempty" jsonschema:"cairntrace spec path to prove browser claims"`
-	TerminalSpec string   `json:"terminalSpec,omitempty" jsonschema:"glyphrun spec path to prove terminal claims"`
-	Workspace    string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	TaskID           string   `json:"taskId" jsonschema:"the task to verify"`
+	Claims           []string `json:"claims,omitempty" jsonschema:"the user-facing claims to prove"`
+	ChangedFiles     []string `json:"changedFiles,omitempty" jsonschema:"changed files; derived from git when omitted"`
+	BrowserSpec      string   `json:"browserSpec,omitempty" jsonschema:"cairntrace spec path to prove browser claims"`
+	TerminalSpec     string   `json:"terminalSpec,omitempty" jsonschema:"glyphrun spec path to prove terminal claims"`
+	DisableAutoSpecs bool     `json:"disableAutoSpecs,omitempty" jsonschema:"skip auto-selection of covering browser/terminal specs"`
+	Workspace        string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
 type rememberInput struct {
@@ -217,11 +219,11 @@ func (s *Server) handleStart(ctx context.Context, _ *sdkmcp.CallToolRequest, in 
 	if err != nil {
 		return result(nil, err)
 	}
-	env, _ := k.StartTask(ctx, kernel.StartInput{
-		Goal: in.Goal, Workspace: in.Workspace, Mode: domain.Mode(in.Mode),
+	env, err := k.StartTask(ctx, kernel.StartInput{
+		Goal: in.Goal, Mode: domain.Mode(in.Mode),
 		Surfaces: toSurfaces(in.Surfaces), Risk: in.Risk,
 	})
-	return result(env, nil)
+	return result(env, err)
 }
 
 func (s *Server) handleInvestigate(ctx context.Context, _ *sdkmcp.CallToolRequest, in investigateInput) (*sdkmcp.CallToolResult, any, error) {
@@ -229,10 +231,10 @@ func (s *Server) handleInvestigate(ctx context.Context, _ *sdkmcp.CallToolReques
 	if err != nil {
 		return result(nil, err)
 	}
-	env, _ := k.Investigate(ctx, kernel.InvestigateInput{
+	env, err := k.Investigate(ctx, kernel.InvestigateInput{
 		TaskID: in.TaskID, Question: in.Question, Surfaces: toSurfaces(in.Surfaces), Depth: in.Depth, Video: in.Video,
 	})
-	return result(env, nil)
+	return result(env, err)
 }
 
 func (s *Server) handlePlan(_ context.Context, _ *sdkmcp.CallToolRequest, in planInput) (*sdkmcp.CallToolResult, any, error) {
@@ -244,12 +246,14 @@ func (s *Server) handlePlan(_ context.Context, _ *sdkmcp.CallToolRequest, in pla
 	for _, h := range in.Hypotheses {
 		hyps = append(hyps, kernel.HypothesisInput{Statement: h.Statement, Supports: h.Supports, Confidence: h.Confidence, DisproveBy: h.DisproveBy})
 	}
-	env, _ := k.Plan(kernel.PlanInput{
-		TaskID: in.TaskID, Hypotheses: hyps,
+	env, err := k.Plan(kernel.PlanInput{
+		TaskID:         in.TaskID,
+		Hypotheses:     hyps,
 		ChangeBoundary: domain.ChangeBoundary{Files: in.Files, Symbols: in.Symbols, Reason: in.BoundaryReason},
 		Verification:   in.Verification, Uncertainty: in.Uncertainty,
+		TimeoutOverrides: in.TimeoutOverrides,
 	})
-	return result(env, nil)
+	return result(env, err)
 }
 
 func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in verifyInput) (*sdkmcp.CallToolResult, any, error) {
@@ -257,11 +261,12 @@ func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 	if err != nil {
 		return result(nil, err)
 	}
-	env, _ := k.Verify(ctx, kernel.VerifyInput{
+	env, err := k.Verify(ctx, kernel.VerifyInput{
 		TaskID: in.TaskID, Claims: in.Claims, ChangedFiles: in.ChangedFiles,
 		BrowserSpec: in.BrowserSpec, TerminalSpec: in.TerminalSpec,
+		DisableAutoSpecs: in.DisableAutoSpecs,
 	})
-	return result(env, nil)
+	return result(env, err)
 }
 
 func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, in rememberInput) (*sdkmcp.CallToolResult, any, error) {
@@ -269,11 +274,11 @@ func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	if err != nil {
 		return result(nil, err)
 	}
-	env, _ := k.Remember(ctx, kernel.RememberInput{
+	env, err := k.Remember(ctx, kernel.RememberInput{
 		TaskID: in.TaskID, Outcome: in.Outcome, Importance: in.Importance,
 		Tags: in.Tags, VerificationNotPossible: in.VerificationNotPossible,
 	})
-	return result(env, nil)
+	return result(env, err)
 }
 
 func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in statusInput) (*sdkmcp.CallToolResult, any, error) {
@@ -281,8 +286,8 @@ func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 	if err != nil {
 		return result(nil, err)
 	}
-	rep, _ := k.Status(ctx, in.TaskID, in.Detail)
-	return result(rep, nil)
+	rep, err := k.Status(ctx, in.TaskID, in.Detail)
+	return result(rep, err)
 }
 
 func (s *Server) handleResolve(_ context.Context, _ *sdkmcp.CallToolRequest, in resolveInput) (*sdkmcp.CallToolResult, any, error) {
@@ -290,11 +295,11 @@ func (s *Server) handleResolve(_ context.Context, _ *sdkmcp.CallToolRequest, in 
 	if err != nil {
 		return result(nil, err)
 	}
-	env, _ := k.Resolve(kernel.ResolveInput{
+	env, err := k.Resolve(kernel.ResolveInput{
 		TaskID: in.TaskID, HypothesisID: in.HypothesisID, Status: in.Status,
 		Reason: in.Reason, Evidence: in.Evidence,
 	})
-	return result(env, nil)
+	return result(env, err)
 }
 
 func (s *Server) handleAbort(_ context.Context, _ *sdkmcp.CallToolRequest, in abortInput) (*sdkmcp.CallToolResult, any, error) {
@@ -302,8 +307,8 @@ func (s *Server) handleAbort(_ context.Context, _ *sdkmcp.CallToolRequest, in ab
 	if err != nil {
 		return result(nil, err)
 	}
-	env, _ := k.AbortTask(in.TaskID, in.Reason)
-	return result(env, nil)
+	env, err := k.AbortTask(in.TaskID, in.Reason)
+	return result(env, err)
 }
 
 func (s *Server) handleReadEvidence(_ context.Context, _ *sdkmcp.CallToolRequest, in readEvidenceInput) (*sdkmcp.CallToolResult, any, error) {

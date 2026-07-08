@@ -22,7 +22,9 @@ func (v *Vidtrace) Name() string { return "vidtrace" }
 
 func (v *Vidtrace) Capabilities() []Capability { return []Capability{CapabilityArtifacts} }
 
-// Health runs `vidtrace doctor -json` (checks ffmpeg/ffprobe/tesseract/whisper).
+// Health probes vidtrace via `vidtrace --version` (vidtrace has a doctor
+// subcommand checking ffmpeg/ffprobe/tesseract/whisper but --version is the
+// cheapest binary-present check).
 func (v *Vidtrace) Health(ctx context.Context) error {
 	if !binExists(v.bin) {
 		return ErrToolMissing

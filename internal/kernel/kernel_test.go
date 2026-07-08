@@ -1298,3 +1298,57 @@ func TestMetricsCallsBeforeEvidenceExcludesOrientation(t *testing.T) {
 		t.Errorf("with only orientation evidence, all %d calls should count before first investigation evidence, got %d", m.ToolCalls, m.CallsBeforeEvidence)
 	}
 }
+
+// TestPlanPersistsTimeoutOverrides verifies the per-task timeout override
+// (SPEC §17.2) is accepted at plan time and written to the case file.
+func TestPlanPersistsTimeoutOverrides(t *testing.T) {
+	k := newTestKernel(t, testRepo(t))
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	_, _ = k.Plan(PlanInput{TaskID: env.TaskID,
+		Hypotheses:       []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
+		ChangeBoundary:   domain.ChangeBoundary{Files: []string{"src/x.go"}},
+		Uncertainty:      "u",
+		TimeoutOverrides: map[string]string{"codemap": "45s"},
+	})
+	c, err := k.Store().Load(env.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TimeoutOverrides["codemap"] != "45s" {
+		t.Errorf("timeout override not persisted on case file: %v", c.TimeoutOverrides)
+	}
+}
+
+// TestRunAppliesTimeoutOverride verifies that a per-task timeout override
+// bounds the context passed to the adapter (SPEC §17.2).
+func TestRunAppliesTimeoutOverride(t *testing.T) {
+	sawDeadline := false
+	probe := &deadlineAdapter{name: "codemap", onExec: func(ctx context.Context) { _, sawDeadline = ctx.Deadline() }}
+	k := newTestKernel(t, testRepo(t), probe)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	_, _ = k.Plan(PlanInput{TaskID: env.TaskID,
+		Hypotheses:       []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
+		ChangeBoundary:   domain.ChangeBoundary{Files: []string{"src/x.go"}},
+		Uncertainty:      "u",
+		TimeoutOverrides: map[string]string{"codemap": "5s"},
+	})
+	k.run(context.Background(), "codemap", adapters.Request{TaskID: env.TaskID, Operation: "find", Input: map[string]any{}})
+	if !sawDeadline {
+		t.Error("adapter context had no deadline despite a codemap timeout override")
+	}
+}
+
+// deadlineAdapter is a fake codemap adapter that records whether the context
+// it received carried a deadline (used to verify per-task timeout overrides).
+type deadlineAdapter struct {
+	name   string
+	onExec func(ctx context.Context)
+}
+
+func (d *deadlineAdapter) Name() string                            { return d.name }
+func (d *deadlineAdapter) Capabilities() []adapters.Capability      { return []adapters.Capability{adapters.CapabilityStructure} }
+func (d *deadlineAdapter) Health(context.Context) error            { return nil }
+func (d *deadlineAdapter) Execute(ctx context.Context, _ adapters.Request) (adapters.Result, error) {
+	d.onExec(ctx)
+	return adapters.Result{Tool: d.name, Status: adapters.StatusAuthoritative}, nil
+}

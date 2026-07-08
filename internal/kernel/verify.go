@@ -55,13 +55,18 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	// Determine changed files (input wins; else diff against the review base if
 	// set, otherwise the working tree).
 	changed := in.ChangedFiles
+	var warnings []string
 	if len(changed) == 0 && k.git != nil {
-		changed, _ = k.git.ChangedFiles(ctx, k.cfg.Workspace, c.Workspace.BaseRef, false)
+		cf, cfErr := k.git.ChangedFiles(ctx, k.cfg.Workspace, c.Workspace.BaseRef, false)
+		if cfErr != nil {
+			warnings = append(warnings, "could not detect changed files via git: "+cfErr.Error()+" — scope drift may be incomplete; pass --changed-files to be precise")
+		} else {
+			changed = cf
+		}
 	}
 	scope := k.detectScopeDrift(ctx, c, changed)
 
 	var facts []domain.Evidence
-	var warnings []string
 	// surfaceStatus records each surface's verifier outcome this run. Surfaces
 	// with no entry were not verified at all.
 	surfaceStatus := map[domain.Surface]domain.VerificationStatus{}
@@ -87,8 +92,10 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			reviewNote = "codemap rated this diff HIGH risk — structural review is inconclusive, not a clean pass; address the risk factors or prove the change behaviorally (browser/terminal spec)"
 		}
 		surfaceStatus[domain.SurfaceCode] = st
-		k.writeReceipt(c.ID, receiptSpec{Claim: "structural review of the diff", Surface: domain.SurfaceCode,
-			Tool: "codemap", Version: k.toolVersion(ctx, "codemap"), Status: st, Evidence: evs, Notes: reviewNote})
+		if err := k.writeReceipt(c.ID, receiptSpec{Claim: "structural review of the diff", Surface: domain.SurfaceCode,
+			Tool: "codemap", Version: k.toolVersion(ctx, "codemap"), Status: st, Evidence: evs, Notes: reviewNote}); err != nil {
+			warnings = append(warnings, "could not persist review receipt: "+err.Error())
+		}
 	}
 
 	// Change-control rigor for change tasks (SPEC §6.2, §13.3):
@@ -143,9 +150,11 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			if auto {
 				label = "auto-selected " + label
 			}
-			k.writeReceipt(c.ID, receiptSpec{Claim: label + spec, Surface: bs.surface,
+			if err := k.writeReceipt(c.ID, receiptSpec{Claim: label + spec, Surface: bs.surface,
 				Tool: bs.tool, Version: k.toolVersion(ctx, bs.tool), Status: st, Evidence: evs,
-				Artifact: artifact, Notes: behavioralLimitation(res, st)})
+				Artifact: artifact, Notes: behavioralLimitation(res, st)}); err != nil {
+				warnings = append(warnings, "could not persist "+string(bs.surface)+" receipt: "+err.Error())
+			}
 			warnings = append(warnings, k.annotateBehavior(ctx, c, bs.tool, spec, st, artifact)...)
 		}
 	}
@@ -162,8 +171,10 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			st = domain.VerifyNotRun
 			warnings = append(warnings, fmt.Sprintf("claim %q needs a %s verifier that was not run", clipStr(claim, 50), surf))
 		}
-		k.writeReceipt(c.ID, receiptSpec{Claim: claim, Surface: surf, Tool: domain.SurfaceVerifier(surf),
-			Status: st, Notes: claimLimitation(st)})
+		if err := k.writeReceipt(c.ID, receiptSpec{Claim: claim, Surface: surf, Tool: domain.SurfaceVerifier(surf),
+			Status: st, Notes: claimLimitation(st)}); err != nil {
+			warnings = append(warnings, "could not persist claim receipt: "+err.Error())
+		}
 		claimStatuses = append(claimStatuses, st)
 	}
 
@@ -242,12 +253,12 @@ type receiptSpec struct {
 // writeReceipt persists a verification record naming the exact claim it
 // supports, its verifier + version, limitation notes, and a sensitivity label
 // (SPEC §14.3, §16.2 #5).
-func (k *Kernel) writeReceipt(taskID string, r receiptSpec) {
+func (k *Kernel) writeReceipt(taskID string, r receiptSpec) error {
 	rev := ""
 	if c, err := k.store.Load(taskID); err == nil {
 		rev = c.Workspace.CommitBefore
 	}
-	_ = k.store.AppendVerification(taskID, domain.VerificationRecord{
+	return k.store.AppendVerification(taskID, domain.VerificationRecord{
 		ID:              ids.New("vr"),
 		Claim:           r.Claim,
 		Surface:         r.Surface,

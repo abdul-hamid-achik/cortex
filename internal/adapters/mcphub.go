@@ -11,6 +11,10 @@ import (
 // ever routed a call to me?". It is deliberately NOT added to the kernel's
 // adapter Registry — it must not pollute the Health() fan-out or the
 // investigate/verify evidence loop with operational meta-info.
+
+// DefaultServerName is the gateway registration name cortex registers under.
+const DefaultServerName = "cortex"
+
 type Mcphub struct{ tool }
 
 // NewMcphub builds the mcphub gateway helper. The 60s budget covers `--probe`,
@@ -55,7 +59,7 @@ type GatewayAgent struct {
 // never a misleading registered=false.
 func (m *Mcphub) GatewaySelfCheck(ctx context.Context, serverName string, probe bool) GatewayReport {
 	if serverName == "" {
-		serverName = "cortex"
+		serverName = DefaultServerName
 	}
 	if !binExists(m.bin) {
 		return GatewayReport{Server: serverName, Detail: "mcphub not on PATH — cannot verify gateway registration"}

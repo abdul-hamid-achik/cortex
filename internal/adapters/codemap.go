@@ -20,7 +20,8 @@ func (c *Codemap) Name() string { return "codemap" }
 
 func (c *Codemap) Capabilities() []Capability { return []Capability{CapabilityStructure} }
 
-// Health runs `codemap doctor` (codemap has a real doctor subcommand).
+// Health probes codemap via `codemap --version` (codemap has a doctor
+// subcommand but --version is the cheapest binary-present check).
 func (c *Codemap) Health(ctx context.Context) error {
 	if !binExists(c.bin) {
 		return ErrToolMissing

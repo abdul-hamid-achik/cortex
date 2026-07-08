@@ -119,3 +119,32 @@ func TestRedactJSONSecretFields(t *testing.T) {
 		t.Errorf("ordinary field should be untouched, got %q", got)
 	}
 }
+
+// TestRedactPreservesJSONSeparator guards the regression where the assigned-
+// secret replacement hard-coded '=' even for a ':' separator, corrupting JSON
+// field structure ("api_key=«redacted»" instead of "api_key":«redacted»).
+func TestRedactPreservesJSONSeparator(t *testing.T) {
+	r := New()
+	cases := []string{
+		`{"api_key":"hunter2plainsecret"}`,
+		`{"token":"hunter2plainsecret"}`,
+		`{"aws_secret_access_key":"hunter2plainsecret"}`,
+	}
+	for _, in := range cases {
+		got := r.String(in)
+		if strings.Contains(got, "hunter2plainsecret") {
+			t.Errorf("secret leaked: %q → %q", in, got)
+		}
+		// The ':' separator must be preserved (not replaced with '=').
+		if strings.Contains(got, "=«redacted»") {
+			t.Errorf("separator corrupted to '=' in JSON: %q → %q", in, got)
+		}
+		if !strings.Contains(got, ":") {
+			t.Errorf("JSON ':' separator lost: %q → %q", in, got)
+		}
+	}
+	// Env-style '=' separator is preserved for non-JSON assignments.
+	if got := r.String("API_KEY=hunter2plainsecret"); !strings.HasPrefix(got, "API_KEY=") {
+		t.Errorf("env '=' separator lost: %q → %q", "API_KEY=hunter2plainsecret", got)
+	}
+}

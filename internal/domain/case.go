@@ -102,6 +102,10 @@ type CaseFile struct {
 	// Notes carries free-form orientation facts (tool health, git state) and any
 	// recorded reason for exceeding the investigation budget (SPEC §7.3).
 	Notes []string `json:"notes,omitempty"`
+	// TimeoutOverrides maps a tool name to a per-task timeout (e.g. "codemap":
+	// "45s"), written to the case file at plan time (SPEC §17.2). An empty or
+	// unparseable value falls back to the adapter's default.
+	TimeoutOverrides map[string]string `json:"timeoutOverrides,omitempty"`
 }
 
 // HasSurface reports whether the case involves the given verification surface.

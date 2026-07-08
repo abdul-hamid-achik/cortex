@@ -256,6 +256,20 @@ func (k *Kernel) run(ctx context.Context, tool string, req adapters.Request) ada
 	if req.Input["dir"] == nil {
 		req.Input["dir"] = k.cfg.Workspace
 	}
+	// Apply a per-task timeout override if the case declares one for this tool
+	// (SPEC §17.2). The override bounds the context; the adapter's own timeout
+	// is the min of its default and this deadline.
+	if req.TaskID != "" {
+		if c, err := k.store.Load(req.TaskID); err == nil {
+			if d, ok := c.TimeoutOverrides[tool]; ok {
+				if dur, perr := time.ParseDuration(d); perr == nil && dur > 0 {
+					cctx, cancel := context.WithTimeout(ctx, dur)
+					defer cancel()
+					ctx = cctx
+				}
+			}
+		}
+	}
 	res, err := a.Execute(ctx, req)
 	if err != nil {
 		res = adapters.Result{Tool: tool, Operation: req.Operation, Status: adapters.StatusError, Summary: err.Error()}

@@ -20,7 +20,7 @@ func (g *Glyphrun) Name() string { return "glyphrun" }
 
 func (g *Glyphrun) Capabilities() []Capability { return []Capability{CapabilityTerminal} }
 
-// Health runs `glyph doctor --format json`.
+// Health probes glyph via `glyph --version`.
 func (g *Glyphrun) Health(ctx context.Context) error {
 	if !binExists(g.bin) {
 		return ErrToolMissing
