@@ -29,8 +29,8 @@ jobs:
       - name: Set up Task
         run: go install github.com/go-task/task/v3/cmd/task@${TASK_VERSION}
 
-      - name: Run checks
-        run: task check
+      - name: "Run checks (non-mutating: lint + test, no gofmt write)"
+        run: task lint && task test
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
