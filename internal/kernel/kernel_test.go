@@ -1347,9 +1347,11 @@ type deadlineAdapter struct {
 	onExec func(ctx context.Context)
 }
 
-func (d *deadlineAdapter) Name() string                            { return d.name }
-func (d *deadlineAdapter) Capabilities() []adapters.Capability      { return []adapters.Capability{adapters.CapabilityStructure} }
-func (d *deadlineAdapter) Health(context.Context) error            { return nil }
+func (d *deadlineAdapter) Name() string { return d.name }
+func (d *deadlineAdapter) Capabilities() []adapters.Capability {
+	return []adapters.Capability{adapters.CapabilityStructure}
+}
+func (d *deadlineAdapter) Health(context.Context) error { return nil }
 func (d *deadlineAdapter) Execute(ctx context.Context, _ adapters.Request) (adapters.Result, error) {
 	d.onExec(ctx)
 	return adapters.Result{Tool: d.name, Status: adapters.StatusAuthoritative}, nil

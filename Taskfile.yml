@@ -92,7 +92,7 @@ tasks:
     desc: Format, lint, and test (pre-commit gate)
     aliases: [ci, verify]
     cmds:
-      - task: fmt
+      - test -z "$(gofmt -l .)" || (echo "unformatted files (run: task fmt):"; gofmt -l .; exit 1)
       - task: lint
       - task: test
 
