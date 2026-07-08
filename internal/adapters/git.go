@@ -52,6 +52,12 @@ type WorkspaceInfo struct {
 // which needs typed fields rather than facts).
 func (g *Git) Status(ctx context.Context, dir string) (WorkspaceInfo, error) {
 	info := WorkspaceInfo{Repository: filepath.Base(dir)}
+	// A missing git binary is a hard error, distinct from "not a repo": the
+	// orient phase and scope-drift both depend on git, so silently reporting
+	// "not a repository" when git is absent would hide a real environment gap.
+	if !binExists(g.bin) {
+		return info, ErrToolMissing
+	}
 	inside, _, _, err := g.exec(ctx, dir, "rev-parse", "--is-inside-work-tree")
 	if err != nil || strings.TrimSpace(inside) != "true" {
 		return info, nil // not a repo — degrade, don't error

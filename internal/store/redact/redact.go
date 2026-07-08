@@ -22,7 +22,7 @@ type pattern struct {
 // over recall — a false negative is a leak, but an over-eager pattern that
 // masks ordinary code is its own failure, so these target well-known formats.
 var builtins = []pattern{
-	{"aws-access-key", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
+	{"aws-access-key", regexp.MustCompile(`\b(?:AKIA|ASIA|AGPA|AIDA|ANPA|AIPA|AROA|ASCA)[0-9A-Z]{16}\b`)},
 	{"github-token", regexp.MustCompile(`\bgh[posru]_[0-9A-Za-z]{20,255}\b`)},
 	{"slack-token", regexp.MustCompile(`\bxox[baprs]-[0-9A-Za-z-]{10,}\b`)},
 	{"stripe-key", regexp.MustCompile(`\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{16,}\b`)},
@@ -37,7 +37,10 @@ var builtins = []pattern{
 	// explicit three-way alternation). The optional ["'] after the key name lets
 	// a JSON field ("api_key":"…") match — otherwise the key's closing quote sits
 	// between the name and the ':' and defeats the separator, leaking the value.
-	{"assigned-secret", regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)[A-Z0-9_]*)["']?\s*([:=])\s*(?:"[^"\n]{3,}"|'[^'\n]{3,}'|[^\s]{6,})`)},
+	// Bare (unquoted) values require 12+ chars so short config tokens like a region
+	// name (us-east-1, 9 chars) or a filename don't get over-masked; quoted values
+	// stay 3+ since a short quoted secret is still a secret.
+	{"assigned-secret", regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)[A-Z0-9_]*)["']?\s*([:=])\s*(?:"[^"\n]{3,}"|'[^'\n]{3,}'|[^\s]{12,})`)},
 }
 
 // Redactor masks secrets. Extra literal values (e.g. secret names/values known

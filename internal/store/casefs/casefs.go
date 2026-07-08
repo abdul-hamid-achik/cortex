@@ -239,9 +239,10 @@ func (s *Store) Verifications(taskID string) ([]domain.VerificationRecord, error
 	return recs, nil
 }
 
-// WriteSummary writes summary.md (the human-readable outcome).
+// WriteSummary writes summary.md (the human-readable outcome) atomically, so a
+// crash mid-write can't leave a truncated summary (matches writeJSON's guarantee).
 func (s *Store) WriteSummary(taskID, md string) error {
-	return os.WriteFile(filepath.Join(s.dir(taskID), "summary.md"), []byte(md), 0o644)
+	return writeFileAtomic(filepath.Join(s.dir(taskID), "summary.md"), []byte(md), 0o644)
 }
 
 // WriteRaw persists a tool call's (redacted) raw output under raw/<rawID>.txt so
@@ -252,7 +253,7 @@ func (s *Store) WriteRaw(taskID, rawID, content string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, safeName(rawID)+".txt"), []byte(content), 0o644)
+	return writeFileAtomic(filepath.Join(dir, safeName(rawID)+".txt"), []byte(content), 0o644)
 }
 
 // ReadRaw returns a stored raw blob by ID (ErrNotFound if absent).
@@ -306,6 +307,21 @@ func writeJSON(path string, v any) error {
 		return err
 	}
 	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// writeFileAtomic writes bytes to path via a temp file + rename, so a crash
+// mid-write can't leave a truncated file (matches writeJSON's guarantee for
+// non-JSON files like summary.md and raw blobs).
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // pluralize renders "N thing" / "N things" with the count.
@@ -40,4 +41,15 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// firstLine returns the first non-empty, trimmed line of s. Used by version
+// probes and first-line-of-stderr degradation (SPEC §11.4).
+func firstLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			return t
+		}
+	}
+	return ""
 }

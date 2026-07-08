@@ -155,34 +155,17 @@ func containsProject(listing, project string) bool {
 	return false
 }
 
+// containsFold is a case-insensitive substring test, used by vaultLocked and
+// the old-binary flag fallback. Built on strings.EqualFold (no hand-rolled
+// ASCII-folding).
 func containsFold(haystack, needle string) bool {
-	return len(needle) > 0 && len(haystack) >= len(needle) && indexFold(haystack, needle) >= 0
-}
-
-func indexFold(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if equalFold(s[i:i+len(sub)], sub) {
-			return i
-		}
-	}
-	return -1
-}
-
-func equalFold(a, b string) bool {
-	if len(a) != len(b) {
+	if needle == "" {
 		return false
 	}
-	for i := range a {
-		ca, cb := a[i], b[i]
-		if 'A' <= ca && ca <= 'Z' {
-			ca += 'a' - 'A'
-		}
-		if 'A' <= cb && cb <= 'Z' {
-			cb += 'a' - 'A'
-		}
-		if ca != cb {
-			return false
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if strings.EqualFold(haystack[i:i+len(needle)], needle) {
+			return true
 		}
 	}
-	return true
+	return false
 }

@@ -443,39 +443,3 @@ func degraded(tool, op, stdout, stderr string, code int) Result {
 		Raw:      firstNonEmpty(stdout, stderr),
 	}
 }
-
-// firstLine returns the first non-empty line of s, trimmed.
-func firstLine(s string) string {
-	for _, ln := range splitLines(s) {
-		if t := trimSpace(ln); t != "" {
-			return t
-		}
-	}
-	return ""
-}
-
-func splitLines(s string) []string {
-	var out []string
-	cur := ""
-	for _, r := range s {
-		if r == '\n' || r == '\r' {
-			out = append(out, cur)
-			cur = ""
-			continue
-		}
-		cur += string(r)
-	}
-	out = append(out, cur)
-	return out
-}
-
-func trimSpace(s string) string {
-	start, end := 0, len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
-}

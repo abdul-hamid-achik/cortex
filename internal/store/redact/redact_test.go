@@ -148,3 +148,24 @@ func TestRedactPreservesJSONSeparator(t *testing.T) {
 		t.Errorf("env '=' separator lost: %q → %q", "API_KEY=hunter2plainsecret", got)
 	}
 }
+
+// TestRedactBareValueThreshold guards the false-positive tightening: a short
+// bare config value on a signal-named key is NOT over-masked, while a long
+// bare secret still is (SPEC §16 precision-over-recall).
+func TestRedactBareValueThreshold(t *testing.T) {
+	r := New()
+	short := []string{
+		"ACCESS_KEY_REGION=us-east-1", // 9-char region, not a secret
+		"PASSWORD_FILE=passwd.txt",    // 10-char filename, not a secret
+	}
+	for _, in := range short {
+		if got := r.String(in); got != in {
+			t.Errorf("short bare value should not be masked: %q → %q", in, got)
+		}
+	}
+	// A long bare secret is still masked.
+	long := "API_KEY=ak_live_0123456789secretvalue"
+	if got := r.String(long); strings.Contains(got, "ak_live_0123456789secretvalue") {
+		t.Errorf("long bare secret leaked: %q → %q", long, got)
+	}
+}

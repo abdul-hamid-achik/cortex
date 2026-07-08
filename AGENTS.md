@@ -66,9 +66,11 @@ cortex/
 │   │   ├── casefs/           #   JSON/JSONL case-file persistence (.agent/cases/<id>/)
 │   │   └── redact/           #   secret-shape redaction (last-line filter before model output)
 │   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (10 tools)
-│   ├── tui/studio.go          # Charm v2 bubbletea studio (read-only case browser)
+│   ├── tui/studio.go         # Charm v2 bubbletea studio (read-only case browser)
 │   ├── config/               # path resolution + cortex.yaml loader (budget/redact/cases_dir) + CORTEX_* env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_)
+│   ├── eval/scenarios.go     # SPEC §18.3 evaluation harness (8 benchmark scenarios + scoring)
+│   ├── forge/forge.go        # PR review action (ModeReview: PR fetch + APPROVE/REQUEST CHANGES verdict)
 │   └── version/version.go    # Version/Commit/Date (ldflags-injected)
 ├── docs/                     # VitePress site (product docs ONLY) → deploy to Vercel
 ├── specs/                    # glyphrun E2E specs (*.yml)

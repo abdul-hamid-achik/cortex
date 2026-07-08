@@ -124,12 +124,7 @@ func (t tool) Version(ctx context.Context) string {
 	if err != nil || code != 0 {
 		return ""
 	}
-	for _, ln := range splitLines(string(so)) {
-		if s := trimSpace(ln); s != "" {
-			return s
-		}
-	}
-	return ""
+	return firstLine(string(so))
 }
 
 // healthByVersion is a default Health() that runs `<bin> --version` and treats
