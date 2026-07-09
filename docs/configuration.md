@@ -8,7 +8,7 @@ Cortex runs with sensible defaults and needs no config file. When you want to tu
 Lowest to highest — later wins:
 
 1. Built-in defaults
-2. Global config — `$CORTEX_HOME/config.yaml` (or `~/.cortex/config.yaml`)
+2. Global config — `$XDG_CONFIG_HOME/cortex/config.yaml` (or `$CORTEX_HOME` / a legacy `~/.cortex`)
 3. Project `.config/cortex.yaml`
 4. Project `cortex.yml` / `cortex.yaml`
 5. `CORTEX_*` environment variables
@@ -39,33 +39,43 @@ budget:
 redact_literals:
   - MY_INTERNAL_TOKEN_NAME
 
-# Where case files live (default: <workspace>/.cortex/cases).
-# Relative paths resolve against the workspace. Use an absolute path (or ~/) to
-# keep the repo free of any Cortex state:
-#   cases_dir: ~/.cortex/cases/my-project
-cases_dir: .cortex/cases
+# Where case files live. Default: a central, XDG-organized location
+# ($XDG_STATE_HOME/cortex/sessions/<repo>/). Set this only to override — e.g. to
+# keep a project's cases repo-local, or to pin them somewhere specific:
+#   cases_dir: .cortex/cases            # repo-local (relative → under workspace)
+#   cases_dir: ~/somewhere/my-project   # absolute / ~ → anywhere
+# cases_dir: .cortex/cases
 ```
 
-## Case file location
+## Where sessions live (XDG)
+
+By default Cortex stores every session in a **central, XDG-organized** location, so all your work
+across every repo is visible and auditable in one place — see `cortex sessions`, `cortex overview`,
+and the `cortex config` **Storage (XDG)** section.
+
+| Purpose | Default path |
+|---|---|
+| Sessions (case files) | `$XDG_STATE_HOME/cortex/sessions/<repo>/<taskId>/` |
+| Global config | `$XDG_CONFIG_HOME/cortex/config.yaml` |
+| Cache | `$XDG_CACHE_HOME/cortex/` |
+
+`$CORTEX_HOME` (or a pre-existing `~/.cortex`) collapses config + state + cache into one directory —
+the classic single-dir layout — and each dir can be overridden individually with `CORTEX_CONFIG_DIR`
+/ `CORTEX_STATE_DIR` / `CORTEX_CACHE_DIR`.
+
+**Repo-local is opt-in.** Set `cases_dir` (or `CORTEX_CASES_DIR`) to keep a project's evidence next
+to its code:
 
 | Setting | Location |
 |---|---|
-| **Default** | `<workspace>/.cortex/cases/<taskId>/` (gitignored via `.cortex/.gitignore`) |
-| `cases_dir` in `cortex.yaml` | relative → under workspace; absolute/`~/…` → anywhere |
+| **Default** | `$XDG_STATE_HOME/cortex/sessions/<repo>/<taskId>/` (outside every repo) |
+| `cases_dir` | relative → under the workspace (repo-local); absolute/`~/…` → anywhere |
 | `CORTEX_CASES_DIR` | same rules; wins over the file |
 
-Examples that leave the working tree clean:
-
-```yaml
-# global home, per-project subdir
-cases_dir: ~/.cortex/cases/my-app
-```
-
-```bash
-export CORTEX_CASES_DIR="$HOME/.cortex/cases/my-app"
-```
-
-When cases live **outside** the workspace, Cortex does not write an in-repo `.gitignore`.
+A pre-existing `<workspace>/.cortex/cases` is honored automatically, so upgrading never strands
+active work. When cases are **repo-local**, Cortex writes `.cortex/.gitignore` (`*`) so its own
+state never registers as a workspace change; when they live outside the workspace (the default), no
+in-repo ignore file is written.
 
 ## Environment variables
 
@@ -78,8 +88,10 @@ Env vars have the highest precedence, handy for CI or a one-off run:
 | `CORTEX_MAX_RAW_OUTPUT_BYTES` | `budget.max_raw_output_bytes_per_tool` |
 | `CORTEX_MAX_EVIDENCE_ITEMS` | `budget.max_evidence_items_returned` |
 | `CORTEX_MAX_CANDIDATE_FILES` | `budget.max_candidate_files_returned` |
+| `CORTEX_MAX_AUTO_RETRIES` | `budget.max_auto_retries_per_tool` |
 | `CORTEX_REDACT_LITERALS` | comma-separated redact literals |
-| `CORTEX_CASES_DIR` | the case-file directory (default `<workspace>/.cortex/cases`) |
-| `CORTEX_HOME` | global config directory (default `~/.cortex`) |
+| `CORTEX_CASES_DIR` | the case-file directory (default: the central XDG sessions dir) |
+| `CORTEX_HOME` | collapse config + state + cache into one dir (default: the split XDG dirs, or a legacy `~/.cortex`) |
+| `CORTEX_CONFIG_DIR` / `CORTEX_STATE_DIR` / `CORTEX_CACHE_DIR` | override one XDG directory individually |
 
 A malformed config file is ignored (Cortex falls back to defaults) rather than failing to start.

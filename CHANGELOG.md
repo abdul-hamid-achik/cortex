@@ -5,12 +5,114 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
-### Changed — case files default to `.cortex/cases` (still fully configurable)
-- **Default case store** is now `<workspace>/.cortex/cases/` (was `.agent/cases/`). The generic
-  `.agent` name is shared by many tools; Cortex brands its own dir and still writes
-  `.cortex/.gitignore` (`*`) so git/status/scope-drift stay clean.
+### Added — session archiving (safe, reversible lifecycle)
+- **`cortex archive <taskId>` / `cortex unarchive <taskId>`** complete the session lifecycle. Archiving
+  **moves** a terminal (complete/abandoned/blocked) session from the active tree to
+  `$XDG_STATE_HOME/cortex/archive/<repo>/` — the data is preserved and fully reversible; **nothing is
+  deleted** (hard-delete is deliberately not offered). In-flight sessions are refused. This keeps
+  `cortex sessions` / `overview` / `studio` focused on live work as the store accumulates history.
+- **`cortex sessions --archived`** lists the archive. Completion is lifecycle-aware: `archive`
+  completes active task IDs, `unarchive` completes archived ones.
+
+### Added — dynamic task-ID shell completion
+- Every `<taskId>` command (`show`, `status`, `timeline`, `metrics`, `abort`, `resolve`, `plan`,
+  `verify`, `remember`, `investigate`, `read-evidence`, `read-artifact`) now **tab-completes task IDs**
+  — with the goal as the shell description — reading across the whole central store. Task IDs are
+  long base32 strings no one types by hand; `cortex show <TAB>` now just works. `resolve` and
+  `read-evidence` also complete their **second** ID argument (hypothesis / evidence ID, with the
+  statement / claim as description), so you never hand-type an ID. Install with cobra's built-in
+  `cortex completion {bash|zsh|fish}`.
+
+### Added — `cortex show <taskId>`: full session view from any repo
+- **`cortex show`** (alias `view`) is a one-screen, read-only dashboard for a single session — phase
+  badge, loop stepper, hypotheses, verification receipts, time-in-phase (with elapsed), and recent
+  activity. It's **workspace-independent** (the session is located by ID across the central store),
+  so you can inspect a task from another repository without `cd`-ing there — the gap `cortex status`
+  (workspace-scoped) left open. `--json` returns the whole `SessionView`. `Timeline` was refactored
+  into a store-level helper so `show` doesn't re-walk the tree.
+
+### Added — loop stepper on `cortex status`
+- **`cortex status` now draws the reasoning loop** as a "you are here" track —
+  `orient─inv─[plan]─change─verify─keep`, current step highlighted, completed steps green, a `✓` on
+  completion, a `■` stop marker for blocked/abandoned. Previously this visualization lived only in
+  the `studio` TUI. The stage model was extracted to `domain.LoopStages` / `domain.LoopStageIndexOf`
+  and is now shared by both surfaces (no duplication).
+
+### Added — `cortex overview`: cross-repo rollup
+- **`cortex overview`** (alias `dash`) aggregates every session across every repository into one
+  dashboard — totals, active/stale counts, completion & verified-completion rates, mean time to
+  complete, and a per-repo breakdown (sorted by session count). Fills the gap between the global
+  `cortex sessions`/`timeline` and the per-workspace `cortex metrics`. `--json` for machine output.
+- **`cortex_overview` MCP tool** (15 tools total) — the same cross-repo rollup for agents. Completes
+  observability parity: status, list, sessions, timeline, metrics, and overview are all on both the
+  CLI and MCP surfaces.
+
+### Added — stale-session detection
+- **`cortex sessions` flags forgotten work** — in-flight sessions untouched beyond `--stale-after`
+  (default 24h) render their age in warning color with a `⚠`; `--stale` lists only those. Answers
+  "which sessions did I start and abandon?" `SessionSummary.StaleSince(now, age)` is the predicate
+  (terminal sessions are never stale).
+- **`cortex doctor`** counts stale sessions in its Sessions line (and `--json`).
+- **`cortex studio`** (the primary monitor) flags stale sessions too — a `⚠ N stale` count in the
+  header and a `⚠` on each stale row — so all monitoring surfaces (`sessions`, `doctor`, `overview`,
+  `studio`) surface forgotten work consistently.
+
+### Added — storage transparency in `config` and `doctor`
+- **`cortex config`** now prints a **Storage (XDG)** section — the resolved config, sessions,
+  cache, and registry paths — so it's obvious where Cortex keeps everything (and `--json` exposes
+  `configDir`/`sessionsRoot`/`archiveRoot`/`cacheDir`). Auditability without guessing.
+- **`cortex doctor`** gained a **Sessions** line — total · active · distinct repos · sessions root —
+  a cross-workspace monitoring glance (also in `--json` under `sessions`).
+
+### Added — phase-latency metrics + `cortex_metrics` on MCP
+- **Time-in-phase** — `cortex metrics <taskId>` now derives per-phase durations and total elapsed
+  from the phase history (`phaseDurations`, `elapsedMs`), and the workspace aggregate reports
+  `meanTimeToComplete`. Shows *where* time goes (long investigating vs. long changing) — the "how do
+  we work" signal.
+- **`cortex_metrics` MCP tool** (14 tools total) — metrics were CLI-only; agents can now read a
+  task's or the workspace's observability summary for self-assessment.
+
+### Added — phase-transition history + `cortex timeline`
+- **Every phase transition is now recorded** to a per-case `phases.jsonl` ledger (stamped in the
+  kernel's `transition()` and on abort), so "when did this enter verifying?" is finally answerable —
+  the `CaseFile` only ever kept the *current* phase.
+- **`cortex timeline <taskId>`** (alias `activity`) — merges phase transitions, evidence, audited
+  tool calls, and verification receipts into one time-sorted feed. This is the first reader of
+  `commands.jsonl`, the audit log that until now only fed metrics. Works from any directory (the
+  session is located by ID); `--json` for agents.
+- **`cortex_timeline` MCP tool** (13 tools total) — the same feed for agents.
+- Fix: `StartTask` now calls `store.Create` *before* the first transition (phase recording made the
+  transition create the task dir, which Create then rejected).
+
+### Added — live cross-workspace studio board with a loop stepper
+- **`cortex studio` is now a live, global monitor** — it shows every session across every repo
+  (was one workspace's case files), auto-refreshes every 2s, and draws the reasoning loop as a
+  stepper (`orient─inv─plan─change─verify─keep`) with a "you are here" marker on the current phase,
+  green completed steps, a `✓` on completion, and a `■` stop marker for blocked/abandoned cases.
+- Keys: `a` toggles active-only, plus `--repo`/`--active` flags to scope the board on launch. Detail
+  loading is workspace-independent (`kernel.LoadSession`), reading the central sessions tree.
+
+### Added — XDG-organized sessions + cross-workspace audit view
+- **Sessions default to a central, XDG-organized location** —
+  `$XDG_STATE_HOME/cortex/sessions/<repo-slug>/<taskId>/`, so every session across every repository
+  is visible and auditable in one place and the workspace tree stays clean. Config and cache follow
+  the XDG spec too (`$XDG_CONFIG_HOME/cortex`, `$XDG_CACHE_HOME/cortex`); `$CORTEX_HOME` or a
+  pre-existing `~/.cortex` collapses all three into one dir. Path resolution lives in
+  `internal/config/paths.go`, mirroring codemap. Repo-local `.cortex/cases` is now **opt-in** via
+  `cases_dir`, and an existing repo-local store is honored automatically so upgrades never strand
+  active work.
+- **`cortex sessions`** (alias `sess`) — lists every session across every repo (repo · phase · age ·
+  verified/required · goal), newest first; `--repo` and `--active` filters; `--json` for agents.
+  The audit/monitor surface the per-workspace `list` never provided.
+- **`cortex_sessions` MCP tool** (12 tools total) — the same cross-workspace view for agents, so an
+  agent can see everything it has open or left unverified anywhere.
+
+### Changed — repo-local `.cortex/cases` is now an opt-in (was the default)
+- Superseded by the central XDG default above. When opted in (`cases_dir: .cortex/cases`), the store
+  is `<workspace>/.cortex/cases/` (was `.agent/cases/`) and Cortex still writes `.cortex/.gitignore`
+  (`*`) so git/status/scope-drift stay clean.
 - **`cases_dir` / `CORTEX_CASES_DIR` unchanged** — relative paths resolve against the workspace;
-  absolute or `~/…` paths store cases outside the repo entirely (no in-repo ignore file written).
+  absolute or `~/…` paths store cases anywhere.
 - `config.StateDir` (`.cortex`); `AgentDir` remains as a deprecated alias.
 
 ### Fixed — completion gate, CLI exit codes, memory tags, lifecycle E2E

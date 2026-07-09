@@ -9,12 +9,12 @@ A local-first **agent kernel**: a small runtime between an LLM and the specialis
 (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault). It gives a task a durable **case file**
 and forces a reasoning loop — orient → investigate → plan → change → verify → preserve — through
 a **phase machine** with hard invariants. Two surfaces over one kernel: a CLI (`--json` for
-agents) and an MCP server (`cortex serve`, 11 tools).
+agents) and an MCP server (`cortex serve`, 15 tools).
 
 Surfaces / key files:
 - CLI: `cmd/cortex/` — cobra, split per-command; each `RunE` is thin → `kernelFor()` → `internal/kernel`.
 - Shared service layer (everything routes here): `internal/kernel/` (orient/investigate/plan/verify/persist/status/scope).
-- MCP server (thin, 11 tools): `internal/mcp/server.go`.
+- MCP server (thin, 15 tools): `internal/mcp/server.go`.
 - Domain (no internal deps): `internal/domain/` (case + phase machine, evidence, hypothesis, plan, verification, policy, envelope).
 - Adapters (flat, one file per tool): `internal/adapters/`.
 - Storage: `internal/store/casefs` (JSON/JSONL) + `internal/store/redact` (secret masking).
@@ -35,13 +35,18 @@ Surfaces / key files:
   `github.com/charmbracelet/lipgloss`. Color must be **TTY-gated** (`detectColor` in
   `cmd/cortex/render.go`): without it, piping to a non-TTY emits per-grapheme escape sequences
   (a real bug we hit). `--json` output is always plain.
-- **Persist the case before stamping orientation evidence.** `stampEvidence`'s append creates the
-  task directory via `MkdirAll`; if `store.Create` runs *after* that, it sees the dir and refuses
-  ("case already exists"). `StartTask` creates the skeleton first, then orients. (We hit this.)
-- **Cortex must git-ignore its own state.** Default cases live under `<workspace>/.cortex/cases/`;
-  the kernel writes `<workspace>/.cortex/.gitignore` (`*`) on init when cases are workspace-local
-  — otherwise every case-file write floods scope-drift + `codemap review`. Point
-  `cases_dir` / `CORTEX_CASES_DIR` outside the repo to leave the tree completely clean.
+- **Persist the case before any ledger append.** Appending to *any* JSONL ledger — `phases.jsonl`
+  (via `transition`), `evidence.jsonl` (via `stampEvidence`), `commands.jsonl` — creates the task
+  directory via `MkdirAll`; if `store.Create` runs *after* that, it sees the dir and refuses ("case
+  already exists"). `StartTask` calls `Create` first, *then* the `new→orienting` transition. (We hit
+  this twice: once with evidence, again when phase-history recording moved into `transition`.)
+- **Cortex sessions default to a central XDG tree, not the repo.** Cases live under
+  `$XDG_STATE_HOME/cortex/sessions/<repo-slug>/<taskID>/` by default (resolved in
+  `internal/config/paths.go`), so the workspace stays clean and every session is auditable in one
+  place. Repo-local cases are opt-in (`cases_dir: .cortex/cases`); only then does the kernel write
+  `<workspace>/.cortex/.gitignore` (`*`) to keep case writes out of scope-drift + `codemap review`.
+  A pre-existing `<workspace>/.cortex/cases` is still honored automatically. Tests must isolate
+  global dirs (`CORTEX_HOME=<temp>` or `$XDG_STATE_HOME`) or they write into your real home.
 - **Adapter flag dialects are NOT uniform.** vecgrep = `-f json` / `-n N`; glyph = `--format
   json` (must precede sub-flags); everyone else = `--json`. `cairn mcp` / `glyph mcp` are bare;
   `fcheap mcp serve` / `mcphub mcp serve` are not. codemap `changed_files` is an array of

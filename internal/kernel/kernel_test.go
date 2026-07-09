@@ -73,30 +73,17 @@ func testRepo(t *testing.T) string {
 // newTestKernel wires a kernel with a real git adapter plus fakes.
 func newTestKernel(t *testing.T, ws string, extra ...adapters.Adapter) *Kernel {
 	t.Helper()
+	// Isolate Cortex's global dirs so cases land in a throwaway base, never the
+	// developer's real $XDG_STATE_HOME/cortex (cases now default there).
+	t.Setenv("CORTEX_HOME", t.TempDir())
 	cfg := config.For(ws)
 	store, err := casefs.New(cfg.CasesDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ensureStateIgnored(cfg.Workspace, cfg.CasesDir)
+	config.EnsureStateIgnored(cfg.Workspace, cfg.CasesDir)
 	all := append([]adapters.Adapter{adapters.NewGit()}, extra...)
 	return NewWith(cfg, store, adapters.NewRegistry(all...))
-}
-
-func TestEnsureStateIgnoredOnlyInsideWorkspace(t *testing.T) {
-	ws := testRepo(t)
-	// Default in-workspace path gets a .gitignore under .cortex/.
-	ensureStateIgnored(ws, filepath.Join(ws, ".cortex", "cases"))
-	gi := filepath.Join(ws, ".cortex", ".gitignore")
-	if _, err := os.Stat(gi); err != nil {
-		t.Fatalf("expected workspace-local .cortex/.gitignore, got %v", err)
-	}
-	// Outside the workspace: no stray ignore file next to an absolute cases dir.
-	outside := filepath.Join(t.TempDir(), "off-repo", "cases")
-	ensureStateIgnored(ws, outside)
-	if _, err := os.Stat(filepath.Join(filepath.Dir(outside), ".gitignore")); err == nil {
-		t.Error("must not write .gitignore outside the workspace for external cases_dir")
-	}
 }
 
 func TestStartTask(t *testing.T) {

@@ -128,12 +128,13 @@ Navigate with arrow/`j`-`k` keys, quit with `q`.
 
 ### Where does Cortex store state?
 
-Per-workspace by default, on disk, append-only, under `.cortex/cases/<taskId>/` (case, evidence,
-hypotheses, plan, receipts, command audit trail, raw tool output, and a generated `summary.md`).
-Override with `cases_dir` / `CORTEX_CASES_DIR` — including an absolute path under
-`~/.cortex/cases/…` if you want **zero** Cortex files in the repo. Global config lives under
-`$CORTEX_HOME` (default `~/.cortex`). See [The case file](/case-file). Workspace-local state is
-gitignored via `.cortex/.gitignore`.
+In a **central, XDG-organized** location by default, on disk, so every session across every repo is
+auditable in one place: `$XDG_STATE_HOME/cortex/sessions/<repo>/<taskId>/` (case, evidence,
+hypotheses, plan, receipts, command audit trail, phase history, raw tool output, and a generated
+`summary.md`). Config and cache follow XDG too (`$XDG_CONFIG_HOME/cortex`, `$XDG_CACHE_HOME/cortex`);
+`$CORTEX_HOME` or a legacy `~/.cortex` collapses them into one dir. Set `cases_dir` /
+`CORTEX_CASES_DIR` to keep a project's cases repo-local instead — and then Cortex gitignores them
+via `.cortex/.gitignore`. See [The case file](/case-file) and [Configuration](/configuration).
 
 ### Does Cortex send my code anywhere?
 

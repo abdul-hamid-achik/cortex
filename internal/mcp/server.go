@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -142,6 +143,24 @@ type listTasksInput struct {
 	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
+type sessionsInput struct {
+	Repo   string `json:"repo,omitempty" jsonschema:"only sessions whose repository or slug contains this substring"`
+	Active bool   `json:"active,omitempty" jsonschema:"only in-flight (non-terminal) sessions"`
+}
+
+type timelineInput struct {
+	TaskID string `json:"taskId" jsonschema:"the task/session whose activity feed to return"`
+}
+
+type metricsInput struct {
+	TaskID    string `json:"taskId,omitempty" jsonschema:"a task to summarize; omit for the workspace aggregate"`
+	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+}
+
+type overviewInput struct {
+	StaleAfterHours int `json:"staleAfterHours,omitempty" jsonschema:"hours an in-flight session may sit untouched before it counts as stale (default 24)"`
+}
+
 type statusInput struct {
 	TaskID    string `json:"taskId" jsonschema:"the task to report on"`
 	Detail    string `json:"detail,omitempty" jsonschema:"standard | full (full adds tool health)"`
@@ -204,6 +223,22 @@ func (s *Server) register() {
 		Name:        "cortex_list_tasks",
 		Description: "List all tasks in the workspace (newest first): id, goal, phase, repository, createdAt.",
 	}, s.handleListTasks)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_sessions",
+		Description: "List Cortex sessions across EVERY repository (the central XDG audit view), newest first: id, goal, phase, mode, repository, slug, verified/required verification counts, active flag, timestamps. Workspace-independent — use it to see everything you have open or left unfinished anywhere. Filter with repo (substring) and active (in-flight only).",
+	}, s.handleSessions)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_timeline",
+		Description: "Return a session's chronological activity feed — phase transitions, evidence, audited tool calls, and verification receipts merged and time-sorted. The audit trail of how the case actually unfolded. Workspace-independent; located by task ID.",
+	}, s.handleTimeline)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_metrics",
+		Description: "Observability metrics (SPEC §18): outcomes and the evidence trail, not tool-call volume. With taskId — that task's tool calls, calls-before-first-evidence, verification coverage, time-in-phase, and each tool's contribution. Without taskId — workspace aggregate (completion/verified rates, mean tools & time to complete).",
+	}, s.handleMetrics)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_overview",
+		Description: "Cross-repository rollup of EVERY Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
+	}, s.handleOverview)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_resolve",
 		Description: "Update a hypothesis's status as evidence accumulates (confirmed/challenged/rejected). History is retained and the resolution is appended to the evidence ledger — this is how contradicting evidence is handled without silently overwriting a prior explanation.",
@@ -302,6 +337,44 @@ func (s *Server) handleListTasks(_ context.Context, _ *sdkmcp.CallToolRequest, i
 		return result(nil, err)
 	}
 	return result(tasks, nil)
+}
+
+func (s *Server) handleSessions(_ context.Context, _ *sdkmcp.CallToolRequest, in sessionsInput) (*sdkmcp.CallToolResult, any, error) {
+	// Workspace-independent: reads the global state tree, so no kernel is built.
+	sessions, err := kernel.AllSessions(kernel.SessionFilter{Repo: in.Repo, ActiveOnly: in.Active})
+	return result(sessions, err)
+}
+
+func (s *Server) handleTimeline(_ context.Context, _ *sdkmcp.CallToolRequest, in timelineInput) (*sdkmcp.CallToolResult, any, error) {
+	// Workspace-independent: the session is located by task ID across the tree.
+	entries, err := kernel.Timeline(in.TaskID)
+	return result(entries, err)
+}
+
+func (s *Server) handleMetrics(_ context.Context, _ *sdkmcp.CallToolRequest, in metricsInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	if in.TaskID != "" {
+		m, err := k.TaskMetrics(in.TaskID)
+		return result(m, err)
+	}
+	wm, per, err := k.WorkspaceMetrics()
+	if err != nil {
+		return result(nil, err)
+	}
+	return result(map[string]any{"workspace": wm, "tasks": per}, nil)
+}
+
+func (s *Server) handleOverview(_ context.Context, _ *sdkmcp.CallToolRequest, in overviewInput) (*sdkmcp.CallToolResult, any, error) {
+	// Workspace-independent: aggregates the whole central sessions tree.
+	hours := in.StaleAfterHours
+	if hours <= 0 {
+		hours = 24
+	}
+	o, err := kernel.BuildOverview(time.Duration(hours)*time.Hour, time.Now())
+	return result(o, err)
 }
 
 func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in statusInput) (*sdkmcp.CallToolResult, any, error) {

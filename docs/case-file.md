@@ -1,17 +1,20 @@
 # The case file
 
 Each non-trivial task gets a durable, human-readable **case file** — the kernel's working memory,
-not a transcript. By default it lives under `<workspace>/.cortex/cases/<taskId>/`
-(overridable via `cases_dir` / `CORTEX_CASES_DIR` — see [Configuration](/configuration)).
+not a transcript. By default it lives in the central XDG store at
+`$XDG_STATE_HOME/cortex/sessions/<repo>/<taskId>/`, so every session across every repo is auditable
+in one place (repo-local `.cortex/cases` is opt-in via `cases_dir` / `CORTEX_CASES_DIR` — see
+[Configuration](/configuration)).
 
 ```
-.cortex/cases/task_06FK…/
+$XDG_STATE_HOME/cortex/sessions/<repo>/task_06FK…/
   case.json          # goal, workspace identity, phase, boundary, required verification
   evidence.jsonl     # append-only ledger of claims (provenance + confidence)
   hypotheses.json    # falsifiable explanations + disproof paths
   plan.json          # the planning gate (hypotheses + boundary + verification + uncertainty)
   verification.json  # receipts: which claim, which verifier, passed/failed/not_run
   commands.jsonl     # non-sensitive audit trail of tool invocations
+  phases.jsonl       # phase-transition history (feeds `cortex timeline` + time-in-phase metrics)
   summary.md         # the readable outcome (written at completion)
   raw/               # redacted raw tool output, one blob per tool call (evidence rawRef → here)
   refs/              # artifact references
@@ -21,9 +24,10 @@ Compact facts stay in `evidence.jsonl`; each fact's `rawRef` points at the under
 in `raw/`, retrievable on demand with `cortex read-artifact` (or `cortex_read_artifact`) so the
 model-visible envelope stays small without losing detail.
 
-When cases are workspace-local, Cortex writes a `.cortex/.gitignore` (`*`) so its own state never
-registers as a workspace change —
-otherwise it would pollute scope-drift detection and diff review.
+The central XDG default lives outside every repo, so the working tree stays clean. When cases are
+opted **repo-local** (`cases_dir`), Cortex writes a `.cortex/.gitignore` (`*`) so its own state
+never registers as a workspace change — otherwise it would pollute scope-drift detection and diff
+review.
 
 ## `case.json`
 
@@ -97,6 +101,6 @@ An array of receipts, each naming the exact claim it supports:
   inspected or hand-edited.
 - Snapshot documents (`case.json`, `plan.json`, `hypotheses.json`, `verification.json`) are
   rewritten atomically (temp + rename) so a crash mid-write can't corrupt them.
-- Ledgers (`evidence.jsonl`, `commands.jsonl`) are append-only.
+- Ledgers (`evidence.jsonl`, `commands.jsonl`, `phases.jsonl`) are append-only.
 - No secret value is ever written to a case file — the redactor filters tool output first, and
   `commands.jsonl` records capability and result, never secret contents.

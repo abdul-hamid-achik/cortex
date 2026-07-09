@@ -15,6 +15,9 @@ import (
 // testRepo makes a temp git repo the MCP tools can operate on.
 func testRepo(t *testing.T) string {
 	t.Helper()
+	// Isolate global dirs so tool calls write cases into a throwaway base, not
+	// the developer's real $XDG_STATE_HOME/cortex.
+	t.Setenv("CORTEX_HOME", t.TempDir())
 	dir := t.TempDir()
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t.co"}, {"config", "user.name", "t"}} {
 		cmd := exec.Command("git", args...)
@@ -89,15 +92,16 @@ func TestMCPToolsList(t *testing.T) {
 	}
 	for _, want := range []string{
 		"cortex_start_task", "cortex_investigate", "cortex_plan", "cortex_verify",
-		"cortex_remember", "cortex_status", "cortex_list_tasks", "cortex_resolve",
+		"cortex_remember", "cortex_status", "cortex_list_tasks", "cortex_sessions",
+		"cortex_timeline", "cortex_metrics", "cortex_overview", "cortex_resolve",
 		"cortex_abort_task", "cortex_read_evidence", "cortex_read_artifact",
 	} {
 		if !got[want] {
 			t.Errorf("missing MCP tool %q", want)
 		}
 	}
-	if len(res.Tools) != 11 {
-		t.Errorf("expected 11 tools, got %d", len(res.Tools))
+	if len(res.Tools) != 15 {
+		t.Errorf("expected 15 tools, got %d", len(res.Tools))
 	}
 }
 

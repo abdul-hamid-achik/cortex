@@ -5,9 +5,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/config"
+	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 	"github.com/spf13/cobra"
 )
 
@@ -31,12 +33,31 @@ blocked rather than fabricated.`,
 		probe, _ := cmd.Flags().GetBool("probe")
 		gw := k.GatewaySelfCheck(cmd.Context(), gwServer, probe)
 
+		// Cross-workspace session snapshot — a monitoring glance at everything
+		// Cortex is tracking, not just this repo (nil on error is fine).
+		sessions, _ := kernel.AllSessions(kernel.SessionFilter{})
+		now := time.Now()
+		activeSessions, staleSessions, repos := 0, 0, map[string]bool{}
+		for _, s := range sessions {
+			if s.Active {
+				activeSessions++
+			}
+			if s.StaleSince(now, 24*time.Hour) {
+				staleSessions++
+			}
+			repos[s.Slug] = true
+		}
+
 		if jsonMode(cmd) {
 			return emitJSON(map[string]any{
 				"workspace": cfg.Workspace,
 				"casesDir":  cfg.CasesDir,
-				"tools":     health,
-				"gateway":   gw,
+				"sessions": map[string]any{
+					"total": len(sessions), "active": activeSessions, "stale": staleSessions,
+					"repos": len(repos), "root": config.SessionsRoot(),
+				},
+				"tools":   health,
+				"gateway": gw,
 			})
 		}
 
@@ -44,6 +65,14 @@ blocked rather than fabricated.`,
 		pln(w, heading("Environment"))
 		pf(w, "  %s %s\n", paint(styLabel, "workspace"), cfg.Workspace)
 		pf(w, "  %s %s\n", paint(styLabel, "cases   "), cfg.CasesDir)
+
+		pln(w, heading("Sessions"))
+		staleCell := fmt.Sprintf("%d stale", staleSessions)
+		if staleSessions > 0 {
+			staleCell = paint(styWarn, staleCell+" ⚠")
+		}
+		pf(w, "  %s %d total · %d active · %s · %d repo(s)\n", paint(styLabel, "count"), len(sessions), activeSessions, staleCell, len(repos))
+		pf(w, "  %s %s\n", paint(styLabel, "root "), config.SessionsRoot())
 
 		pln(w, heading("Specialist tools"))
 		down := 0

@@ -96,9 +96,16 @@ cortex remember task_06FK… "returnTo was dropped from signed state; fixed and 
 
 # anytime: inspect the case
 cortex status task_06FK… --detail full
-cortex list
-cortex doctor              # environment + specialist tool health
-cortex studio               # interactive read-only case browser (Charm v2 TUI)
+cortex list                 # tasks in the current workspace
+
+# audit & monitor across EVERY repo (central XDG store)
+cortex sessions             # all sessions, any repo (--repo/--active/--stale filters)
+cortex show task_06FK…      # full one-screen view of a session — from ANY directory
+cortex overview             # cross-repo rollup: completion, verification, where work sits
+cortex timeline task_06FK…  # a session's phases + evidence + tool calls + verification, time-sorted
+cortex metrics task_06FK…   # outcome & evidence metrics, incl. time-in-phase
+cortex studio               # live board of ALL sessions across repos, w/ loop stepper (Charm v2 TUI)
+cortex doctor               # environment + session snapshot + specialist tool health
 ```
 
 Every read command supports `--json` for machine consumption. Output is styled at a TTY and plain
@@ -112,9 +119,10 @@ Cortex speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC)
 cortex serve
 ```
 
-It exposes eleven tools: `cortex_start_task`, `cortex_investigate`, `cortex_plan`,
-`cortex_verify`, `cortex_remember`, `cortex_status`, `cortex_list_tasks`, `cortex_resolve`,
-`cortex_abort_task`, `cortex_read_evidence`, `cortex_read_artifact`.
+It exposes fifteen tools: `cortex_start_task`, `cortex_investigate`, `cortex_plan`,
+`cortex_verify`, `cortex_remember`, `cortex_status`, `cortex_list_tasks`, `cortex_sessions`,
+`cortex_timeline`, `cortex_metrics`, `cortex_overview`, `cortex_resolve`, `cortex_abort_task`,
+`cortex_read_evidence`, `cortex_read_artifact`.
 
 Register it with [mcphub](https://github.com/abdul-hamid-achik/mcphub):
 

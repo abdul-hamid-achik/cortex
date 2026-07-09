@@ -440,24 +440,34 @@ Cortex MAY exceed the budget only when the model or user explicitly requests dee
 ### 8.1 Case file layout
 
 ```text
-.cortex/
-  cases/
-    task_01J9Q5Y8B0M6D2/
-      case.json
-      evidence.jsonl
-      hypotheses.json
-      plan.json
-      verification.json
-      commands.jsonl
-      summary.md
-      refs/
-        artifacts.json
-        annotations.json
+$XDG_STATE_HOME/cortex/            # ~/.local/state/cortex by default
+  sessions/
+    <repo-slug>/                   # e.g. cortex, vecgrep, myapp
+      task_01J9Q5Y8B0M6D2/
+        case.json
+        evidence.jsonl
+        hypotheses.json
+        plan.json
+        verification.json
+        commands.jsonl
+        phases.jsonl
+        summary.md
+        refs/
+          artifacts.json
+          annotations.json
 ```
 
-The default local location is repository-local under `.cortex/cases` for active work (overridable
-via `cases_dir` / `CORTEX_CASES_DIR`, including paths outside the workspace). Long-term archives may
-be copied or stashed through `fcheap`.
+Sessions default to a **central, XDG-organized** location —
+`$XDG_STATE_HOME/cortex/sessions/<repo-slug>/` — so every session across every repository is
+visible and auditable in one place (case files record machine-local workspace paths and git refs,
+so they are XDG *state*, not portable data). Cortex's config and cache follow the XDG spec too
+(`$XDG_CONFIG_HOME/cortex`, `$XDG_CACHE_HOME/cortex`); `$CORTEX_HOME` or a pre-existing `~/.cortex`
+collapses all three into one directory for single-dir installs.
+
+Repository-local storage stays available as an opt-in: set `cases_dir: .cortex/cases` (or
+`CORTEX_CASES_DIR`) to keep a project's evidence next to its code, and a pre-existing
+`<workspace>/.cortex/cases` is honored automatically so upgrading never strands active work.
+Long-term archives may be copied or stashed through `fcheap`.
 
 ### 8.2 Case file schema
 
@@ -1286,6 +1296,8 @@ reopened/failed-after-complete rate
 average raw-output bytes returned to model
 unresolved hypothesis rate
 memory reuse rate
+time in phase (phase latency, from the phase-transition history)
+mean time to complete
 ```
 
 ### 18.2 Relationship to mcphub telemetry

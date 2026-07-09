@@ -15,6 +15,27 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// TestMain isolates Cortex's global directories for the whole CLI test binary:
+// cases now default to $XDG_STATE_HOME/cortex, so without this the tests would
+// write into the developer's real home. CORTEX_HOME collapses config+state into
+// one throwaway dir that is removed on exit.
+func TestMain(m *testing.M) {
+	// Clear the per-dir overrides that would beat CORTEX_HOME (a developer who
+	// exported CORTEX_CASES_DIR etc. would otherwise have the CLI tests write into
+	// their real cortex state).
+	for _, k := range []string{"CORTEX_CASES_DIR", "CORTEX_STATE_DIR", "CORTEX_CONFIG_DIR", "CORTEX_CACHE_DIR"} {
+		_ = os.Unsetenv(k)
+	}
+	base, err := os.MkdirTemp("", "cortex-clitest-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("CORTEX_HOME", base)
+	code := m.Run()
+	_ = os.RemoveAll(base)
+	os.Exit(code)
+}
+
 // resetFlags restores every command's flags to a pristine state, because the
 // global rootCmd retains values (and appends to StringArray flags) across
 // Execute calls in the same test binary.
@@ -162,6 +183,9 @@ func TestCLIDoctorJSON(t *testing.T) {
 	if _, ok := d["tools"]; !ok {
 		t.Errorf("doctor should report tools, got: %v", d)
 	}
+	if _, ok := d["sessions"]; !ok {
+		t.Errorf("doctor should report a sessions summary, got: %v", d)
+	}
 }
 
 func TestBuildHypotheses(t *testing.T) {
@@ -258,10 +282,189 @@ func TestCLIConfigAndStatusDetail(t *testing.T) {
 	if !strings.Contains(out, "\"max_investigation_rounds\": 9") {
 		t.Errorf("config should reflect the cortex.yaml override, got: %s", out)
 	}
+	if !strings.Contains(out, "\"sessionsRoot\"") {
+		t.Errorf("config should expose the XDG sessions root, got: %s", out)
+	}
 	// status --detail full includes tool health.
 	id := startTask(t, ws)
 	sout, _ := runCLI(t, "-C", ws, "--json", "status", id, "--detail", "full")
 	if !strings.Contains(sout, "toolHealth") {
 		t.Errorf("status --detail full should include tool health, got: %s", sout)
+	}
+}
+
+func TestTaskIDCompletion(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+
+	comps, directive := completeTaskIDs(nil, []string{}, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("expected NoFileComp directive, got %v", directive)
+	}
+	found := false
+	for _, c := range comps {
+		if strings.HasPrefix(c, id) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("completion should suggest %s, got %v", id, comps)
+	}
+	// Once the taskId arg is present, no further completion.
+	if c2, _ := completeTaskIDs(nil, []string{id}, ""); c2 != nil {
+		t.Errorf("should not complete a second positional arg, got %v", c2)
+	}
+}
+
+func TestResolveHypCompletion(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+	// Plan creates a hypothesis whose ID `resolve` should complete.
+	if _, err := runCLI(t, "-C", ws, "plan", id,
+		"--hypothesis", "cache key ignores query", "--disprove", "inspect key builder",
+		"--file", "f.go", "--boundary-reason", "cache module", "--uncertainty", "blast radius"); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	// Second arg (hypId) completes to the task's hypotheses.
+	comps, _ := completeResolveArgs(nil, []string{id}, "")
+	found := false
+	for _, c := range comps {
+		if strings.HasPrefix(c, "hyp_") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("resolve should complete hypothesis IDs, got %v", comps)
+	}
+	// First arg still completes task IDs.
+	if first, _ := completeResolveArgs(nil, []string{}, ""); len(first) == 0 {
+		t.Error("resolve first arg should complete task IDs")
+	}
+}
+
+func TestCLIShow(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+	out, err := runCLI(t, "show", id)
+	if err != nil {
+		t.Fatalf("show: %v (%s)", err, out)
+	}
+	if !strings.Contains(out, "Time in phase") || !strings.Contains(out, "[inv]") {
+		t.Errorf("show should include time-in-phase and the loop stepper, got:\n%s", out)
+	}
+	jout, err := runCLI(t, "--json", "show", id)
+	if err != nil {
+		t.Fatalf("show --json: %v (%s)", err, jout)
+	}
+	if !strings.Contains(jout, "\"case\"") {
+		t.Errorf("show --json should include the case, got:\n%s", jout)
+	}
+}
+
+func TestCLIArchiveRoundTrip(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+	// Terminal first (abort), then archive.
+	if _, err := runCLI(t, "-C", ws, "abort", id, "not needed"); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if out, err := runCLI(t, "archive", id); err != nil {
+		t.Fatalf("archive: %v (%s)", err, out)
+	}
+	// Shows up under --archived, gone from the default list.
+	arch, err := runCLI(t, "--json", "sessions", "--archived")
+	if err != nil {
+		t.Fatalf("sessions --archived: %v", err)
+	}
+	if !strings.Contains(arch, id) {
+		t.Errorf("archived session %s should appear under --archived, got:\n%s", id, arch)
+	}
+	// Restore.
+	if out, err := runCLI(t, "unarchive", id); err != nil {
+		t.Fatalf("unarchive: %v (%s)", err, out)
+	}
+}
+
+func TestCLIStatusLoopStepper(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws) // lands in investigating
+	out, err := runCLI(t, "-C", ws, "status", id)
+	if err != nil {
+		t.Fatalf("status: %v (%s)", err, out)
+	}
+	// The reasoning-loop stepper marks the current step; investigating → [inv].
+	if !strings.Contains(out, "[inv]") {
+		t.Errorf("status should render the loop stepper with the current step, got:\n%s", out)
+	}
+}
+
+func TestCLIOverview(t *testing.T) {
+	ws := cliRepo(t)
+	_ = startTask(t, ws)
+
+	out, err := runCLI(t, "--json", "overview")
+	if err != nil {
+		t.Fatalf("overview --json: %v (%s)", err, out)
+	}
+	if !strings.Contains(out, "\"sessions\"") {
+		t.Errorf("overview --json should include a sessions field, got:\n%s", out)
+	}
+	hout, err := runCLI(t, "overview")
+	if err != nil {
+		t.Fatalf("overview: %v (%s)", err, hout)
+	}
+	if !strings.Contains(hout, "By repo") {
+		t.Errorf("human overview should include a By repo section, got:\n%s", hout)
+	}
+}
+
+func TestCLITimeline(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+
+	out, err := runCLI(t, "--json", "timeline", id)
+	if err != nil {
+		t.Fatalf("timeline --json: %v (%s)", err, out)
+	}
+	if !strings.Contains(out, "\"kind\": \"phase\"") {
+		t.Errorf("timeline --json should include phase events, got:\n%s", out)
+	}
+	// Human render smoke: the phase rows are labeled.
+	hout, err := runCLI(t, "timeline", id)
+	if err != nil {
+		t.Fatalf("timeline: %v (%s)", err, hout)
+	}
+	if !strings.Contains(hout, "phase") {
+		t.Errorf("human timeline missing phase rows:\n%s", hout)
+	}
+}
+
+func TestCLISessions(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+
+	// The global --json view surfaces the freshly started task across workspaces.
+	out, err := runCLI(t, "--json", "sessions")
+	if err != nil {
+		t.Fatalf("sessions --json: %v (%s)", err, out)
+	}
+	if !strings.Contains(out, id) {
+		t.Errorf("sessions --json should include %s, got:\n%s", id, out)
+	}
+	// Human view renders the repo slug (filtered to this workspace).
+	hout, err := runCLI(t, "sessions", "--repo", filepath.Base(ws))
+	if err != nil {
+		t.Fatalf("sessions: %v (%s)", err, hout)
+	}
+	if !strings.Contains(hout, filepath.Base(ws)) {
+		t.Errorf("human sessions should include repo %s, got:\n%s", filepath.Base(ws), hout)
+	}
+	// A freshly started session is not stale.
+	sout, err := runCLI(t, "sessions", "--stale")
+	if err != nil {
+		t.Fatalf("sessions --stale: %v (%s)", err, sout)
+	}
+	if !strings.Contains(sout, "no stale sessions") {
+		t.Errorf("a fresh session should not be flagged stale, got:\n%s", sout)
 	}
 }

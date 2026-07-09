@@ -1,6 +1,6 @@
 // Package casefs persists case files to the local filesystem as JSON/JSONL
 // under .cortex/cases/<taskID>/ by default (SPEC §8.1; overridable). It is the kernel's working memory,
-// not a transcript: append-oriented ledgers (evidence, commands) plus
+// not a transcript: append-oriented ledgers (evidence, commands, phases) plus
 // snapshot documents (case, plan, hypotheses, verification, summary).
 //
 // v0.1 uses files, not a database (SPEC §24 #1). The layout is intentionally
@@ -100,6 +100,28 @@ func (s *Store) List() ([]string, error) {
 	return ids, nil
 }
 
+// MoveTaskTo relocates a task's whole directory to destRoot/<taskID> (an atomic
+// rename when both live on the same filesystem). Used to archive a session —
+// non-destructive, since the data is moved, not deleted. Fails if the task is
+// absent or the destination already exists.
+func (s *Store) MoveTaskTo(taskID, destRoot string) error {
+	src := s.dir(taskID)
+	if _, err := os.Stat(src); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("task %s: %w", taskID, ErrNotFound)
+		}
+		return err
+	}
+	dst := filepath.Join(destRoot, safeName(taskID))
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("destination %s already exists", dst)
+	}
+	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
+}
+
 // AppendEvidence appends one evidence record to the task's evidence.jsonl.
 func (s *Store) AppendEvidence(taskID string, ev domain.Evidence) error {
 	if err := ev.Validate(); err != nil {
@@ -173,6 +195,39 @@ type CommandRecord struct {
 	Status      string    `json:"status"`
 	DurationMs  int64     `json:"durationMs,omitempty"`
 	Note        string    `json:"note,omitempty"`
+}
+
+// PhaseEvent is one phase transition in a case's history (phases.jsonl): the
+// durable trail of the reasoning loop and the timeline's phase source. The
+// CaseFile keeps only the *current* phase; this ledger is how "when did it enter
+// verifying" becomes answerable.
+type PhaseEvent struct {
+	Timestamp time.Time    `json:"timestamp"`
+	From      domain.Phase `json:"from"`
+	To        domain.Phase `json:"to"`
+}
+
+// AppendPhaseEvent records a phase transition to phases.jsonl.
+func (s *Store) AppendPhaseEvent(taskID string, ev PhaseEvent) error {
+	return appendJSONL(filepath.Join(s.dir(taskID), "phases.jsonl"), ev)
+}
+
+// PhaseEvents returns a case's phase-transition history in append order (nil if
+// the case predates phase-history recording).
+func (s *Store) PhaseEvents(taskID string) ([]PhaseEvent, error) {
+	var out []PhaseEvent
+	err := readJSONL(filepath.Join(s.dir(taskID), "phases.jsonl"), func(line []byte) error {
+		var ev PhaseEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			return err
+		}
+		out = append(out, ev)
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return out, nil
 }
 
 // SavePlan writes plan.json.

@@ -29,6 +29,10 @@ Configurable in cortex.yaml:
 			return emitJSON(map[string]any{
 				"workspace":          cfg.Workspace,
 				"casesDir":           cfg.CasesDir,
+				"configDir":          config.ConfigDir(),
+				"sessionsRoot":       config.SessionsRoot(),
+				"archiveRoot":        config.ArchiveRoot(),
+				"cacheDir":           config.CacheHome(),
 				"budget":             cfg.Budget,
 				"redactLiteralCount": len(cfg.RedactLiterals),
 				"sources":            cfg.Sources(),
@@ -40,6 +44,15 @@ Configurable in cortex.yaml:
 		pf(w, "  %s %s\n", paint(styLabel, "workspace"), cfg.Workspace)
 		pf(w, "  %s %s\n", paint(styLabel, "cases    "), cfg.CasesDir)
 		pf(w, "  %s %d known secret literal(s)\n", paint(styLabel, "redact   "), len(cfg.RedactLiterals))
+
+		// The global XDG layout — where Cortex keeps everything, so it can be
+		// audited/backed up/pointed elsewhere (CORTEX_HOME or a legacy ~/.cortex
+		// collapses these into one dir).
+		pln(w, heading("Storage (XDG)"))
+		pf(w, "  %s %s\n", paint(styLabel, "config  "), config.ConfigDir())
+		pf(w, "  %s %s\n", paint(styLabel, "sessions"), config.SessionsRoot())
+		pf(w, "  %s %s\n", paint(styLabel, "archive "), config.ArchiveRoot())
+		pf(w, "  %s %s\n", paint(styLabel, "cache   "), config.CacheHome())
 
 		pln(w, heading("Budget"))
 		b := cfg.Budget

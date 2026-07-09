@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,9 +39,9 @@ func New(cfg config.Config) (*Kernel, error) {
 		return nil, err
 	}
 	// Cortex's own state must never register as a workspace change. Ignore the
-	// cases parent dir (default .cortex/) so scope-drift and diff review see only
-	// real edits. No-op when cases live outside the workspace.
-	ensureStateIgnored(cfg.Workspace, cfg.CasesDir)
+	// cases parent dir when cases are repo-local; no-op for the XDG default (out
+	// of the tree). Shared with the eval harness (config.EnsureStateIgnored).
+	config.EnsureStateIgnored(cfg.Workspace, cfg.CasesDir)
 	git := adapters.NewGit()
 	reg := adapters.NewRegistry(
 		git,
@@ -85,37 +84,6 @@ func approveExternal() bool {
 	return false
 }
 
-// ensureStateIgnored writes a .gitignore containing "*" next to the case store
-// when that store lives inside the workspace (default: <workspace>/.cortex/).
-// Best-effort: failures are silent; cases stored outside the workspace (via
-// cases_dir / CORTEX_CASES_DIR) need no in-repo ignore file.
-func ensureStateIgnored(workspace, casesDir string) {
-	if casesDir == "" {
-		return
-	}
-	// Only auto-ignore paths under the workspace — an absolute cases_dir under
-	// ~/.cortex/cases/… must not create a random .gitignore outside the repo.
-	ws := filepath.Clean(workspace)
-	cd := filepath.Clean(casesDir)
-	rel, err := filepath.Rel(ws, cd)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return
-	}
-	stateRoot := filepath.Dir(cd) // e.g. <workspace>/.cortex
-	// If cases_dir is the workspace itself (odd but legal), don't write "*".
-	if filepath.Clean(stateRoot) == ws {
-		return
-	}
-	gi := filepath.Join(stateRoot, ".gitignore")
-	if _, err := os.Stat(gi); err == nil {
-		return
-	}
-	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(gi, []byte("# Cortex local state — not source. Ignore everything here.\n*\n"), 0o644)
-}
-
 // NewWith builds a kernel with an explicit registry (used by tests).
 func NewWith(cfg config.Config, store *casefs.Store, reg *adapters.Registry) *Kernel {
 	k := &Kernel{cfg: cfg, store: store, reg: reg, red: redact.New(cfg.RedactLiterals...), now: time.Now}
@@ -144,8 +112,18 @@ func (k *Kernel) transition(c *domain.CaseFile, to domain.Phase) error {
 	if !domain.CanTransition(c.Status, to) {
 		return domain.ErrIllegalTransition{From: c.Status, To: to}
 	}
+	from := c.Status
 	c.Status = to
+	k.recordPhase(c.ID, from, to)
 	return nil
+}
+
+// recordPhase appends a phase transition to the case's history (phases.jsonl) so
+// the reasoning loop leaves a durable, timestamped trail — the source for
+// `cortex timeline` and phase-latency metrics. Best effort: a ledger write
+// failure never blocks the transition itself.
+func (k *Kernel) recordPhase(taskID string, from, to domain.Phase) {
+	_ = k.store.AppendPhaseEvent(taskID, casefs.PhaseEvent{Timestamp: k.now().UTC(), From: from, To: to})
 }
 
 // stampEvidence promotes an adapter Fact into a durable Evidence record whose

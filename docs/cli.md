@@ -10,6 +10,16 @@ for machine consumption; output is styled at a TTY and plain when piped.
 | `-C, --workspace <dir>` | workspace/repository directory (defaults to cwd) |
 | `--json` | emit machine-readable JSON instead of the styled view |
 
+## Shell completion
+
+Install completion with cobra's built-in command, e.g. `cortex completion zsh > "${fpath[1]}/_cortex"`
+(or `bash` / `fish`). Every command that takes a `<taskId>` then **tab-completes task IDs** — with
+the goal shown as the description — reading across every repo, so you never type a base32 ID by hand:
+
+```bash
+cortex show <TAB>       # → task_06FK… (fix cart total)  task_06FM… (add coupon codes)
+```
+
 ## Commands
 
 ### `cortex start <goal>`
@@ -124,16 +134,76 @@ A PR is fetched by git ref (GitHub `pull/N/head`, Bitbucket `pull-requests/N/fro
 required. When a host can't be fetched by ref (e.g. Bitbucket Cloud), Cortex tells you to check out
 the branch and re-run with `--base`. Inspect the full review with `cortex status <taskId> --detail full`.
 
+## Audit & monitor (across every repo)
+
+Cortex stores sessions in a central, XDG-organized location
+(`$XDG_STATE_HOME/cortex/sessions/<repo>/<taskId>/` by default), so these commands see **all** your
+work regardless of which repository it belongs to — one place to audit and monitor. All support
+`--json`.
+
+### `cortex sessions` (`sess`)
+
+Every session across every repo, newest first: repo · phase · age · verification · goal.
+
+```bash
+cortex sessions                    # everything, everywhere
+cortex sessions --repo billing     # only sessions whose repo/slug matches
+cortex sessions --active           # only in-flight (non-terminal)
+cortex sessions --stale            # in-flight but untouched beyond --stale-after (default 24h)
+```
+
+An in-flight session untouched beyond `--stale-after` renders its age with a `⚠` — a nudge toward
+forgotten or stuck work. Add `--archived` to list retired sessions instead of active ones.
+
+### `cortex archive <taskId>` / `cortex unarchive <taskId>`
+
+Retire a finished session — **move** it (a *terminal* session: complete / abandoned / blocked) out of
+the active tree into `$XDG_STATE_HOME/cortex/archive/`, so `sessions` / `overview` / `studio` stay
+focused on live work as history accumulates. The data is preserved and reversible with `unarchive`;
+**nothing is deleted**, and in-flight sessions are refused. View the archive with
+`cortex sessions --archived`.
+
+### `cortex show <taskId>` (`view`)
+
+A full one-screen view of a single session: phase badge, loop stepper, hypotheses, verification
+receipts, time-in-phase (with elapsed), and recent activity. Located by ID **from any directory**,
+so you can inspect a task from another repo without `cd`-ing there (`cortex status` is
+workspace-scoped; `show` is not). `--json` returns the whole view.
+
+### `cortex overview` (`dash`)
+
+A cross-repo rollup: totals, active/stale counts, completion and verified-completion rates, mean
+time to complete, and a per-repo breakdown. The "how am I using cortex overall" dashboard.
+
+### `cortex timeline <taskId>` (`activity`)
+
+A session's chronological activity — phase transitions, evidence, audited tool calls, and
+verification receipts — merged and time-sorted. Works from any directory (the session is located by
+ID). This is the reader for a case's audit log.
+
+### `cortex studio` (`board`, `tui`)
+
+A live, read-only Charm v2 board of every session across every repo: the session list on the left,
+and the selected case's **loop stepper** (`orient→…→preserve`, with a "you are here" marker),
+hypotheses, evidence, and verification on the right. Auto-refreshes.
+
+```bash
+cortex studio               # all sessions, live
+cortex studio --active      # only in-flight
+cortex studio --repo api    # scope to a repo
+```
+
+Keys: `↑/↓` navigate · `g/G` jump · `a` active-only · `r` refresh · `q` quit.
+
 ### Other
 
 | Command | Purpose |
 |---|---|
 | `cortex resolve <taskId> <hypId> --status … --reason …` | mark a hypothesis confirmed/challenged/rejected (history retained) |
-| `cortex metrics [taskId]` | observability: per-task outcome + evidence trail, or the workspace aggregate (SPEC §18) |
-| `cortex list` (`ls`) | all tasks in the workspace, newest first |
-| `cortex doctor` | environment + specialist tool health (JSON with `--json`) |
-| `cortex config` | resolved configuration + which `cortex.yaml` files were applied |
-| `cortex studio` (`studio`, `tui`) | interactive read-only case browser (Charm v2 TUI) |
+| `cortex metrics [taskId]` | observability: per-task outcome + evidence trail (incl. **time-in-phase**), or the workspace aggregate (SPEC §18) |
+| `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
+| `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
+| `cortex config` | resolved configuration, the **XDG storage layout**, and which `cortex.yaml` files were applied |
 | `cortex abort <taskId> <reason>` | stop a task without deleting evidence |
 | `cortex read-evidence <taskId> <evidenceId>` | print a full evidence record (with its `rawRef`) |
 | `cortex read-artifact <taskId> <ref>` | resolve an evidence `rawRef` to the raw tool output |

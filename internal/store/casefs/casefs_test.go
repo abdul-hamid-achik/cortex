@@ -31,6 +31,27 @@ func sampleCase() *domain.CaseFile {
 	}
 }
 
+func TestPhaseEventsRoundTrip(t *testing.T) {
+	s := newStore(t)
+	c := sampleCase()
+	if err := s.Create(c); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_ = s.AppendPhaseEvent(c.ID, PhaseEvent{Timestamp: time.Now().UTC(), From: domain.PhaseNew, To: domain.PhaseOrienting})
+	_ = s.AppendPhaseEvent(c.ID, PhaseEvent{Timestamp: time.Now().UTC(), From: domain.PhaseOrienting, To: domain.PhaseInvestigating})
+	evs, err := s.PhaseEvents(c.ID)
+	if err != nil {
+		t.Fatalf("phase events: %v", err)
+	}
+	if len(evs) != 2 || evs[0].To != domain.PhaseOrienting || evs[1].To != domain.PhaseInvestigating {
+		t.Errorf("unexpected phase history: %+v", evs)
+	}
+	// A case with no history returns nil, not an error.
+	if got, err := s.PhaseEvents("task_absent"); err != nil || got != nil {
+		t.Errorf("absent phases should be (nil,nil), got (%v,%v)", got, err)
+	}
+}
+
 func TestCaseRoundTrip(t *testing.T) {
 	s := newStore(t)
 	c := sampleCase()

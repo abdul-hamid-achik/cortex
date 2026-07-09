@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 	"github.com/spf13/cobra"
@@ -71,6 +72,14 @@ func renderTaskMetrics(m kernel.TaskMetrics) {
 	pf(w, "  %-26s %t\n", "scope drifted", m.ScopeDrifted)
 	pf(w, "  %-26s %t\n", "memory reused", m.MemoryReused)
 
+	if len(m.PhaseDurations) > 0 {
+		pf(w, "  %-26s %s\n", "elapsed", humanDurMs(m.ElapsedMs))
+		pln(w, heading("Time in phase"))
+		for _, pd := range m.PhaseDurations {
+			pf(w, "  %s %s\n", paint(styPhase, fmt.Sprintf("%-14s", pd.Phase)), paint(styMuted, humanDurMs(pd.Ms)))
+		}
+	}
+
 	if len(m.VerifiedSurfaces) > 0 || len(m.MissingVerification) > 0 {
 		pln(w, heading("Verification coverage"))
 		for _, s := range m.VerifiedSurfaces {
@@ -100,6 +109,9 @@ func renderWorkspaceMetrics(wm kernel.WorkspaceMetrics, per []kernel.TaskMetrics
 	pf(w, "  %-28s %d (%s)\n", "completed", wm.Completed, pct(wm.CompletionRate))
 	pf(w, "  %-28s %d (%s)\n", "verified completions", wm.VerifiedCompletions, pct(wm.VerifiedCompletionRate))
 	pf(w, "  %-28s %.1f\n", "mean tools / completed task", wm.MeanToolsPerCompletedTask)
+	if wm.MeanTimeToCompleteMs > 0 {
+		pf(w, "  %-28s %s\n", "mean time to complete", humanDurMs(int64(wm.MeanTimeToCompleteMs)))
+	}
 	pf(w, "  %-28s %s\n", "scope-drift rate", pct(wm.ScopeDriftRate))
 	pf(w, "  %-28s %s\n", "unresolved-hypothesis rate", pct(wm.UnresolvedHypothesisRate))
 	pf(w, "  %-28s %s\n", "memory-reuse rate", pct(wm.MemoryReuseRate))
@@ -119,6 +131,21 @@ func renderWorkspaceMetrics(wm kernel.WorkspaceMetrics, per []kernel.TaskMetrics
 }
 
 func pct(r float64) string { return fmt.Sprintf("%.0f%%", r*100) }
+
+// humanDurMs renders a millisecond span compactly (e.g. 0.4s, 12s, 4m, 1h3m).
+func humanDurMs(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	switch {
+	case d < time.Second:
+		return fmt.Sprintf("%dms", ms)
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	case d < time.Hour:
+		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+	default:
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
 
 func init() {
 	rootCmd.AddCommand(metricsCmd)

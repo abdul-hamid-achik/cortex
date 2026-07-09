@@ -43,15 +43,16 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 		Workspace:     domain.Workspace{Root: k.cfg.Workspace, Repository: filepath.Base(k.cfg.Workspace), BaseRef: in.BaseRef},
 	}
 
+	// Persist the case skeleton FIRST. Appending to any ledger — phases.jsonl via
+	// the transition below, or evidence via stampEvidence — creates the task
+	// directory, so Create must run before them or it would see the directory
+	// already present and refuse ("case already exists").
+	if err := k.store.Create(c); err != nil {
+		return errEnvelope(c.ID, err.Error()), err
+	}
 	// new → orienting: a goal and workspace exist.
 	if err := k.transition(c, domain.PhaseOrienting); err != nil {
 		return errEnvelope(c.ID, err.Error()), nil
-	}
-	// Persist the case skeleton before stamping any orientation evidence —
-	// stampEvidence's append creates the task directory, so Create must run
-	// first or it would see the directory already present and refuse.
-	if err := k.store.Create(c); err != nil {
-		return errEnvelope(c.ID, err.Error()), err
 	}
 
 	var facts []domain.Evidence

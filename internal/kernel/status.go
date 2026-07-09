@@ -152,11 +152,13 @@ func (k *Kernel) AbortTask(taskID, reason string) (domain.Envelope, error) {
 	if c.Status.IsTerminal() {
 		return errEnvelope(taskID, fmt.Sprintf("task is already in terminal phase %q", c.Status)), nil
 	}
+	from := c.Status
 	c.Status = domain.PhaseAbandoned
 	c.BlockedReason = reason
 	if err := k.store.Save(c); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
+	k.recordPhase(c.ID, from, domain.PhaseAbandoned) // abort bypasses transition()
 	return domain.Envelope{OK: true, TaskID: c.ID, Phase: c.Status,
 		Summary: "task aborted: " + reason, RawAvailable: true}, nil
 }
@@ -195,6 +197,12 @@ func (k *Kernel) ListTasks() ([]TaskSummary, error) {
 	for _, id := range idsList {
 		c, err := k.store.Load(id)
 		if err != nil {
+			continue
+		}
+		// Central storage groups by repo *basename* (Slug), so two repos sharing a
+		// basename share one store dir. `list` is a per-workspace view, so keep only
+		// this workspace's cases (cross-repo `cortex sessions` shows all of them).
+		if c.Workspace.Root != k.cfg.Workspace {
 			continue
 		}
 		out = append(out, TaskSummary{ID: c.ID, Goal: c.Goal, Phase: c.Status, Repository: c.Workspace.Repository, CreatedAt: c.CreatedAt.Format("2006-01-02 15:04")})

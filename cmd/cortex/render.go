@@ -151,11 +151,44 @@ func renderEnvelope(w *os.File, env domain.Envelope) {
 // heading renders a blank line then a bold section label.
 func heading(s string) string { return "\n" + paint(styHeading, s) }
 
+// loopStepperLine renders the reasoning loop (domain.LoopStages) as a "you are
+// here" track for the CLI — the studio board's stepper, on the primary status
+// command. Completed steps are green, the current step bracketed, and a terminal
+// stop marker replaces the track for blocked/abandoned cases.
+func loopStepperLine(p domain.Phase) string {
+	sep := paint(styMuted, "─")
+	if p == domain.PhaseComplete {
+		parts := make([]string, len(domain.LoopStages))
+		for i, s := range domain.LoopStages {
+			parts[i] = paint(styOK, s.Label)
+		}
+		return strings.Join(parts, sep) + " " + paint(styOK, "✓")
+	}
+	cur := domain.LoopStageIndexOf(p)
+	parts := make([]string, len(domain.LoopStages))
+	for i, s := range domain.LoopStages {
+		switch {
+		case cur >= 0 && i < cur:
+			parts[i] = paint(styOK, s.Label)
+		case i == cur:
+			parts[i] = paint(styPhase, "["+s.Label+"]")
+		default:
+			parts[i] = paint(styMuted, s.Label)
+		}
+	}
+	line := strings.Join(parts, sep)
+	if cur < 0 {
+		line += "  " + paint(styErr, "■ "+string(p))
+	}
+	return line
+}
+
 // renderStatus prints the detailed status view.
 func renderStatus(rep kernel.StatusReport) {
 	w := os.Stdout
 	renderEnvelope(w, rep.Envelope)
 	pln(w, heading("Task"))
+	pf(w, "  %s %s\n", paint(styLabel, "loop    "), loopStepperLine(rep.Phase))
 	pf(w, "  %s %s · %s %s · %s %s\n",
 		paint(styLabel, "mode"), rep.Mode, paint(styLabel, "risk"), rep.Risk, paint(styLabel, "repo"), rep.Workspace.Repository)
 	if rep.Workspace.Branch != "" {

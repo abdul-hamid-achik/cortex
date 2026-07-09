@@ -1,13 +1,15 @@
-// Package tui is the Cortex board: a read-only Charm v2 (bubbletea) surface for
-// browsing case files — the task list on the left, the selected case's phase,
-// hypotheses, evidence ledger, and verification receipts on the right. It is a
-// thin viewer over internal/kernel's store; it never mutates a case.
+// Package tui is the Cortex studio: a live, read-only Charm v2 (bubbletea) board
+// of every session across every repository — the session list on the left, and
+// the selected case's loop progress, hypotheses, evidence ledger, and
+// verification receipts on the right. It reads the central XDG sessions tree via
+// internal/kernel and auto-refreshes; it never mutates a case.
 package tui
 
 import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -16,9 +18,16 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 )
 
-// Run launches the board over the given kernel until the user quits.
-func Run(ctx context.Context, k *kernel.Kernel) error {
-	m, err := newModel(k)
+// refreshInterval is how often the board re-reads the sessions tree.
+const refreshInterval = 2 * time.Second
+
+// staleBoardThreshold is how long an in-flight session may sit untouched before
+// the board flags it as stale (matches the CLI default).
+const staleBoardThreshold = 24 * time.Hour
+
+// Run launches the live board over all sessions matching filter until quit.
+func Run(ctx context.Context, filter kernel.SessionFilter) error {
+	m, err := newModel(filter)
 	if err != nil {
 		return err
 	}
@@ -27,13 +36,14 @@ func Run(ctx context.Context, k *kernel.Kernel) error {
 }
 
 type model struct {
-	k       *kernel.Kernel
-	tasks   []kernel.TaskSummary
-	cursor  int
-	detail  detail
-	width   int
-	height  int
-	loadErr string
+	filter      kernel.SessionFilter
+	sessions    []kernel.SessionSummary
+	cursor      int
+	detail      detail
+	width       int
+	height      int
+	loadErr     string
+	lastRefresh time.Time
 }
 
 // detail is the loaded view of the selected case (read straight from the store,
@@ -46,22 +56,34 @@ type detail struct {
 	receipts []domain.VerificationRecord
 }
 
-func newModel(k *kernel.Kernel) (model, error) {
-	tasks, err := k.ListTasks()
+// tickMsg drives auto-refresh.
+type tickMsg time.Time
+
+func tick() tea.Cmd {
+	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+func newModel(filter kernel.SessionFilter) (model, error) {
+	m := model{filter: filter, width: 100, height: 30}
+	sessions, err := kernel.AllSessions(filter)
 	if err != nil {
 		return model{}, err
 	}
-	m := model{k: k, tasks: tasks, width: 100, height: 30}
+	m.sessions = sessions
+	m.lastRefresh = time.Now()
 	m.load()
 	return m, nil
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd { return tick() }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case tickMsg:
+		m.refresh()
+		return m, tick()
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
@@ -72,7 +94,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.load()
 			}
 		case "down", "j":
-			if m.cursor < len(m.tasks)-1 {
+			if m.cursor < len(m.sessions)-1 {
 				m.cursor++
 				m.load()
 			}
@@ -80,38 +102,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 			m.load()
 		case "G", "end":
-			m.cursor = max(0, len(m.tasks)-1)
+			m.cursor = max(0, len(m.sessions)-1)
 			m.load()
+		case "a":
+			m.filter.ActiveOnly = !m.filter.ActiveOnly
+			m.refresh()
 		case "r":
-			if tasks, err := m.k.ListTasks(); err == nil {
-				m.tasks = tasks
-				if m.cursor >= len(m.tasks) {
-					m.cursor = max(0, len(m.tasks)-1)
-				}
-				m.load()
-			}
+			m.refresh()
 		}
 	}
 	return m, nil
 }
 
-// load reads the selected case's records from the store.
-func (m *model) load() {
-	m.detail = detail{}
-	if len(m.tasks) == 0 || m.cursor >= len(m.tasks) {
-		return
+// refresh re-reads the sessions tree, preserving the selected session by ID.
+func (m *model) refresh() {
+	selID := ""
+	if m.cursor < len(m.sessions) {
+		selID = m.sessions[m.cursor].ID
 	}
-	id := m.tasks[m.cursor].ID
-	st := m.k.Store()
-	c, err := st.Load(id)
+	sessions, err := kernel.AllSessions(m.filter)
 	if err != nil {
 		m.loadErr = err.Error()
 		return
 	}
-	ev, _ := st.Evidence(id)
-	hyps, _ := st.Hypotheses(id)
-	recs, _ := st.Verifications(id)
-	m.detail = detail{loaded: true, c: c, evidence: ev, hyps: hyps, receipts: recs}
+	m.sessions = sessions
+	m.cursor = 0
+	for i, s := range sessions {
+		if s.ID == selID {
+			m.cursor = i
+			break
+		}
+	}
+	if m.cursor >= len(m.sessions) {
+		m.cursor = max(0, len(m.sessions)-1)
+	}
+	m.lastRefresh = time.Now()
+	m.load()
+}
+
+// load reads the selected session's records from its store.
+func (m *model) load() {
+	m.detail = detail{}
+	if len(m.sessions) == 0 || m.cursor >= len(m.sessions) {
+		return
+	}
+	s := m.sessions[m.cursor]
+	d, err := kernel.LoadSession(s.Slug, s.ID)
+	if err != nil {
+		m.loadErr = err.Error()
+		return
+	}
+	m.detail = detail{loaded: true, c: d.Case, evidence: d.Evidence, hyps: d.Hyps, receipts: d.Receipts}
 }
 
 func max(a, b int) int {
@@ -143,10 +184,26 @@ func (m model) View() tea.View {
 }
 
 func (m model) render() string {
-	title := tHeader.Render("● Cortex studio") + tDim.Render("  —  case files")
-	help := tDim.Render("↑/↓ navigate · r refresh · q quit")
+	stale := 0
+	for _, s := range m.sessions {
+		if s.StaleSince(time.Now(), staleBoardThreshold) {
+			stale++
+		}
+	}
+	sub := fmt.Sprintf("  —  %d sessions · auto %s", len(m.sessions), refreshInterval)
+	if m.filter.ActiveOnly {
+		sub += " · active"
+	}
+	if m.filter.Repo != "" {
+		sub += " · repo~" + m.filter.Repo
+	}
+	title := tHeader.Render("● Cortex studio") + tDim.Render(sub)
+	if stale > 0 {
+		title += tWarn.Render(fmt.Sprintf("  ⚠ %d stale", stale))
+	}
+	help := tDim.Render("↑/↓ navigate · a active-only · r refresh · q quit")
 
-	listW := 34
+	listW := 32
 	detailW := m.width - listW - 6
 	if detailW < 30 {
 		detailW = 30
@@ -164,19 +221,29 @@ func (m model) render() string {
 }
 
 func (m model) renderList(h int) string {
-	if len(m.tasks) == 0 {
-		return tDim.Render("no tasks yet\n\nstart one with:\ncortex start \"<goal>\"")
+	if len(m.sessions) == 0 {
+		return tDim.Render("no sessions yet\n\nstart one with:\ncortex start \"<goal>\"")
+	}
+	// Window the list around the cursor so long lists scroll into view.
+	now := time.Now()
+	start := 0
+	if m.cursor >= h {
+		start = m.cursor - h + 1
 	}
 	var b strings.Builder
-	for i, t := range m.tasks {
-		if i >= h {
-			break
+	for i := start; i < len(m.sessions) && i < start+h; i++ {
+		s := m.sessions[i]
+		suffix := ""
+		if s.StaleSince(now, staleBoardThreshold) {
+			suffix = " " + tWarn.Render("⚠") // in-flight but untouched — likely forgotten
 		}
-		line := fmt.Sprintf("%-13s %s", t.Phase, clip(t.Goal, 16))
+		// Both prefixes are two cells wide ("▸ " and "● ") so the slug/goal columns
+		// stay aligned as the cursor moves between rows.
 		if i == m.cursor {
-			b.WriteString(tSel.Render("▸ " + line))
+			b.WriteString(tSel.Render("▸ "+clip(s.Slug, 10)+" "+clip(s.Goal, 13)) + suffix)
 		} else {
-			b.WriteString("  " + phaseColor(t.Phase).Render(string(t.Phase)) + " " + clip(t.Goal, 16))
+			b.WriteString(phaseColor(s.Phase).Render("●") + " " +
+				clip(s.Slug, 10) + " " + tDim.Render(clip(s.Goal, 13)) + suffix)
 		}
 		b.WriteString("\n")
 	}
@@ -188,14 +255,15 @@ func (m model) renderDetail(w int) string {
 		if m.loadErr != "" {
 			return tErr.Render("load error: " + m.loadErr)
 		}
-		return tDim.Render("select a task")
+		return tDim.Render("select a session")
 	}
 	c := m.detail.c
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", tHeader.Render(clip(c.Goal, w-2)))
 	fmt.Fprintf(&b, "%s  %s\n", tDim.Render(c.ID), tPhase.Render("["+string(c.Status)+"]"))
-	fmt.Fprintf(&b, "%s %s@%s · %s · risk %s\n\n",
-		tDim.Render("repo"), c.Workspace.Repository, c.Workspace.CommitBefore, c.Mode, c.Risk)
+	fmt.Fprintf(&b, "%s %s@%s · %s · risk %s\n", tDim.Render("repo"), c.Workspace.Repository, c.Workspace.CommitBefore, c.Mode, c.Risk)
+	// The reasoning loop, with "you are here".
+	fmt.Fprintf(&b, "%s\n\n", loopStepper(c.Status))
 
 	if len(m.detail.hyps) > 0 {
 		b.WriteString(tSection.Render("Hypotheses") + "\n")
@@ -224,6 +292,37 @@ func (m model) renderDetail(w int) string {
 		shown++
 	}
 	return b.String()
+}
+
+// loopStepper draws orient─inv─plan─change─verify─keep (domain.LoopStages) with
+// the current step highlighted, completed steps green, and a stop marker for
+// terminal-bad phases.
+func loopStepper(p domain.Phase) string {
+	sep := tDim.Render("─")
+	if p == domain.PhaseComplete {
+		parts := make([]string, len(domain.LoopStages))
+		for i, s := range domain.LoopStages {
+			parts[i] = tOK.Render(s.Label)
+		}
+		return strings.Join(parts, sep) + " " + tOK.Render("✓")
+	}
+	cur := domain.LoopStageIndexOf(p)
+	parts := make([]string, len(domain.LoopStages))
+	for i, s := range domain.LoopStages {
+		switch {
+		case cur >= 0 && i < cur:
+			parts[i] = tOK.Render(s.Label)
+		case i == cur:
+			parts[i] = tPhase.Render("[" + s.Label + "]")
+		default:
+			parts[i] = tDim.Render(s.Label)
+		}
+	}
+	track := strings.Join(parts, sep)
+	if cur < 0 { // blocked / abandoned / needs_human_decision
+		track += "  " + tErr.Render("■ "+string(p))
+	}
+	return track
 }
 
 func phaseColor(p domain.Phase) lipgloss.Style {

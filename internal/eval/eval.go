@@ -75,14 +75,17 @@ func NewEnv(t *testing.T, files map[string]string, extra ...adapters.Adapter) *E
 	gitRun(t, dir, "commit", "-qm", "seed")
 
 	cfg := config.For(dir)
+	// Keep each scenario's sandbox self-contained and repo-local under its temp
+	// workspace (cases now default to a central XDG tree; pin them back here so
+	// scenarios stay hermetic and auto-cleaned with t.TempDir).
+	cfg.CasesDir = filepath.Join(dir, ".cortex", "cases")
 	store, err := casefs.New(cfg.CasesDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Cortex must git-ignore its own case-file state, or every write shows up as a
-	// workspace change and floods scope-drift (mirrors the kernel's init).
-	_ = os.MkdirAll(filepath.Join(dir, ".cortex"), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, ".cortex", ".gitignore"), []byte("*\n"), 0o644)
+	// workspace change and floods scope-drift. Same helper the kernel uses.
+	config.EnsureStateIgnored(dir, cfg.CasesDir)
 	all := append([]adapters.Adapter{adapters.NewGit()}, extra...)
 	return &Env{t: t, dir: dir, k: kernel.NewWith(cfg, store, adapters.NewRegistry(all...)), ctx: context.Background(), tasks: map[string]bool{}}
 }

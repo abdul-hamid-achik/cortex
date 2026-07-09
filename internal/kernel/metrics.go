@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
+	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
 // TaskMetrics is the per-task observability summary (SPEC §18.1/§18.2): it
@@ -30,6 +31,16 @@ type TaskMetrics struct {
 	ScopeDrifted         bool               `json:"scopeDrifted"`
 	MemoryReused         bool               `json:"memoryReused"`
 	ToolContribution     []ToolContribution `json:"toolContribution,omitempty"`
+	PhaseDurations       []PhaseDuration    `json:"phaseDurations,omitempty"`
+	ElapsedMs            int64              `json:"elapsedMs,omitempty"`
+}
+
+// PhaseDuration is time spent in one phase of the reasoning loop, derived from
+// the phases.jsonl history — the "how do we work" signal that shows where time
+// goes (e.g. long investigating vs. long changing).
+type PhaseDuration struct {
+	Phase string `json:"phase"`
+	Ms    int64  `json:"ms"`
 }
 
 // ToolContribution enriches mcphub's raw call counts with task-level meaning
@@ -149,7 +160,47 @@ func (k *Kernel) TaskMetrics(taskID string) (TaskMetrics, error) {
 	}
 	m.Verified = m.Complete && len(m.MissingVerification) == 0 && anyProven(receipts)
 	m.ToolContribution = sortContributions(perTool)
+
+	events, _ := k.store.PhaseEvents(taskID)
+	m.PhaseDurations, m.ElapsedMs = phaseDurations(c.CreatedAt, events, c.Status.IsTerminal(), k.now().UTC())
 	return m, nil
+}
+
+// phaseDurations computes time-in-phase from a case's phase history: the first
+// phase runs from case creation to the first transition, each subsequent phase
+// from one transition to the next, and the current (last) phase up to now unless
+// the case is terminal. Returns per-phase durations in first-seen order plus the
+// total elapsed. Negative spans (clock skew) clamp to zero.
+func phaseDurations(createdAt time.Time, events []casefs.PhaseEvent, terminal bool, now time.Time) ([]PhaseDuration, int64) {
+	if len(events) == 0 {
+		return nil, 0
+	}
+	durs := map[string]int64{}
+	order := []string{}
+	add := func(p string, d time.Duration) {
+		if d < 0 {
+			d = 0
+		}
+		if _, ok := durs[p]; !ok {
+			order = append(order, p)
+		}
+		durs[p] += d.Milliseconds()
+	}
+	prevTime, prevPhase := createdAt, string(events[0].From)
+	for _, e := range events {
+		add(prevPhase, e.Timestamp.Sub(prevTime))
+		prevTime, prevPhase = e.Timestamp, string(e.To)
+	}
+	if !terminal { // still in-flight: count the current phase up to now
+		add(prevPhase, now.Sub(prevTime))
+	}
+	out := make([]PhaseDuration, 0, len(order))
+	var total int64
+	for _, p := range order {
+		out = append(out, PhaseDuration{Phase: p, Ms: durs[p]})
+		total += durs[p]
+	}
+	return out, total
 }
 
 // WorkspaceMetrics aggregates TaskMetrics across every task in the workspace
@@ -161,6 +212,7 @@ type WorkspaceMetrics struct {
 	CompletionRate            float64        `json:"completionRate"`
 	VerifiedCompletionRate    float64        `json:"verifiedCompletionRate"`
 	MeanToolsPerCompletedTask float64        `json:"meanToolsPerCompletedTask"`
+	MeanTimeToCompleteMs      float64        `json:"meanTimeToCompleteMs,omitempty"`
 	ScopeDriftRate            float64        `json:"scopeDriftRate"`
 	UnresolvedHypothesisRate  float64        `json:"unresolvedHypothesisRate"`
 	MemoryReuseRate           float64        `json:"memoryReuseRate"`
@@ -177,7 +229,13 @@ func (k *Kernel) WorkspaceMetrics() (WorkspaceMetrics, []TaskMetrics, error) {
 	wm.ToolCalls = map[string]int{}
 	var per []TaskMetrics
 	toolsInCompleted, drift, unresolved, memReuse := 0, 0, 0, 0
+	var elapsedCompleted int64
 	for _, id := range ids {
+		// Per-workspace metrics: same-basename repos share a central store dir, so
+		// keep only this workspace's cases (see ListTasks).
+		if c, err := k.store.Load(id); err != nil || c.Workspace.Root != k.cfg.Workspace {
+			continue
+		}
 		tm, err := k.TaskMetrics(id)
 		if err != nil {
 			continue
@@ -187,6 +245,7 @@ func (k *Kernel) WorkspaceMetrics() (WorkspaceMetrics, []TaskMetrics, error) {
 		if tm.Complete {
 			wm.Completed++
 			toolsInCompleted += tm.ToolCalls
+			elapsedCompleted += tm.ElapsedMs
 		}
 		if tm.Verified {
 			wm.VerifiedCompletions++
@@ -213,6 +272,7 @@ func (k *Kernel) WorkspaceMetrics() (WorkspaceMetrics, []TaskMetrics, error) {
 	}
 	if wm.Completed > 0 {
 		wm.MeanToolsPerCompletedTask = float64(toolsInCompleted) / float64(wm.Completed)
+		wm.MeanTimeToCompleteMs = float64(elapsedCompleted) / float64(wm.Completed)
 	}
 	return wm, per, nil
 }

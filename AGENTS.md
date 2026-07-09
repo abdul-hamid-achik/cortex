@@ -23,8 +23,10 @@ user-visible behavior. See `SPEC.md` for the full design.
 Three surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
 
 - **CLI** — human commands *and* `--json` machine output for agents (Cobra + Charm v2 lipgloss).
-- **MCP server** — `cortex serve` (stdio), eleven `cortex_*` tools for agents.
-- **studio TUI** — `cortex studio` (Charm v2 bubbletea), a read-only case-file browser for humans.
+- **MCP server** — `cortex serve` (stdio), fifteen `cortex_*` tools for agents.
+- **studio TUI** — `cortex studio` (Charm v2 bubbletea), a live, read-only board of **all** sessions
+  across every repo: the session list plus the selected case's loop stepper, hypotheses, evidence,
+  and receipts. Auto-refreshes; `--repo`/`--active` filters; `a` toggles active-only.
 
 ## Directory Structure
 
@@ -63,11 +65,11 @@ cortex/
 │   │   ├── codemap.go vecgrep.go fcheap.go cairntrace.go glyphrun.go vidtrace.go tvault.go
 │   │   └── util.go           #   pluralize / decodeJSON / clip helpers
 │   ├── store/
-│   │   ├── casefs/           #   JSON/JSONL case-file persistence (.cortex/cases/<id>/ by default)
+│   │   ├── casefs/           #   JSON/JSONL case-file persistence ($XDG_STATE_HOME/cortex/sessions/<repo>/<id>/)
 │   │   └── redact/           #   secret-shape redaction (last-line filter before model output)
-│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (11 tools)
-│   ├── tui/studio.go         # Charm v2 bubbletea studio (read-only case browser)
-│   ├── config/               # path resolution + cortex.yaml loader (budget/redact/cases_dir) + CORTEX_* env
+│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (15 tools)
+│   ├── tui/board.go          # Charm v2 bubbletea studio — live cross-workspace board + loop stepper
+│   ├── config/               # XDG path resolution (paths.go) + cortex.yaml loader (budget/redact/cases_dir) + CORTEX_* env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_)
 │   ├── eval/scenarios.go     # SPEC §18.3 evaluation harness (8 benchmark scenarios + scoring)
 │   ├── forge/forge.go        # PR review action (ModeReview: PR fetch + APPROVE/REQUEST CHANGES verdict)
@@ -148,15 +150,20 @@ task install         # go install ./cmd/cortex
   (project/key **availability**, capability) and **never** emits secret values (SPEC §12.7).
 
 ### Storage (SPEC §8, §24 #1)
-- Case files are JSON/JSONL under `<workspace>/.cortex/cases/<taskID>/` by default — files, not a
-  DB, in v0.1. Fully overridable via `cases_dir` / `CORTEX_CASES_DIR` (absolute paths allowed so
-  the workspace can stay free of Cortex state). Append-oriented ledgers (`evidence.jsonl`,
-  `commands.jsonl`) plus snapshot documents (`case.json`, `plan.json`, `hypotheses.json`,
-  `verification.json`, `summary.md`).
+- Case files are JSON/JSONL — files, not a DB, in v0.1 — under a **central, XDG-organized** root
+  by default: `$XDG_STATE_HOME/cortex/sessions/<repo-slug>/<taskID>/` (path resolution in
+  `internal/config/paths.go`, mirroring codemap). This keeps every session across every repo
+  visible/auditable in one place and the workspace tree clean. Append-oriented ledgers
+  (`evidence.jsonl`, `commands.jsonl`, `phases.jsonl`) plus snapshot documents (`case.json`, `plan.json`,
+  `hypotheses.json`, `verification.json`, `summary.md`).
+- Config/cache follow XDG too (`$XDG_CONFIG_HOME/cortex`, `$XDG_CACHE_HOME/cortex`); `$CORTEX_HOME`
+  or a legacy `~/.cortex` collapses config+state+cache into one dir. Repo-local storage is opt-in
+  via `cases_dir` / `CORTEX_CASES_DIR`, and a pre-existing `<workspace>/.cortex/cases` is honored
+  so upgrades never strand active work.
 - `writeJSON` is atomic (temp + rename) so a crash mid-write can't corrupt `case.json`.
-- When cases are workspace-local, the kernel writes `<workspace>/.cortex/.gitignore` (`*`) so
-  Cortex's own state never registers as a workspace change (otherwise it pollutes scope-drift
-  and diff review). Outside-workspace cases dirs get no in-repo ignore file.
+- Only when cases are workspace-local (opt-in) does the kernel write `<workspace>/.cortex/.gitignore`
+  (`*`) so Cortex's own state never registers as a workspace change. The central XDG default lives
+  outside every repo, so no in-repo ignore file is needed.
 
 ### Redaction (SPEC §16)
 - `store/redact` masks secret shapes (AWS/GitHub/Stripe/JWT/bearer/`KEY=secret`) before any
