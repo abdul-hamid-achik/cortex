@@ -44,6 +44,22 @@ func completeArchivedTaskIDs(_ *cobra.Command, args []string, _ string) ([]strin
 	return out, cobra.ShellCompDirectiveNoFileComp
 }
 
+// completeAllTaskIDs suggests IDs from both the active tree and the archive (for `rm`).
+func completeAllTaskIDs(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+	if len(args) != 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	out := []string{}
+	for _, lister := range []func(kernel.SessionFilter) ([]kernel.SessionSummary, error){kernel.AllSessions, kernel.ArchivedSessions} {
+		if ss, err := lister(kernel.SessionFilter{}); err == nil {
+			for _, s := range ss {
+				out = append(out, s.ID+"\t"+s.Goal)
+			}
+		}
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp
+}
+
 // completeResolveArgs completes `resolve <taskId> <hypId>`: task IDs for the
 // first arg, then that task's hypothesis IDs (with the statement as description)
 // for the second — the hypId is otherwise an unmemorable `hyp_…` string.
@@ -103,4 +119,5 @@ func init() {
 	resolveCmd.ValidArgsFunction = completeResolveArgs
 	readEvidenceCmd.ValidArgsFunction = completeReadEvidenceArgs
 	unarchiveCmd.ValidArgsFunction = completeArchivedTaskIDs
+	rmCmd.ValidArgsFunction = completeAllTaskIDs
 }

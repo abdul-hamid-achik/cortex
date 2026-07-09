@@ -6,6 +6,12 @@ All notable changes to Cortex are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`cortex rm <taskId>` / `delete`** — the first (and only) destructive operation in Cortex:
+  permanently deletes a session's directory and everything under it. Guarded: refuses in-flight
+  sessions (terminal only — complete/abandoned/blocked), is a **dry run by default** (prints what
+  would be deleted; requires explicit `--force` to actually remove anything), and works on a
+  session in either the active tree or the archive. Irreversible — unlike `cortex archive`, which
+  is a reversible move. Supersedes the 0.5.0 note that hard-delete was "deliberately not offered."
 - **`cortex migrate`** moves a legacy `~/.cortex` (or `$CORTEX_HOME`-collapsed) tree onto the
   split XDG layout: `config.yaml` → `$XDG_CONFIG_HOME/cortex`, `sessions/`/`archive/`/anything
   else → `$XDG_STATE_HOME/cortex`, `cache/` → `$XDG_CACHE_HOME/cortex`. **Dry run by default** —

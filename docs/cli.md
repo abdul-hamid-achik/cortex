@@ -163,6 +163,25 @@ focused on live work as history accumulates. The data is preserved and reversibl
 **nothing is deleted**, and in-flight sessions are refused. View the archive with
 `cortex sessions --archived`.
 
+### `cortex rm <taskId>` (`delete`)
+
+**Destructive, irreversible.** Permanently deletes a session's directory and everything under it —
+this is the only destructive operation in Cortex. Prefer `cortex archive` if you just want a
+finished session out of the way; archiving is reversible, `rm` is not.
+
+Guards:
+
+- **Terminal sessions only.** In-flight (non-complete/abandoned/blocked) sessions are refused —
+  complete, abort, or archive one first.
+- **Dry run by default.** Without `--force`, `rm` only prints the directory that would be deleted;
+  nothing is removed. Pass `--force` to actually delete.
+- Works on a session in **either** the active tree or the archive.
+
+```bash
+cortex rm <taskId>            # dry run — shows what would be deleted
+cortex rm <taskId> --force    # permanently deletes it (no undo)
+```
+
 ### `cortex show <taskId>` (`view`)
 
 A full one-screen view of a single session: phase badge, loop stepper, hypotheses, verification

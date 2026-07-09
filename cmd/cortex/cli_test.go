@@ -468,3 +468,34 @@ func TestCLISessions(t *testing.T) {
 		t.Errorf("a fresh session should not be flagged stale, got:\n%s", sout)
 	}
 }
+
+func TestCLIRm(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+	if _, err := runCLI(t, "-C", ws, "abort", id, "not needed"); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+
+	// Without --force, rm is a dry run — nothing is removed.
+	out, err := runCLI(t, "rm", id)
+	if err != nil {
+		t.Fatalf("rm (dry run): %v (%s)", err, out)
+	}
+	if !strings.Contains(out, "would delete") {
+		t.Errorf("dry run should say 'would delete', got:\n%s", out)
+	}
+
+	// With --force, it's actually deleted.
+	out, err = runCLI(t, "rm", id, "--force")
+	if err != nil {
+		t.Fatalf("rm --force: %v (%s)", err, out)
+	}
+	if !strings.Contains(out, "permanently deleted") {
+		t.Errorf("forced delete should confirm removal, got:\n%s", out)
+	}
+
+	// A second rm --force reports the session is gone.
+	if _, err := runCLI(t, "rm", id, "--force"); err == nil {
+		t.Error("expected an error deleting an already-removed session")
+	}
+}

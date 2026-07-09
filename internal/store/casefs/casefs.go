@@ -47,6 +47,13 @@ func (s *Store) Root() string { return s.root }
 // (task_<base32>) pass through unchanged.
 func (s *Store) dir(taskID string) string { return filepath.Join(s.root, safeName(taskID)) }
 
+// TaskDir returns the on-disk directory for a task (sanitized).
+func (s *Store) TaskDir(taskID string) string { return s.dir(taskID) }
+
+// RemoveTask permanently deletes a task's directory and everything under it.
+// Destructive and irreversible; the caller must gate it behind explicit intent.
+func (s *Store) RemoveTask(taskID string) error { return os.RemoveAll(s.dir(taskID)) }
+
 // Create writes a new case file and its directory skeleton.
 func (s *Store) Create(c *domain.CaseFile) error {
 	if c.ID == "" {
