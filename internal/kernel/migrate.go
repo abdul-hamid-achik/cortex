@@ -58,6 +58,7 @@ func Migrate(apply bool) (MigrateReport, error) {
 	}
 
 	rep := MigrateReport{Base: base}
+	conflicts := 0
 	for _, e := range entries {
 		name := e.Name()
 		from := filepath.Join(base, name)
@@ -77,8 +78,21 @@ func Migrate(apply bool) (MigrateReport, error) {
 		mv := MigrateMove{From: from, To: destPath}
 		if _, statErr := os.Stat(destPath); statErr == nil {
 			mv.Skipped = "destination exists"
+			conflicts++
 		}
 		rep.Moves = append(rep.Moves, mv)
+	}
+
+	// All-or-nothing. If ANY destination already exists, block the WHOLE
+	// migration rather than move only the non-conflicting entries. Moving a
+	// subset would leave the legacy ~/.cortex behind (non-empty), and because
+	// path resolution keys off that directory's mere existence
+	// (config.legacyBase), the entries we DID move would become invisible —
+	// stranded under XDG while Cortex keeps reading the emptied legacy base.
+	// Resolve the listed conflicts (move/remove them), then re-run.
+	if conflicts > 0 {
+		rep.Note = fmt.Sprintf("%d destination(s) already exist — migration blocked so it can't leave a half-migrated, invisible state. Move or remove the conflicting destination(s) listed above, then re-run.", conflicts)
+		return rep, nil
 	}
 
 	if !apply {
@@ -87,9 +101,6 @@ func Migrate(apply bool) (MigrateReport, error) {
 
 	for i := range rep.Moves {
 		mv := &rep.Moves[i]
-		if mv.Skipped != "" {
-			continue
-		}
 		if err := moveTree(mv.From, mv.To); err != nil {
 			return rep, fmt.Errorf("moving %s to %s: %w", mv.From, mv.To, err)
 		}
@@ -116,7 +127,18 @@ func moveTree(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
 	}
-	if err := copyTree(src, dst); err != nil {
+	// Cross-device (or any other rename failure): copy to a temp sibling, then
+	// rename it into place — so a failed copy never leaves a PARTIAL dst that a
+	// re-run would mistake for an already-migrated destination. dst therefore
+	// only ever appears fully-present or absent.
+	tmp := dst + ".cortex-migrating"
+	_ = os.RemoveAll(tmp)
+	if err := copyTree(src, tmp); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.RemoveAll(tmp)
 		return err
 	}
 	return os.RemoveAll(src)

@@ -233,10 +233,12 @@ Keys: `↑/↓` navigate · `g/G` jump · `a` active-only · `r` refresh · `q` 
 Moves a legacy `~/.cortex` (or `$CORTEX_HOME`-collapsed) tree onto the split XDG layout —
 `config.yaml` → `$XDG_CONFIG_HOME/cortex`, `sessions/`/`archive/`/anything else →
 `$XDG_STATE_HOME/cortex`, `cache/` → `$XDG_CACHE_HOME/cortex`. **Dry run by default** — it reports
-every planned move without touching disk; pass `--apply` to actually perform them. A destination
-that already exists is left alone and reported as skipped, never overwritten. If `~/.cortex` ends
-up empty afterward, it's removed. With `$CORTEX_HOME` still set, or with no legacy `~/.cortex`
-present, it's a no-op that explains why (`--json` reports this as `note`, `applied: false`).
+every planned move without touching disk; pass `--apply` to actually perform them. It is
+**all-or-nothing**: if any XDG destination already exists, the whole migration is blocked (nothing
+moves) so it can't leave a half-migrated state where moved sessions become invisible under the
+surviving `~/.cortex` — resolve the conflict and re-run. If `~/.cortex` ends up empty afterward,
+it's removed. With `$CORTEX_HOME` still set, or with no legacy `~/.cortex` present, it's a no-op
+that explains why (`--json` reports this as `note`, `applied: false`).
 
 ```bash
 cortex migrate            # dry run — see what would move

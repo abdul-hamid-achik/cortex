@@ -155,38 +155,57 @@ func TestMigrateDryRunDoesNotTouchDisk(t *testing.T) {
 	mustExist(t, filepath.Join(legacyBase, "archive", "repo", "task_y", "case.json"))
 }
 
-// TestMigrateSkipsExistingDestination ensures migrate never clobbers a file
-// that's already at the XDG destination — it should be reported as skipped,
-// left alone on both sides, and NOT counted toward an empty (removable)
-// legacy base.
-func TestMigrateSkipsExistingDestination(t *testing.T) {
+// TestMigrateBlocksOnConflict is the fix for the review finding: if ANY XDG
+// destination already exists, migrate is all-or-nothing — it moves NOTHING
+// (not even the non-conflicting entries), so it can never leave a half-migrated
+// state where moved sessions are stranded/invisible under the surviving legacy
+// base. It must not clobber the existing destination either.
+func TestMigrateBlocksOnConflict(t *testing.T) {
 	clearMigrateEnv(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	xdgConfig := t.TempDir()
+	xdgState := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", xdgState)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	legacyBase := filepath.Join(home, ".cortex")
 	legacyConfig := filepath.Join(legacyBase, "config.yaml")
+	legacyCase := filepath.Join(legacyBase, "sessions", "repo", "task_x", "case.json")
 	writeDummy(t, legacyConfig, "legacy: true\n")
+	writeDummy(t, legacyCase, `{"id":"task_x"}`) // NOT a conflict on its own
 
 	existingConfig := filepath.Join(xdgConfig, "cortex", "config.yaml")
-	writeDummy(t, existingConfig, "already: here\n")
+	writeDummy(t, existingConfig, "already: here\n") // the conflict
 
 	rep, err := Migrate(true)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if len(rep.Moves) != 1 || rep.Moves[0].Skipped == "" {
-		t.Fatalf("expected the single move to be skipped, got %+v", rep.Moves)
+	// Blocked: nothing moved, a Note explains why, and the conflict is flagged.
+	if rep.Applied {
+		t.Error("a conflict must block the migration (Applied should be false)")
+	}
+	if rep.Note == "" {
+		t.Error("expected a Note explaining the migration was blocked by a conflict")
+	}
+	sawConflict := false
+	for _, mv := range rep.Moves {
+		if mv.Skipped != "" {
+			sawConflict = true
+		}
+	}
+	if !sawConflict {
+		t.Errorf("expected the config.yaml conflict to be flagged, got %+v", rep.Moves)
 	}
 
-	// Neither side was touched: legacy file remains, existing destination
-	// keeps its own (different) content.
+	// Crucially: the NON-conflicting session was NOT moved (no stranding).
 	mustExist(t, legacyConfig)
+	mustExist(t, legacyCase)
+	mustNotExist(t, filepath.Join(xdgState, "cortex", "sessions"))
+	// The existing destination keeps its own content, and the base survives.
 	got, err := os.ReadFile(existingConfig)
 	if err != nil {
 		t.Fatalf("read existing destination: %v", err)
@@ -194,9 +213,8 @@ func TestMigrateSkipsExistingDestination(t *testing.T) {
 	if string(got) != "already: here\n" {
 		t.Errorf("existing destination was overwritten: %q", got)
 	}
-	// Base still has an entry, so it must not be removed.
 	if rep.RemovedBase {
-		t.Error("RemovedBase should be false when a skipped entry remains")
+		t.Error("RemovedBase should be false when the migration is blocked")
 	}
 	mustExist(t, legacyBase)
 }
