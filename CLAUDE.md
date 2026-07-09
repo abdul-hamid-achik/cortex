@@ -9,12 +9,12 @@ A local-first **agent kernel**: a small runtime between an LLM and the specialis
 (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault). It gives a task a durable **case file**
 and forces a reasoning loop — orient → investigate → plan → change → verify → preserve — through
 a **phase machine** with hard invariants. Two surfaces over one kernel: a CLI (`--json` for
-agents) and an MCP server (`cortex serve`, 8 tools).
+agents) and an MCP server (`cortex serve`, 11 tools).
 
 Surfaces / key files:
 - CLI: `cmd/cortex/` — cobra, split per-command; each `RunE` is thin → `kernelFor()` → `internal/kernel`.
 - Shared service layer (everything routes here): `internal/kernel/` (orient/investigate/plan/verify/persist/status/scope).
-- MCP server (thin, 8 tools): `internal/mcp/server.go`.
+- MCP server (thin, 11 tools): `internal/mcp/server.go`.
 - Domain (no internal deps): `internal/domain/` (case + phase machine, evidence, hypothesis, plan, verification, policy, envelope).
 - Adapters (flat, one file per tool): `internal/adapters/`.
 - Storage: `internal/store/casefs` (JSON/JSONL) + `internal/store/redact` (secret masking).
@@ -38,9 +38,10 @@ Surfaces / key files:
 - **Persist the case before stamping orientation evidence.** `stampEvidence`'s append creates the
   task directory via `MkdirAll`; if `store.Create` runs *after* that, it sees the dir and refuses
   ("case already exists"). `StartTask` creates the skeleton first, then orients. (We hit this.)
-- **Cortex must git-ignore its own state.** The kernel writes `<workspace>/.agent/.gitignore`
-  (`*`) on init — otherwise every case-file write shows up as a workspace change and floods
-  scope-drift + `codemap review`. (We hit this too.)
+- **Cortex must git-ignore its own state.** Default cases live under `<workspace>/.cortex/cases/`;
+  the kernel writes `<workspace>/.cortex/.gitignore` (`*`) on init when cases are workspace-local
+  — otherwise every case-file write floods scope-drift + `codemap review`. Point
+  `cases_dir` / `CORTEX_CASES_DIR` outside the repo to leave the tree completely clean.
 - **Adapter flag dialects are NOT uniform.** vecgrep = `-f json` / `-n N`; glyph = `--format
   json` (must precede sub-flags); everyone else = `--json`. `cairn mcp` / `glyph mcp` are bare;
   `fcheap mcp serve` / `mcphub mcp serve` are not. codemap `changed_files` is an array of

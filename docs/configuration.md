@@ -39,9 +39,33 @@ budget:
 redact_literals:
   - MY_INTERNAL_TOKEN_NAME
 
-# Override where case files are written (relative paths resolve against the workspace).
-cases_dir: .agent/cases
+# Where case files live (default: <workspace>/.cortex/cases).
+# Relative paths resolve against the workspace. Use an absolute path (or ~/) to
+# keep the repo free of any Cortex state:
+#   cases_dir: ~/.cortex/cases/my-project
+cases_dir: .cortex/cases
 ```
+
+## Case file location
+
+| Setting | Location |
+|---|---|
+| **Default** | `<workspace>/.cortex/cases/<taskId>/` (gitignored via `.cortex/.gitignore`) |
+| `cases_dir` in `cortex.yaml` | relative → under workspace; absolute/`~/…` → anywhere |
+| `CORTEX_CASES_DIR` | same rules; wins over the file |
+
+Examples that leave the working tree clean:
+
+```yaml
+# global home, per-project subdir
+cases_dir: ~/.cortex/cases/my-app
+```
+
+```bash
+export CORTEX_CASES_DIR="$HOME/.cortex/cases/my-app"
+```
+
+When cases live **outside** the workspace, Cortex does not write an in-repo `.gitignore`.
 
 ## Environment variables
 
@@ -55,7 +79,7 @@ Env vars have the highest precedence, handy for CI or a one-off run:
 | `CORTEX_MAX_EVIDENCE_ITEMS` | `budget.max_evidence_items_returned` |
 | `CORTEX_MAX_CANDIDATE_FILES` | `budget.max_candidate_files_returned` |
 | `CORTEX_REDACT_LITERALS` | comma-separated redact literals |
-| `CORTEX_CASES_DIR` | the case-file directory |
-| `CORTEX_HOME` | global state directory (default `~/.cortex`) |
+| `CORTEX_CASES_DIR` | the case-file directory (default `<workspace>/.cortex/cases`) |
+| `CORTEX_HOME` | global config directory (default `~/.cortex`) |
 
 A malformed config file is ignored (Cortex falls back to defaults) rather than failing to start.

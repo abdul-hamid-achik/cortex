@@ -112,9 +112,9 @@ Cortex speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC)
 cortex serve
 ```
 
-It exposes ten tools: `cortex_start_task`, `cortex_investigate`, `cortex_plan`,
-`cortex_verify`, `cortex_remember`, `cortex_status`, `cortex_resolve`, `cortex_abort_task`,
-`cortex_read_evidence`, `cortex_read_artifact`.
+It exposes eleven tools: `cortex_start_task`, `cortex_investigate`, `cortex_plan`,
+`cortex_verify`, `cortex_remember`, `cortex_status`, `cortex_list_tasks`, `cortex_resolve`,
+`cortex_abort_task`, `cortex_read_evidence`, `cortex_read_artifact`.
 
 Register it with [mcphub](https://github.com/abdul-hamid-achik/mcphub):
 
@@ -128,10 +128,11 @@ keeps the raw specialist tools available as an expert escape hatch.
 
 ## The case file
 
-Each non-trivial task gets a durable, human-readable case file under `.agent/cases/<taskId>/`:
+Each non-trivial task gets a durable, human-readable case file under `.cortex/cases/<taskId>/`
+by default (override with `cases_dir` / `CORTEX_CASES_DIR` to keep the repo clean):
 
 ```
-.agent/cases/task_06FK…/
+.cortex/cases/task_06FK…/
   case.json          # goal, workspace identity, phase, change boundary, required verification
   evidence.jsonl     # append-only ledger of claims with provenance and confidence
   hypotheses.json    # falsifiable explanations + disproof paths
@@ -141,8 +142,8 @@ Each non-trivial task gets a durable, human-readable case file under `.agent/cas
   summary.md         # the readable outcome
 ```
 
-It is the kernel's working memory, not a transcript. Cortex writes `.agent/.gitignore` so its own
-state never registers as a workspace change.
+It is the kernel's working memory, not a transcript. Workspace-local state is gitignored
+(`.cortex/.gitignore`); you can also store cases under `~/.cortex/cases/…` so nothing lands in the repo.
 
 ## The ecosystem it composes
 

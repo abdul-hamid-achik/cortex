@@ -89,7 +89,8 @@ cortex remember task_06FK… "returnTo was dropped; fixed and browser-verified" 
 |---|---|
 | `--importance` | `0..1` importance for durable memory (default `0.5`) |
 | `--tag` (repeatable) | tags for recall |
-| `--unverified` | record explicitly that verification was not possible (required if no receipt exists) |
+| `--unverified` | record explicitly that verification was not possible (required if no definitive receipt exists) |
+| `--accept-failed` | complete despite only *failed* receipts (no pass) — records a failed outcome, not a green one |
 
 ### `cortex status <taskId>`
 

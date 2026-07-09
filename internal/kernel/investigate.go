@@ -52,12 +52,20 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		surfaces = c.Surfaces
 	}
 	route := domain.RouteFor(in.Question, surfaces)
-	candLimit := k.cfg.Budget.MaxCandidateFilesReturned
+	depth := normalizeDepth(in.Depth)
+	candLimit := depthCandidateLimit(depth, k.cfg.Budget.MaxCandidateFilesReturned)
 
 	var facts []domain.Evidence
 	var warnings []string
 	degraded := false
 	budget := k.cfg.Budget.MaxEvidenceItemsReturned
+	if depth == "deep" {
+		// Deep may return more hits per tool; still bound total evidence by budget.
+		budget = k.cfg.Budget.MaxEvidenceItemsReturned
+		if budget < candLimit {
+			budget = candLimit
+		}
+	}
 
 	// Count this round against the investigation budget (SPEC §7.3). Exceeding it
 	// is allowed but recorded — the point is to discourage frantic search, not to
@@ -73,13 +81,18 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// explicit bug-video bundle runs a vidtrace investigation up front, linking
 	// the visible failure to code before the usual discovery→structure route.
 	steps := routeSteps(route, in.Question, surfaces, candLimit)
+	if depth == "quick" {
+		// Quick: primary route tool only (no follow-up), still after memory recall.
+		steps = firstRouteStep(steps, route)
+	}
 	// Recall prior durable conclusions for THIS repo first (SPEC §15.1 semantic
 	// recall): cortex writes a memory on every completed task, so a related past
 	// case ("returnTo was dropped in HandleCallback…") becomes low-confidence
-	// orientation instead of being re-derived. Scoped by the cortex+repo tags the
-	// persist phase writes; recall is global, so it needs no workspace index.
+	// orientation instead of being re-derived. Scoped by the cortex+repo:<name>
+	// tags the persist phase writes (never a bare repo name — "cortex" the
+	// product must not match every project also named cortex).
 	steps = append([]step{{tool: "vecgrep", op: "memory_recall", input: map[string]any{
-		"query": in.Question, "tags": []string{"cortex", c.Workspace.Repository}, "limit": candLimit,
+		"query": in.Question, "tags": memoryTags(c), "limit": candLimit,
 	}}}, steps...)
 	if in.Video != "" {
 		steps = append([]step{{tool: "vidtrace", op: "investigate", input: map[string]any{
@@ -173,6 +186,64 @@ func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []st
 	}
 	wg.Wait()
 	return results
+}
+
+// normalizeDepth maps free-form depth strings to quick | standard | deep.
+func normalizeDepth(d string) string {
+	switch strings.ToLower(strings.TrimSpace(d)) {
+	case "quick", "q":
+		return "quick"
+	case "deep", "full":
+		return "deep"
+	default:
+		return "standard"
+	}
+}
+
+// depthCandidateLimit scales the per-tool candidate budget by depth.
+func depthCandidateLimit(depth string, base int) int {
+	if base < 1 {
+		base = 8
+	}
+	switch depth {
+	case "quick":
+		if base > 4 {
+			return 4
+		}
+		return base
+	case "deep":
+		n := base * 2
+		if n < 12 {
+			n = 12
+		}
+		if n > 24 {
+			return 24
+		}
+		return n
+	default:
+		return base
+	}
+}
+
+// firstRouteStep keeps only the primary route tool's step(s) for a quick
+// investigation (drops the structural follow-up when first ≠ follow-up).
+func firstRouteStep(steps []step, r domain.Route) []step {
+	if len(steps) == 0 {
+		return steps
+	}
+	if r.FollowUp == "" || r.FollowUp == r.First {
+		return steps
+	}
+	var out []step
+	for _, s := range steps {
+		if s.tool == r.First {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return steps[:1]
+	}
+	return out
 }
 
 // routeSteps expands a Route into concrete adapter operations for the question.

@@ -24,7 +24,7 @@ var statusCmd = &cobra.Command{
 			return err
 		}
 		if jsonMode(cmd) {
-			return emitJSON(rep)
+			return emitStatusJSON(rep)
 		}
 		renderStatus(rep)
 		if !rep.OK {

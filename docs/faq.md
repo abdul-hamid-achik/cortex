@@ -70,8 +70,9 @@ browser behavior needs a browser verifier (cairntrace), a terminal claim needs a
 
 This is the heart of Cortex. A claim you make at `verify` gets a **receipt**. If the verifier that
 could prove it never ran (tool missing, no spec provided), the receipt is `not_run` — **never**
-`passed`. Cortex will not round an unchecked claim up to success. A task can't even complete without
-at least one real receipt, unless you *explicitly* mark the whole outcome `--unverified`.
+`passed`. Cortex will not round an unchecked claim up to success. A task can't complete without at
+least one **passing** receipt, unless you *explicitly* mark the outcome `--unverified` (no verifier
+could run) or `--accept-failed` (only failed receipts — the claim did not hold).
 
 ### What is "scope drift"?
 
@@ -89,10 +90,15 @@ with no boundary is rejected for the same reason: undisciplined edits.
 
 ### Why won't `remember` complete my task?
 
-Completion requires a verification receipt. Either provide a verifier and re-run `verify` so a real
-receipt exists, or — if verification genuinely couldn't run — acknowledge that honestly with
-`--unverified`. That flag isn't a shortcut; it permanently labels the outcome as *not* verified so
-it can never masquerade as verified later.
+Completion requires a **passing** verification receipt. Common blockers:
+
+- only `not_run` / `blocked` / `inconclusive` receipts → re-run `verify` with an available, indexed
+  verifier, or use `--unverified` if no verifier could run
+- only `failed` receipts → fix the change and re-verify, or use `--accept-failed` to record the
+  failed outcome explicitly (it will not be labeled as verified)
+
+`--unverified` / `--accept-failed` are not shortcuts; they permanently label the outcome so it can
+never masquerade as a clean pass later.
 
 ### My high-risk change threw an extra warning at verify. Bug?
 
@@ -122,10 +128,12 @@ Navigate with arrow/`j`-`k` keys, quit with `q`.
 
 ### Where does Cortex store state?
 
-Per-workspace, on disk, append-only, under `.agent/cases/<taskId>/` (case, evidence, hypotheses,
-plan, receipts, command audit trail, raw tool output, and a generated `summary.md`). Global config
-lives under `$CORTEX_HOME` (default `~/.cortex`). See [The case file](/case-file). Cortex also
-writes `.agent/.gitignore` so its working state doesn't accidentally get committed.
+Per-workspace by default, on disk, append-only, under `.cortex/cases/<taskId>/` (case, evidence,
+hypotheses, plan, receipts, command audit trail, raw tool output, and a generated `summary.md`).
+Override with `cases_dir` / `CORTEX_CASES_DIR` — including an absolute path under
+`~/.cortex/cases/…` if you want **zero** Cortex files in the repo. Global config lives under
+`$CORTEX_HOME` (default `~/.cortex`). See [The case file](/case-file). Workspace-local state is
+gitignored via `.cortex/.gitignore`.
 
 ### Does Cortex send my code anywhere?
 
@@ -214,7 +222,7 @@ machine output.
 ### How do I start over on a task?
 
 Tasks are append-only by design (that's the audit trail). To abandon one without deleting its
-evidence: `cortex abort <taskId>`. To wipe local state entirely, remove the workspace's `.agent/`
+evidence: `cortex abort <taskId>`. To wipe local state entirely, remove the workspace's `.cortex/`
 directory — but note you'll lose the reconstructable history of every task in it.
 
 ### Still stuck?

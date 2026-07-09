@@ -440,7 +440,7 @@ Cortex MAY exceed the budget only when the model or user explicitly requests dee
 ### 8.1 Case file layout
 
 ```text
-.agent/
+.cortex/
   cases/
     task_01J9Q5Y8B0M6D2/
       case.json
@@ -455,7 +455,9 @@ Cortex MAY exceed the budget only when the model or user explicitly requests dee
         annotations.json
 ```
 
-The default local location is repository-local for active work. Long-term archives may be copied or stashed through `fcheap`.
+The default local location is repository-local under `.cortex/cases` for active work (overridable
+via `cases_dir` / `CORTEX_CASES_DIR`, including paths outside the workspace). Long-term archives may
+be copied or stashed through `fcheap`.
 
 ### 8.2 Case file schema
 
@@ -1448,7 +1450,7 @@ Deliverables:
 - a repository-level `AGENTS.md` workflow contract;
 - `mcphub` gateway mode enabled for the intended agent harness;
 - lazy exposure enabled;
-- a manually maintained `.agent/cases/` layout;
+- a manually maintained `.cortex/cases/` layout;
 - one reference browser workflow and one terminal workflow.
 
 Acceptance criteria:

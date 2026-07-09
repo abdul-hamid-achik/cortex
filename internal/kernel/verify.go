@@ -385,7 +385,7 @@ func (k *Kernel) stashRunBundle(ctx context.Context, c *domain.CaseFile, res ada
 	if !ok {
 		return uri, nil
 	}
-	tags := []string{"cortex", c.Workspace.Repository, surface, "failed-run"}
+	tags := memoryTags(c, surface, "failed-run")
 	stashID, err := fc.Save(ctx, k.cfg.Workspace, uri, tags, res.Tool)
 	k.recordWrite(c.ID, "fcheap", "save", err)
 	if err != nil || stashID == "" {

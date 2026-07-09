@@ -78,9 +78,25 @@ func newTestKernel(t *testing.T, ws string, extra ...adapters.Adapter) *Kernel {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ensureStateIgnored(cfg.CasesDir)
+	ensureStateIgnored(cfg.Workspace, cfg.CasesDir)
 	all := append([]adapters.Adapter{adapters.NewGit()}, extra...)
 	return NewWith(cfg, store, adapters.NewRegistry(all...))
+}
+
+func TestEnsureStateIgnoredOnlyInsideWorkspace(t *testing.T) {
+	ws := testRepo(t)
+	// Default in-workspace path gets a .gitignore under .cortex/.
+	ensureStateIgnored(ws, filepath.Join(ws, ".cortex", "cases"))
+	gi := filepath.Join(ws, ".cortex", ".gitignore")
+	if _, err := os.Stat(gi); err != nil {
+		t.Fatalf("expected workspace-local .cortex/.gitignore, got %v", err)
+	}
+	// Outside the workspace: no stray ignore file next to an absolute cases dir.
+	outside := filepath.Join(t.TempDir(), "off-repo", "cases")
+	ensureStateIgnored(ws, outside)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(outside), ".gitignore")); err == nil {
+		t.Error("must not write .gitignore outside the workspace for external cases_dir")
+	}
 }
 
 func TestStartTask(t *testing.T) {
@@ -825,6 +841,54 @@ func TestCompletionRejectsInconclusiveOnly(t *testing.T) {
 	ok, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "done", VerificationNotPossible: true})
 	if !ok.OK {
 		t.Errorf("explicit unverified completion should succeed: %s", ok.Error)
+	}
+}
+
+func TestCompletionRejectsFailedOnly(t *testing.T) {
+	// A failed behavioral/structural verdict is real evidence that the claim did
+	// NOT hold — completing without accept_failed would green-light a failure.
+	ws := testRepo(t)
+	// glyphrun fake: authoritative failed run.
+	glyph := &fakeAdapter{name: "glyphrun", caps: []adapters.Capability{adapters.CapabilityTerminal},
+		result: adapters.Result{Tool: "glyphrun", Operation: "run", Status: adapters.StatusAuthoritative,
+			Verdict: adapters.VerdictFailed, Summary: "spec failed",
+			Facts: []adapters.Fact{{Kind: "terminal_run", Claim: "flow failed", Confidence: "high"}}}}
+	k := newTestKernel(t, ws, glyph)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Surfaces: []domain.Surface{domain.SurfaceTerminal}})
+	id := env.TaskID
+	_, _ = k.Plan(PlanInput{TaskID: id, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "glyph run"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}}, Uncertainty: "u"})
+	if err := os.WriteFile(filepath.Join(ws, "src", "callback.go"), []byte("package src\nfunc HandleCallback(){ _ = 9 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id, TerminalSpec: "specs/x.yml", Claims: []string{"cli works"}})
+	res, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "ship despite fail"})
+	if res.OK {
+		t.Error("completion with only failed receipts should be rejected without accept_failed")
+	}
+	ok, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "record the failure", AcceptFailed: true})
+	if !ok.OK {
+		t.Errorf("accept_failed should allow completion: %s", ok.Error)
+	}
+	if !hasWarning(ok.Warnings, "FAILED verification") {
+		t.Errorf("expected FAILED verification warning; warnings=%v", ok.Warnings)
+	}
+}
+
+func TestMemoryTagsAreRepoPrefixed(t *testing.T) {
+	c := &domain.CaseFile{Workspace: domain.Workspace{Repository: "cortex"}}
+	tags := memoryTags(c)
+	if len(tags) != 2 || tags[0] != "cortex" || tags[1] != "repo:cortex" {
+		t.Errorf("memoryTags = %v, want [cortex repo:cortex]", tags)
+	}
+	// Bare "cortex" must not be the only repo discriminator.
+	for _, t_ := range tags {
+		if t_ == "cortex" {
+			continue
+		}
+		if !strings.HasPrefix(t_, "repo:") {
+			t.Errorf("unexpected tag %q", t_)
+		}
 	}
 }
 

@@ -81,8 +81,8 @@ func NewEnv(t *testing.T, files map[string]string, extra ...adapters.Adapter) *E
 	}
 	// Cortex must git-ignore its own case-file state, or every write shows up as a
 	// workspace change and floods scope-drift (mirrors the kernel's init).
-	_ = os.MkdirAll(filepath.Join(dir, ".agent"), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, ".agent", ".gitignore"), []byte("*\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, ".cortex"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, ".cortex", ".gitignore"), []byte("*\n"), 0o644)
 	all := append([]adapters.Adapter{adapters.NewGit()}, extra...)
 	return &Env{t: t, dir: dir, k: kernel.NewWith(cfg, store, adapters.NewRegistry(all...)), ctx: context.Background(), tasks: map[string]bool{}}
 }

@@ -1,6 +1,7 @@
-// Package config resolves Cortex's paths and runtime policy. Case files live
-// repository-local under <workspace>/.agent/cases for active work (SPEC §8.1);
-// global state (registry defaults) lives under $CORTEX_HOME or ~/.cortex.
+// Package config resolves Cortex's paths and runtime policy. Case files default
+// to repository-local <workspace>/.cortex/cases for active work (SPEC §8.1),
+// fully overridable via cases_dir / CORTEX_CASES_DIR so a workspace can stay
+// free of any Cortex state. Global config lives under $CORTEX_HOME or ~/.cortex.
 package config
 
 import (
@@ -11,14 +12,22 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
 
-// AgentDir is the repository-local state directory name.
-const AgentDir = ".agent"
+// StateDir is the repository-local Cortex state directory name (default cases
+// root is StateDir/cases). Not ".agent" — that name is shared by many tools and
+// pollutes workspaces; Cortex brands its own dir and still git-ignores it.
+const StateDir = ".cortex"
+
+// AgentDir is a deprecated alias for StateDir kept for external importers.
+// Prefer StateDir.
+const AgentDir = StateDir
 
 // Config holds resolved runtime policy for a kernel instance.
 type Config struct {
 	// Workspace is the absolute path to the repository/working directory.
 	Workspace string
-	// CasesDir is where case files are written (<workspace>/.agent/cases).
+	// CasesDir is where case files are written (default <workspace>/.cortex/cases).
+	// Override with cases_dir in cortex.yaml or CORTEX_CASES_DIR (absolute paths
+	// are allowed — e.g. ~/.cortex/cases/myapp — so the workspace stays clean).
 	CasesDir string
 	// Budget bounds tool use per workflow (SPEC §7.3).
 	Budget domain.Budget
@@ -46,11 +55,17 @@ func For(workspace string) Config {
 	}
 	cfg := Config{
 		Workspace: ws,
-		CasesDir:  filepath.Join(ws, AgentDir, "cases"),
+		CasesDir:  DefaultCasesDir(ws),
 		Budget:    domain.DefaultBudget(),
 	}
 	load(&cfg)
 	return cfg
+}
+
+// DefaultCasesDir is the built-in case-file location for a workspace:
+// <workspace>/.cortex/cases. Prefer For(ws).CasesDir after overrides are applied.
+func DefaultCasesDir(workspace string) string {
+	return filepath.Join(workspace, StateDir, "cases")
 }
 
 // Home returns the global Cortex state directory ($CORTEX_HOME or ~/.cortex).

@@ -59,13 +59,23 @@ func paint(s lipgloss.Style, text string) string {
 }
 
 // emitEnvelope prints a result envelope as JSON (--json) or a styled view.
+// Both paths return a non-nil error when env.OK is false so agents that only
+// check the process exit code (and human shell scripts with set -e) observe
+// kernel rejections the same way — --json used to always exit 0.
 func emitEnvelope(cmd *cobra.Command, env domain.Envelope) error {
 	if jsonMode(cmd) {
-		return emitJSON(env)
+		if err := emitJSON(env); err != nil {
+			return err
+		}
+	} else {
+		renderEnvelope(os.Stdout, env)
 	}
-	renderEnvelope(os.Stdout, env)
 	if !env.OK {
-		return fail("%s", env.Error)
+		msg := env.Error
+		if msg == "" {
+			msg = env.Summary
+		}
+		return fail("%s", msg)
 	}
 	return nil
 }
@@ -76,6 +86,22 @@ func emitJSON(v any) error {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
+}
+
+// emitStatusJSON prints a status report and exits non-zero when the report is
+// an error envelope (e.g. unknown taskId), matching emitEnvelope.
+func emitStatusJSON(rep kernel.StatusReport) error {
+	if err := emitJSON(rep); err != nil {
+		return err
+	}
+	if !rep.OK {
+		msg := rep.Error
+		if msg == "" {
+			msg = rep.Summary
+		}
+		return fail("%s", msg)
+	}
+	return nil
 }
 
 func renderEnvelope(w *os.File, env domain.Envelope) {

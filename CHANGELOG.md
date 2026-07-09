@@ -5,6 +5,32 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — case files default to `.cortex/cases` (still fully configurable)
+- **Default case store** is now `<workspace>/.cortex/cases/` (was `.agent/cases/`). The generic
+  `.agent` name is shared by many tools; Cortex brands its own dir and still writes
+  `.cortex/.gitignore` (`*`) so git/status/scope-drift stay clean.
+- **`cases_dir` / `CORTEX_CASES_DIR` unchanged** — relative paths resolve against the workspace;
+  absolute or `~/…` paths store cases outside the repo entirely (no in-repo ignore file written).
+- `config.StateDir` (`.cortex`); `AgentDir` remains as a deprecated alias.
+
+### Fixed — completion gate, CLI exit codes, memory tags, lifecycle E2E
+- **Failed verification no longer completes by default** — a failed receipt means the claim did
+  not hold; `cortex remember` now requires a *passing* receipt, or an explicit
+  `--accept-failed` / `acceptFailed` (or `--unverified` / `verificationNotPossible`). Reviews that
+  REQUEST CHANGES set `AcceptFailed` so the case can still complete with an honest failed outcome.
+- **`--json` exits non-zero when `ok: false`** — agents that only check process exit codes now see
+  kernel rejections (plan/verify/remember/status). JSON is still printed first; the exit code
+  mirrors the envelope.
+- **Durable memory tags use `repo:<name>`** — never the bare repository string. A project named
+  `cortex` no longer collapses into the product tag and pollutes recall with every `tmp.*` test
+  workspace's memories. Investigate recall and fcheap failed-run tags share the same helper.
+- **`investigate --depth` is wired** — `quick` runs the primary route tool only (smaller candidate
+  budget); `deep` raises the candidate limit; `standard` is unchanged.
+- **`cortex_list_tasks` MCP tool** (11 tools total) — workspace task index for agents that only
+  speak MCP.
+- **`specs/lifecycle.yml`** updated for the tightened completion gate: asserts bare remember is
+  rejected when verification is only inconclusive, then completes with `--unverified`.
+
 ### Added — `cortex review`: evidence-backed branch & PR review
 - **`cortex review`** reviews a branch or pull request as a first-class Cortex task: it resolves the
   diff (`base…HEAD`), gathers structural + semantic context, runs the verifiers over the change

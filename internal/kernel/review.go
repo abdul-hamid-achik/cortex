@@ -99,7 +99,14 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 	// claiming it was "not possible" would be dishonest and would also skip the
 	// completion gate's failed-verification warning (review 2026-07-07).
 	notPossible := !hasDefinitiveVerification(receipts)
-	rem, _ := k.Remember(ctx, RememberInput{TaskID: id, Outcome: outcome, VerificationNotPossible: notPossible, Tags: []string{"review"}})
+	// A REQUEST CHANGES review rests on failed verdicts — accept those so the
+	// case can complete with an honest failed outcome (not "verification not
+	// possible"). Passes complete normally; empty/inconclusive uses notPossible.
+	acceptFailed := hasFailedVerification(receipts) && !hasPassingVerification(receipts)
+	rem, _ := k.Remember(ctx, RememberInput{
+		TaskID: id, Outcome: outcome, Tags: []string{"review"},
+		VerificationNotPossible: notPossible, AcceptFailed: acceptFailed,
+	})
 
 	env := rem
 	env.Summary = outcome

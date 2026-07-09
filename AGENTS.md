@@ -23,7 +23,7 @@ user-visible behavior. See `SPEC.md` for the full design.
 Three surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
 
 - **CLI** — human commands *and* `--json` machine output for agents (Cobra + Charm v2 lipgloss).
-- **MCP server** — `cortex serve` (stdio), ten `cortex_*` tools for agents.
+- **MCP server** — `cortex serve` (stdio), eleven `cortex_*` tools for agents.
 - **studio TUI** — `cortex studio` (Charm v2 bubbletea), a read-only case-file browser for humans.
 
 ## Directory Structure
@@ -63,9 +63,9 @@ cortex/
 │   │   ├── codemap.go vecgrep.go fcheap.go cairntrace.go glyphrun.go vidtrace.go tvault.go
 │   │   └── util.go           #   pluralize / decodeJSON / clip helpers
 │   ├── store/
-│   │   ├── casefs/           #   JSON/JSONL case-file persistence (.agent/cases/<id>/)
+│   │   ├── casefs/           #   JSON/JSONL case-file persistence (.cortex/cases/<id>/ by default)
 │   │   └── redact/           #   secret-shape redaction (last-line filter before model output)
-│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (10 tools)
+│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (11 tools)
 │   ├── tui/studio.go         # Charm v2 bubbletea studio (read-only case browser)
 │   ├── config/               # path resolution + cortex.yaml loader (budget/redact/cases_dir) + CORTEX_* env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_)
@@ -148,12 +148,15 @@ task install         # go install ./cmd/cortex
   (project/key **availability**, capability) and **never** emits secret values (SPEC §12.7).
 
 ### Storage (SPEC §8, §24 #1)
-- Case files are JSON/JSONL under `<workspace>/.agent/cases/<taskID>/` — files, not a DB, in
-  v0.1. Append-oriented ledgers (`evidence.jsonl`, `commands.jsonl`) plus snapshot documents
-  (`case.json`, `plan.json`, `hypotheses.json`, `verification.json`, `summary.md`).
+- Case files are JSON/JSONL under `<workspace>/.cortex/cases/<taskID>/` by default — files, not a
+  DB, in v0.1. Fully overridable via `cases_dir` / `CORTEX_CASES_DIR` (absolute paths allowed so
+  the workspace can stay free of Cortex state). Append-oriented ledgers (`evidence.jsonl`,
+  `commands.jsonl`) plus snapshot documents (`case.json`, `plan.json`, `hypotheses.json`,
+  `verification.json`, `summary.md`).
 - `writeJSON` is atomic (temp + rename) so a crash mid-write can't corrupt `case.json`.
-- The kernel writes `<workspace>/.agent/.gitignore` (`*`) so Cortex's own state never registers
-  as a workspace change (otherwise it pollutes scope-drift and diff review).
+- When cases are workspace-local, the kernel writes `<workspace>/.cortex/.gitignore` (`*`) so
+  Cortex's own state never registers as a workspace change (otherwise it pollutes scope-drift
+  and diff review). Outside-workspace cases dirs get no in-repo ignore file.
 
 ### Redaction (SPEC §16)
 - `store/redact` masks secret shapes (AWS/GitHub/Stripe/JWT/bearer/`KEY=secret`) before any

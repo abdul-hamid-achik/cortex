@@ -1,10 +1,11 @@
 # The case file
 
 Each non-trivial task gets a durable, human-readable **case file** — the kernel's working memory,
-not a transcript. It lives under `<workspace>/.agent/cases/<taskId>/`.
+not a transcript. By default it lives under `<workspace>/.cortex/cases/<taskId>/`
+(overridable via `cases_dir` / `CORTEX_CASES_DIR` — see [Configuration](/configuration)).
 
 ```
-.agent/cases/task_06FK…/
+.cortex/cases/task_06FK…/
   case.json          # goal, workspace identity, phase, boundary, required verification
   evidence.jsonl     # append-only ledger of claims (provenance + confidence)
   hypotheses.json    # falsifiable explanations + disproof paths
@@ -20,7 +21,8 @@ Compact facts stay in `evidence.jsonl`; each fact's `rawRef` points at the under
 in `raw/`, retrievable on demand with `cortex read-artifact` (or `cortex_read_artifact`) so the
 model-visible envelope stays small without losing detail.
 
-Cortex writes a `.agent/.gitignore` (`*`) so its own state never registers as a workspace change —
+When cases are workspace-local, Cortex writes a `.cortex/.gitignore` (`*`) so its own state never
+registers as a workspace change —
 otherwise it would pollute scope-drift detection and diff review.
 
 ## `case.json`

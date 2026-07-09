@@ -104,10 +104,9 @@ func TestReviewVerdict(t *testing.T) {
 }
 
 func TestHasDefinitiveVerification(t *testing.T) {
-	// The completion gate and Review's verification_not_possible flag both derive
-	// from this: ONLY a passed or failed receipt is a real verification. A failed
-	// verdict counts (a verifier ran and reported failure) — so a REQUEST CHANGES
-	// review must NOT be recorded as "verification not possible" (review 2026-07-07).
+	// hasDefinitiveVerification means a verifier *ran* (pass or fail) — used by
+	// Review for "verification not possible". Completion itself requires a pass
+	// (or accept_failed / unverified); failed-only does not complete bare.
 	cases := []struct {
 		name string
 		recs []domain.VerificationRecord
@@ -125,6 +124,15 @@ func TestHasDefinitiveVerification(t *testing.T) {
 		if got := hasDefinitiveVerification(tc.recs); got != tc.want {
 			t.Errorf("%s: hasDefinitiveVerification = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+	if !hasPassingVerification([]domain.VerificationRecord{{Status: domain.VerifyPassed}}) {
+		t.Error("passed should be hasPassing")
+	}
+	if hasPassingVerification([]domain.VerificationRecord{{Status: domain.VerifyFailed}}) {
+		t.Error("failed alone is not a pass")
+	}
+	if !hasFailedVerification([]domain.VerificationRecord{{Status: domain.VerifyFailed}}) {
+		t.Error("failed should be hasFailed")
 	}
 }
 

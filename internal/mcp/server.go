@@ -40,8 +40,9 @@ As evidence accumulates, use cortex_resolve to mark a hypothesis confirmed/chall
 history is kept; a rejected hypothesis records WHY, so contradicting evidence never silently
 overwrites a prior explanation.
 
-Also: cortex_abort_task (stop without deleting evidence) and cortex_read_evidence (full record
-by ID). Never request or expose secret values — Cortex checks capability only.`
+Also: cortex_list_tasks (workspace task index), cortex_abort_task (stop without deleting
+evidence), and cortex_read_evidence (full record by ID). Never request or expose secret
+values — Cortex checks capability only.`
 
 // Server wraps the go-sdk MCP server. Kernels are built per-call so one server
 // process can serve tasks in any workspace the tools name.
@@ -133,7 +134,12 @@ type rememberInput struct {
 	Importance              float64  `json:"importance,omitempty" jsonschema:"0..1 importance for durable memory (default 0.5)"`
 	Tags                    []string `json:"tags,omitempty" jsonschema:"tags for recall"`
 	VerificationNotPossible bool     `json:"verificationNotPossible,omitempty" jsonschema:"set true to record explicitly that no verifier could run"`
+	AcceptFailed            bool     `json:"acceptFailed,omitempty" jsonschema:"set true to complete with only failed verification receipts (no pass); otherwise failed-only tasks are rejected"`
 	Workspace               string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+}
+
+type listTasksInput struct {
+	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
 type statusInput struct {
@@ -188,12 +194,16 @@ func (s *Server) register() {
 	}, s.handleVerify)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_remember",
-		Description: "Persist a concise outcome to durable memory and complete the task. A task cannot complete without a verification receipt or an explicit verificationNotPossible acknowledgment.",
+		Description: "Persist a concise outcome to durable memory and complete the task. Requires a *passing* verification receipt, or verificationNotPossible / acceptFailed when no pass exists.",
 	}, s.handleRemember)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_status",
 		Description: "Report a task's phase, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health.",
 	}, s.handleStatus)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_list_tasks",
+		Description: "List all tasks in the workspace (newest first): id, goal, phase, repository, createdAt.",
+	}, s.handleListTasks)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_resolve",
 		Description: "Update a hypothesis's status as evidence accumulates (confirmed/challenged/rejected). History is retained and the resolution is appended to the evidence ledger — this is how contradicting evidence is handled without silently overwriting a prior explanation.",
@@ -277,8 +287,21 @@ func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	env, err := k.Remember(ctx, kernel.RememberInput{
 		TaskID: in.TaskID, Outcome: in.Outcome, Importance: in.Importance,
 		Tags: in.Tags, VerificationNotPossible: in.VerificationNotPossible,
+		AcceptFailed: in.AcceptFailed,
 	})
 	return result(env, err)
+}
+
+func (s *Server) handleListTasks(_ context.Context, _ *sdkmcp.CallToolRequest, in listTasksInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	tasks, err := k.ListTasks()
+	if err != nil {
+		return result(nil, err)
+	}
+	return result(tasks, nil)
 }
 
 func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in statusInput) (*sdkmcp.CallToolResult, any, error) {

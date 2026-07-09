@@ -230,7 +230,7 @@ cortex remember $TID \
   task task_06FKK4RXWKRVFWV0
 
 Next
-  → summary written to …/.agent/cases/task_06FKK4RXWKRVFWV0/summary.md
+  → summary written to …/.cortex/cases/task_06FKK4RXWKRVFWV0/summary.md
 ```
 
 `--unverified` is not a loophole — it's the honest label. It records, permanently, that this
@@ -243,7 +243,7 @@ On completion Cortex writes a human-readable `summary.md` and stores a durable m
 
 ## Look at what you built
 
-Everything the task did is on disk, append-only, under `.agent/cases/<taskId>/`:
+Everything the task did is on disk, append-only, under `.cortex/cases/<taskId>/`:
 
 ```
 case.json          the task: goal, mode, risk, phase, workspace, surfaces
@@ -308,7 +308,7 @@ You just ran the loop Cortex enforces on every task:
 It isn't a suggestion in a prompt — each arrow is a real gate. You can't plan without
 investigating, can't declare success without a receipt, and can't drift outside your boundary
 without it showing. The result is a task that is **auditable by construction**: anyone can open
-`.agent/cases/<taskId>/` and reconstruct exactly what was believed, what was checked, and what is
+`.cortex/cases/<taskId>/` and reconstruct exactly what was believed, what was checked, and what is
 still uncertain.
 
 ## Where to go next

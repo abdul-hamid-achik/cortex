@@ -89,15 +89,15 @@ func TestMCPToolsList(t *testing.T) {
 	}
 	for _, want := range []string{
 		"cortex_start_task", "cortex_investigate", "cortex_plan", "cortex_verify",
-		"cortex_remember", "cortex_status", "cortex_resolve", "cortex_abort_task",
-		"cortex_read_evidence", "cortex_read_artifact",
+		"cortex_remember", "cortex_status", "cortex_list_tasks", "cortex_resolve",
+		"cortex_abort_task", "cortex_read_evidence", "cortex_read_artifact",
 	} {
 		if !got[want] {
 			t.Errorf("missing MCP tool %q", want)
 		}
 	}
-	if len(res.Tools) != 10 {
-		t.Errorf("expected 10 tools, got %d", len(res.Tools))
+	if len(res.Tools) != 11 {
+		t.Errorf("expected 11 tools, got %d", len(res.Tools))
 	}
 }
 

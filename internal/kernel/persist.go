@@ -16,12 +16,19 @@ type RememberInput struct {
 	Importance              float64
 	Tags                    []string
 	VerificationNotPossible bool // explicit acknowledgment when no verifier could run
+	// AcceptFailed allows completion when the only definitive receipts are
+	// failures (no pass). Without it, a failed browser/terminal/code verdict
+	// blocks remember — "the verifier ran" is not the same as "the claim held"
+	// (review 2026-07-08). Reviews that REQUEST CHANGES set this so the task can
+	// complete with an honest failed outcome.
+	AcceptFailed bool
 }
 
 // Remember persists a concise, provenance-rich conclusion to durable memory and
 // completes the task (SPEC §15). It enforces the completion invariant: a task
-// cannot complete without a verification record OR an explicit statement that
-// verification was not possible (SPEC §6.3 #2, §25 #2/#4).
+// cannot complete without a *passing* verification record, an explicit
+// verification-not-possible acknowledgment, or an explicit accept-failed
+// acknowledgment when only failed verdicts exist (SPEC §6.3 #2, §25 #2/#4).
 func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelope, error) {
 	c, err := k.store.Load(in.TaskID)
 	if err != nil {
@@ -36,18 +43,19 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 
 	receipts, _ := k.store.Verifications(c.ID)
 	// The completion invariant (SPEC §6.3 #2) requires a REAL verification record
-	// — a verifier that actually ran and produced a DEFINITIVE verdict (passed or
-	// failed). Everything else proves nothing about the outcome: not_run (no
-	// verifier for the surface), blocked (the verifier's tool was unavailable),
-	// inconclusive (the verifier ran but couldn't confirm — e.g. an unindexed
-	// codemap review, or a diff codemap rated high-risk), and not_applicable. If
-	// any of those is the ONLY thing a task has, it must not complete "verified
-	// enough" (review 2026-07-07 tightened this: inconclusive used to count). A
-	// failed verdict still counts — a real verification ran; completion proceeds
-	// with a loud warning.
-	hasRealVerification := hasDefinitiveVerification(receipts)
+	// — a verifier that actually ran and produced a DEFINITIVE verdict. Everything
+	// else proves nothing: not_run, blocked, inconclusive, not_applicable.
+	// Among definitive verdicts, only *passed* is enough to complete without an
+	// explicit override. A *failed* verdict means the claim did not hold — the
+	// agent must fix and re-verify, or set accept_failed / verification_not_possible.
+	hasPass := hasPassingVerification(receipts)
+	hasFail := hasFailedVerification(receipts)
+	hasRealVerification := hasPass || hasFail
 	if !hasRealVerification && !in.VerificationNotPossible {
 		return errEnvelope(c.ID, "cannot complete: no definitive verification was performed (only not_run/blocked/inconclusive receipts — e.g. codemap is unindexed or rated the diff high-risk, or a verifier tool is unavailable). run cortex verify with an available, indexed verifier, or set verification_not_possible=true to record explicitly that verification could not be performed"), nil
+	}
+	if hasFail && !hasPass && !in.AcceptFailed && !in.VerificationNotPossible {
+		return errEnvelope(c.ID, "cannot complete: verification failed (no passing receipt). fix the change and re-run cortex verify, or set accept_failed=true to record the failed outcome explicitly, or verification_not_possible=true if no verifier could establish the claim"), nil
 	}
 	// SPEC §6.2 verifying→persisting also requires that each REQUIRED verifier has
 	// passed (or failure is explicitly recorded). A task can pass one verifier yet
@@ -61,7 +69,7 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 			missingRequired = append(missingRequired, req)
 		}
 	}
-	fullyVerified := hasRealVerification && len(missingRequired) == 0 && !in.VerificationNotPossible
+	fullyVerified := hasPass && len(missingRequired) == 0 && !in.VerificationNotPossible && !in.AcceptFailed
 
 	// verifying → persisting → complete. Advance the phase before rendering the
 	// summary so it reflects the final state, not the transient one.
@@ -102,13 +110,13 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	var warnings []string
 	// Durable semantic memory via vecgrep (best-effort; SPEC §15.1 semantic recall).
 	if v, ok := k.reg.Get("vecgrep").(*adapters.Vecgrep); ok {
-		tags := append([]string{"cortex", c.Workspace.Repository}, in.Tags...)
+		tags := memoryTags(c, in.Tags...)
 		// Redact the memory line at this write boundary too: it is the most durable,
 		// cross-project sink (vecgrep's global store), and its content is built from
 		// model-supplied goal/outcome text (SPEC §15.2 "do not remember secrets",
 		// §16.2). The confidence reflects ACTUAL verification, never a hardcoded high.
 		mem := k.red.String(memoryLine(c, in.Outcome, receipts, memoryConfidence(fullyVerified)))
-		err := v.Remember(ctx, k.cfg.Workspace, mem, dedupeStr(tags), clampImportance(in.Importance))
+		err := v.Remember(ctx, k.cfg.Workspace, mem, tags, clampImportance(in.Importance))
 		k.recordWrite(c.ID, "vecgrep", "remember", err)
 		if err != nil {
 			warnings = append(warnings, "durable memory not stored: "+err.Error())
@@ -124,9 +132,12 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		NextActions:  []string{"summary written to " + summaryPath(k, c.ID)},
 		RawAvailable: true,
 	}
-	if !hasRealVerification {
+	switch {
+	case !hasRealVerification:
 		env.Warnings = append(env.Warnings, "completed WITHOUT verification — the outcome is unverified (no verifier ran)")
-	} else if len(missingRequired) > 0 {
+	case hasFail && !hasPass:
+		env.Warnings = append(env.Warnings, "completed with FAILED verification — the outcome records a failed verifier run (accept_failed)")
+	case len(missingRequired) > 0:
 		env.Warnings = append(env.Warnings, fmt.Sprintf("completed with INCOMPLETE verification — required verifier(s) not passed: %s. the outcome is only partially verified", strings.Join(missingRequired, ", ")))
 	}
 	// A task that completes with hypotheses still 'active' leaves its hypothesis
@@ -142,17 +153,44 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 }
 
 // hasDefinitiveVerification reports whether any receipt carries a definitive
-// verdict (passed or failed) — the only receipts that count as a REAL
-// verification for the completion gate (SPEC §6.3 #2). not_run, blocked,
-// inconclusive, and not_applicable prove nothing about the outcome, so a task
-// holding only those has not actually been verified.
+// verdict (passed or failed) — a verifier actually ran. Used by Review to decide
+// whether "verification was not possible". Completion itself requires a *pass*
+// (or an explicit override); see hasPassingVerification.
 func hasDefinitiveVerification(receipts []domain.VerificationRecord) bool {
+	return hasPassingVerification(receipts) || hasFailedVerification(receipts)
+}
+
+// hasPassingVerification reports whether any receipt is an affirmative pass.
+func hasPassingVerification(receipts []domain.VerificationRecord) bool {
 	for _, r := range receipts {
-		if r.Status == domain.VerifyPassed || r.Status == domain.VerifyFailed {
+		if r.Status == domain.VerifyPassed {
 			return true
 		}
 	}
 	return false
+}
+
+// hasFailedVerification reports whether any receipt is an explicit fail.
+func hasFailedVerification(receipts []domain.VerificationRecord) bool {
+	for _, r := range receipts {
+		if r.Status == domain.VerifyFailed {
+			return true
+		}
+	}
+	return false
+}
+
+// memoryTags builds the durable-memory tag set for a case. The repo tag is
+// always "repo:<name>" (never the bare repository string) so a project named
+// "cortex" does not collapse into the product tag and pollute cross-repo recall
+// with every tmp.* test workspace's memories.
+func memoryTags(c *domain.CaseFile, extra ...string) []string {
+	repo := c.Workspace.Repository
+	if repo == "" {
+		repo = "unknown"
+	}
+	tags := append([]string{"cortex", "repo:" + repo}, extra...)
+	return dedupeStr(tags)
 }
 
 // countActive counts hypotheses still in the active (unresolved) state.

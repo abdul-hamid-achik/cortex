@@ -2,8 +2,11 @@ version: 1
 name: lifecycle
 intent: |
     A full task lifecycle runs end to end: cortex starts a case, rejects a plan with no
-    disproof path, accepts a valid plan, verifies, and completes — so the phase machine and
-    its gates work through the real CLI, not just unit tests.
+    disproof path, accepts a valid plan, verifies, refuses bare completion without a
+    definitive pass, then completes with an explicit --unverified acknowledgment — so the
+    phase machine and its gates work through the real CLI, not just unit tests.
+    (Temp workspaces have no codemap index, so structural review is inconclusive; the
+    completion gate correctly requires a pass or an explicit override.)
 target:
     cmd:
         - "/bin/sh"
@@ -33,7 +36,16 @@ target:
           "$CX" -C "$WS" plan "$TASK" --hypothesis "returnTo dropped :: review the diff" --file src/callback.go --uncertainty u >/dev/null
           printf 'package src\nfunc HandleCallback(){ _ = 1 }\n' > src/callback.go
           "$CX" -C "$WS" verify "$TASK" --claim "the diff is sound" >/dev/null
-          "$CX" -C "$WS" remember "$TASK" "fixed returnTo" >/dev/null
+
+          # Bare remember must fail when verification is only inconclusive (unindexed codemap).
+          if "$CX" -C "$WS" remember "$TASK" "fixed returnTo" >/dev/null 2>&1; then
+            echo "GATE-FAILED: bare remember accepted without a pass"
+          else
+            echo "GATE-OK: bare remember rejected without a pass"
+          fi
+
+          # Explicit override completes the task honestly.
+          "$CX" -C "$WS" remember "$TASK" "fixed returnTo" --unverified >/dev/null
           PHASE=$("$CX" -C "$WS" status "$TASK" --json | grep -o '"phase": "[^"]*"' | head -1 | cut -d'"' -f4)
           echo "FINAL-PHASE $PHASE"
     cwd: "."
@@ -57,10 +69,15 @@ outcomes:
       description: a plan with no disproof path is rejected
       verify:
         screen:
-            contains: "GATE-OK"
+            contains: "GATE-OK: no-disproof plan rejected"
+    - id: completion_gate_enforced
+      description: bare remember without a passing verification is rejected
+      verify:
+        screen:
+            contains: "GATE-OK: bare remember rejected without a pass"
     - id: completes
-      description: the task reaches the complete phase
+      description: the task reaches the complete phase with an explicit override
       verify:
         screen:
             contains: "FINAL-PHASE complete"
-contractHash: sha256:b072014f355cd7fac036d3515b3f393d746f0fd044e6fed4e195f47a420b81d3
+contractHash: sha256:5dd7cf20d2a1780241ef2dac21cfd10f4fc609b8c4aeafc67b4d2a41f26251bd

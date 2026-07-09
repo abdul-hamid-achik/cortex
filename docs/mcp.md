@@ -18,8 +18,9 @@ argument (a kernel is built per call), so one server process serves any workspac
 | `cortex_investigate` | route a question through discovery → structure; record evidence |
 | `cortex_plan` | the planning gate — hypotheses (with disproof), boundary, verification plan |
 | `cortex_verify` | run verifiers, detect scope drift, write a receipt per claim |
-| `cortex_remember` | persist the outcome and complete (needs a receipt) |
+| `cortex_remember` | persist the outcome and complete (needs a *passing* receipt, or `verificationNotPossible` / `acceptFailed`) |
 | `cortex_status` | phase, hypotheses, scope drift, missing verification, tool health |
+| `cortex_list_tasks` | list all tasks in the workspace (newest first) |
 | `cortex_resolve` | mark a hypothesis confirmed/challenged/rejected as evidence accumulates (history retained) |
 | `cortex_abort_task` | stop without deleting evidence (reason required) |
 | `cortex_read_evidence` | full evidence record by ID |

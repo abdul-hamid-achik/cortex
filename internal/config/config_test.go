@@ -12,7 +12,7 @@ func TestForDefaults(t *testing.T) {
 	if cfg.Budget.MaxParallelCalls != 3 || cfg.Budget.MaxInvestigationRounds != 3 {
 		t.Errorf("expected default budget, got %+v", cfg.Budget)
 	}
-	if cfg.CasesDir != filepath.Join(dir, ".agent", "cases") {
+	if cfg.CasesDir != filepath.Join(dir, ".cortex", "cases") {
 		t.Errorf("unexpected cases dir: %s", cfg.CasesDir)
 	}
 	if len(cfg.Sources()) != 0 {
@@ -75,6 +75,23 @@ func TestEnvOverridesAutoRetries(t *testing.T) {
 	cfg := For(dir)
 	if cfg.Budget.MaxAutoRetriesPerTool != 0 {
 		t.Errorf("env should set auto-retries to 0, got %d", cfg.Budget.MaxAutoRetriesPerTool)
+	}
+}
+
+func TestCasesDirOutsideWorkspace(t *testing.T) {
+	// Absolute / home-relative cases_dir keeps the workspace free of Cortex state.
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "off-repo-cases")
+	t.Setenv("CORTEX_CASES_DIR", outside)
+	cfg := For(dir)
+	if cfg.CasesDir != outside {
+		t.Errorf("absolute CORTEX_CASES_DIR should win, got %s want %s", cfg.CasesDir, outside)
+	}
+}
+
+func TestDefaultCasesDir(t *testing.T) {
+	if got := DefaultCasesDir("/ws"); got != filepath.Join("/ws", ".cortex", "cases") {
+		t.Errorf("DefaultCasesDir = %s", got)
 	}
 }
 

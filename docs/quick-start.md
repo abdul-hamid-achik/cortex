@@ -21,7 +21,7 @@ fabricating output.
 ## A full task, start to finish
 
 Cortex tracks work as a **case**. Every action advances a phase machine and appends to the case
-file under `.agent/cases/<taskId>/`.
+file under `.cortex/cases/<taskId>/` (override with `cases_dir` / `CORTEX_CASES_DIR`).
 
 ### 1. Start — open a case and orient
 
@@ -77,9 +77,10 @@ cortex remember task_06FK… \
   --tag auth --tag oauth
 ```
 
-Completion **requires** a verification receipt. If verification genuinely couldn't run, you must
-say so explicitly with `--unverified` — Cortex never lets an unverified outcome masquerade as
-verified. A `summary.md` is written and a durable memory is stored (via vecgrep).
+Completion **requires** a *passing* verification receipt. If verification genuinely couldn't run,
+use `--unverified`; if the only receipts are failures, use `--accept-failed`. Cortex never lets an
+unverified or failed outcome masquerade as a clean pass. A `summary.md` is written and a durable
+memory is stored (via vecgrep).
 
 ## Inspect anytime
 

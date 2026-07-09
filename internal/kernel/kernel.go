@@ -40,8 +40,9 @@ func New(cfg config.Config) (*Kernel, error) {
 		return nil, err
 	}
 	// Cortex's own state must never register as a workspace change. Ignore the
-	// whole .agent/ dir so scope-drift and diff review see only real edits.
-	ensureStateIgnored(cfg.CasesDir)
+	// cases parent dir (default .cortex/) so scope-drift and diff review see only
+	// real edits. No-op when cases live outside the workspace.
+	ensureStateIgnored(cfg.Workspace, cfg.CasesDir)
 	git := adapters.NewGit()
 	reg := adapters.NewRegistry(
 		git,
@@ -84,16 +85,32 @@ func approveExternal() bool {
 	return false
 }
 
-// ensureStateIgnored writes a .gitignore containing "*" at the .agent/ root so
-// git treats Cortex's case files as ignored. Best-effort: failures are silent
-// (a non-git or read-only workspace simply keeps the files visible).
-func ensureStateIgnored(casesDir string) {
-	agentRoot := filepath.Dir(casesDir) // <workspace>/.agent
-	gi := filepath.Join(agentRoot, ".gitignore")
+// ensureStateIgnored writes a .gitignore containing "*" next to the case store
+// when that store lives inside the workspace (default: <workspace>/.cortex/).
+// Best-effort: failures are silent; cases stored outside the workspace (via
+// cases_dir / CORTEX_CASES_DIR) need no in-repo ignore file.
+func ensureStateIgnored(workspace, casesDir string) {
+	if casesDir == "" {
+		return
+	}
+	// Only auto-ignore paths under the workspace — an absolute cases_dir under
+	// ~/.cortex/cases/… must not create a random .gitignore outside the repo.
+	ws := filepath.Clean(workspace)
+	cd := filepath.Clean(casesDir)
+	rel, err := filepath.Rel(ws, cd)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return
+	}
+	stateRoot := filepath.Dir(cd) // e.g. <workspace>/.cortex
+	// If cases_dir is the workspace itself (odd but legal), don't write "*".
+	if filepath.Clean(stateRoot) == ws {
+		return
+	}
+	gi := filepath.Join(stateRoot, ".gitignore")
 	if _, err := os.Stat(gi); err == nil {
 		return
 	}
-	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
 		return
 	}
 	_ = os.WriteFile(gi, []byte("# Cortex local state — not source. Ignore everything here.\n*\n"), 0o644)

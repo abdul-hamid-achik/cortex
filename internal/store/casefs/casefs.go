@@ -1,5 +1,5 @@
 // Package casefs persists case files to the local filesystem as JSON/JSONL
-// under .agent/cases/<taskID>/ (SPEC §8.1). It is the kernel's working memory,
+// under .cortex/cases/<taskID>/ by default (SPEC §8.1; overridable). It is the kernel's working memory,
 // not a transcript: append-oriented ledgers (evidence, commands) plus
 // snapshot documents (case, plan, hypotheses, verification, summary).
 //
@@ -26,7 +26,7 @@ var ErrNotFound = errors.New("not found")
 
 // Store is a filesystem-backed case-file store rooted at a cases directory.
 type Store struct {
-	root string     // e.g. <workspace>/.agent/cases
+	root string     // e.g. <workspace>/.cortex/cases
 	mu   sync.Mutex // guards AppendVerification read-modify-write
 }
 

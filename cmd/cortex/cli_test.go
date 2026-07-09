@@ -117,6 +117,32 @@ func TestCLIPlanGateRejectsNoDisproof(t *testing.T) {
 	}
 }
 
+func TestCLIJSONExitNonZeroOnKernelReject(t *testing.T) {
+	// --json must still surface kernel rejections as a non-nil error so agents
+	// that only check the process exit code observe failures (review 2026-07-08).
+	ws := cliRepo(t)
+	out, err := runCLI(t, "-C", ws, "--json", "start", "g")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var env map[string]any
+	_ = json.Unmarshal([]byte(out), &env)
+	taskID, _ := env["taskId"].(string)
+
+	out, err = runCLI(t, "-C", ws, "--json", "plan", taskID,
+		"--hypothesis", "returnTo dropped", "--file", "f.go", "--uncertainty", "u")
+	if err == nil {
+		t.Fatal("plan --json with no disproof must return an error (non-zero exit)")
+	}
+	if !strings.Contains(out, `"ok": false`) && !strings.Contains(out, `"ok":false`) {
+		t.Errorf("plan --json should still print the envelope with ok:false, got: %s", out)
+	}
+	// Human-path rejection also errors (pre-existing).
+	if _, err := runCLI(t, "-C", ws, "remember", "task_does_not_exist", "x"); err == nil {
+		t.Error("remember of missing task should error")
+	}
+}
+
 func TestCLIStartRequiresGoal(t *testing.T) {
 	ws := cliRepo(t)
 	if _, err := runCLI(t, "-C", ws, "start"); err == nil {
