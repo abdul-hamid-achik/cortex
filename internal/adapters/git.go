@@ -2,8 +2,11 @@ package adapters
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -46,6 +49,46 @@ type WorkspaceInfo struct {
 	Branch     string
 	Commit     string
 	Dirty      bool
+}
+
+// Revision identifies the exact workspace state a verification receipt proves.
+// Commit is the full HEAD SHA; DirtyDigest hashes the tracked diff plus untracked
+// file paths and bytes. Two receipts at the same commit are therefore distinct
+// when the working tree changes between verifier runs.
+type Revision struct {
+	Commit      string
+	DirtyDigest string
+}
+
+// CurrentRevision returns a stable identity for the current HEAD + dirty tree.
+// It is read-only. Missing/unreadable untracked files are still represented by
+// their path, so a concurrent deletion cannot silently produce a clean digest.
+func (g *Git) CurrentRevision(ctx context.Context, dir string) (Revision, error) {
+	if !binExists(g.bin) {
+		return Revision{}, ErrToolMissing
+	}
+	commit, serr, code, err := g.exec(ctx, dir, "rev-parse", "HEAD")
+	if err != nil || code != 0 {
+		return Revision{}, fmt.Errorf("git rev-parse HEAD failed: %s", firstNonEmpty(firstLine(serr), fmt.Sprint(err)))
+	}
+	diff, derr, dcode, err := g.exec(ctx, dir, "diff", "--binary", "HEAD")
+	if err != nil || dcode != 0 {
+		return Revision{}, fmt.Errorf("git diff failed: %s", firstNonEmpty(firstLine(derr), fmt.Sprint(err)))
+	}
+	unt, _, _, _ := g.exec(ctx, dir, "ls-files", "--others", "--exclude-standard")
+	paths := splitNonEmpty(unt)
+	sort.Strings(paths)
+	h := sha256.New()
+	_, _ = h.Write([]byte(diff))
+	for _, p := range paths {
+		_, _ = h.Write([]byte("\x00" + filepath.ToSlash(p) + "\x00"))
+		if b, readErr := os.ReadFile(filepath.Join(dir, p)); readErr == nil {
+			_, _ = h.Write(b)
+		} else {
+			_, _ = h.Write([]byte("<unreadable>"))
+		}
+	}
+	return Revision{Commit: strings.TrimSpace(commit), DirtyDigest: fmt.Sprintf("sha256:%x", h.Sum(nil))}, nil
 }
 
 // Status returns the workspace identity directly (used by the orient phase,

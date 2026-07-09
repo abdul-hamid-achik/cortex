@@ -240,6 +240,23 @@ func TestGitStatusAndChangedFiles(t *testing.T) {
 	if !strings.Contains(joined, "a.go") || !strings.Contains(joined, "b.go") {
 		t.Errorf("expected a.go and b.go in changed files, got %v", changed)
 	}
+
+	// Revision identity keeps HEAD stable while the dirty digest changes for
+	// tracked and untracked content.
+	rev1, err := g.CurrentRevision(context.Background(), dir)
+	if err != nil || rev1.Commit == "" || rev1.DirtyDigest == "" {
+		t.Fatalf("current revision = %+v, %v", rev1, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("package a\nvar Y = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rev2, err := g.CurrentRevision(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev2.Commit != rev1.Commit || rev2.DirtyDigest == rev1.DirtyDigest {
+		t.Fatalf("untracked edit should keep HEAD and change digest: before=%+v after=%+v", rev1, rev2)
+	}
 }
 
 func TestGitNonRepoDegrades(t *testing.T) {

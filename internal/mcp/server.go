@@ -125,6 +125,8 @@ type verifyInput struct {
 	ChangedFiles     []string `json:"changedFiles,omitempty" jsonschema:"changed files; derived from git when omitted"`
 	BrowserSpec      string   `json:"browserSpec,omitempty" jsonschema:"cairntrace spec path to prove browser claims"`
 	TerminalSpec     string   `json:"terminalSpec,omitempty" jsonschema:"glyphrun spec path to prove terminal claims"`
+	ArtifactRef      string   `json:"artifactRef,omitempty" jsonschema:"fcheap stash ID or fcheap:// URI to prove an artifact claim"`
+	SecretProject    string   `json:"secretProject,omitempty" jsonschema:"tvault project whose value-free availability proves secret capability"`
 	DisableAutoSpecs bool     `json:"disableAutoSpecs,omitempty" jsonschema:"skip auto-selection of covering browser/terminal specs"`
 	Workspace        string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
@@ -325,6 +327,7 @@ func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 	env, err := k.Verify(ctx, kernel.VerifyInput{
 		TaskID: in.TaskID, Claims: in.Claims, ChangedFiles: in.ChangedFiles,
 		BrowserSpec: in.BrowserSpec, TerminalSpec: in.TerminalSpec,
+		ArtifactRef: in.ArtifactRef, SecretProject: in.SecretProject,
 		DisableAutoSpecs: in.DisableAutoSpecs,
 	})
 	return result(env, err)

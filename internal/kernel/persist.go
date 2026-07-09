@@ -42,6 +42,20 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	}
 
 	receipts, _ := k.store.Verifications(c.ID)
+	// A receipt tied to an older HEAD/diff proves a prior workspace state, not
+	// the state being completed now. Legacy receipts without dirtyDigest retain
+	// their old semantics for on-disk compatibility.
+	if k.git != nil {
+		if current, revErr := k.git.CurrentRevision(ctx, k.cfg.Workspace); revErr == nil {
+			fresh := receipts[:0]
+			for _, r := range receipts {
+				if !receiptStale(r, current) {
+					fresh = append(fresh, r)
+				}
+			}
+			receipts = fresh
+		}
+	}
 	// The completion invariant (SPEC §6.3 #2) requires a REAL verification record
 	// — a verifier that actually ran and produced a DEFINITIVE verdict. Everything
 	// else proves nothing: not_run, blocked, inconclusive, not_applicable.

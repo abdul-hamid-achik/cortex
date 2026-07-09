@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -44,6 +45,8 @@ func (f *Fcheap) Execute(ctx context.Context, req Request) (Result, error) {
 		return f.connect(ctx, dir, req.Str("stash"), req.Str("codebase"), req.Str("query"), req.Int("limit", 10))
 	case "list":
 		return f.list(ctx, dir, req.StrSlice("tags"))
+	case "verify":
+		return f.verify(ctx, dir, req.Str("stash"))
 	default:
 		return Result{Tool: "fcheap", Operation: req.Operation, Status: StatusError,
 			Summary: "unknown fcheap operation: " + req.Operation}, nil
@@ -137,6 +140,37 @@ func (f *Fcheap) connect(ctx context.Context, dir, stash, codebase, query string
 		Facts:   facts,
 		Raw:     stdout,
 	}, nil
+}
+
+func (f *Fcheap) verify(ctx context.Context, dir, stash string) (Result, error) {
+	stash = strings.TrimPrefix(stash, "fcheap://stash/")
+	if stash == "" {
+		return Result{Tool: "fcheap", Operation: "verify", Status: StatusError, Summary: "artifact verification needs a stash ID or fcheap:// URI"}, nil
+	}
+	stdout, stderr, code, err := f.exec(ctx, dir, "info", stash, "--json")
+	if err != nil {
+		return unavailable("fcheap", "verify", err.Error()), nil
+	}
+	if code != 0 {
+		return Result{Tool: "fcheap", Operation: "verify", Status: StatusPartial,
+			Summary:  fmt.Sprintf("stash %s could not be verified", stash),
+			Warnings: []string{firstNonEmpty(firstLine(stderr), fmt.Sprintf("fcheap info exited %d", code))}, Raw: stdout}, nil
+	}
+	var out struct {
+		ID    string `json:"id"`
+		Files []any  `json:"files"`
+	}
+	if derr := decodeJSON(stdout, &out); derr != nil {
+		return degraded("fcheap", "verify", stdout, stderr, code), nil
+	}
+	if out.ID == "" {
+		return Result{Tool: "fcheap", Operation: "verify", Status: StatusPartial,
+			Summary: "fcheap returned no stash identity", Raw: stdout}, nil
+	}
+	claim := fmt.Sprintf("artifact stash %s exists and its manifest is readable (%s)", out.ID, pluralize(len(out.Files), "file"))
+	return Result{Tool: "fcheap", Operation: "verify", Status: StatusAuthoritative,
+		Summary: claim, Facts: []Fact{{Kind: "artifact", Claim: claim, Confidence: "high", URI: "fcheap://stash/" + out.ID}},
+		Artifacts: []ArtifactRef{{ID: out.ID, Kind: "fcheap", URI: "fcheap://stash/" + out.ID, Summary: claim}}, Raw: stdout}, nil
 }
 
 type fcStash struct {

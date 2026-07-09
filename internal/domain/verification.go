@@ -29,10 +29,13 @@ type VerificationRecord struct {
 	Artifact        string             `json:"artifact,omitempty"` // fcheap://… reference
 	// Sensitive labels the receipt (and its linked artifact) as possibly holding
 	// sensitive material, so it isn't archived or shared carelessly (SPEC §16.2 #5).
-	Sensitive bool      `json:"sensitive,omitempty"`
-	Revision  string    `json:"revision,omitempty"` // git rev the proof pertains to
-	Notes     string    `json:"notes,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Sensitive bool   `json:"sensitive,omitempty"`
+	Revision  string `json:"revision,omitempty"` // full git HEAD the proof pertains to
+	// DirtyDigest binds the proof to the tracked diff + untracked content at
+	// verifier runtime. Revision alone is insufficient when HEAD has not moved.
+	DirtyDigest string    `json:"dirtyDigest,omitempty"`
+	Notes       string    `json:"notes,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
 // Validate enforces the invariant that a verification pass names its claim

@@ -12,11 +12,13 @@ import (
 
 // VerifyInput parameterizes Verify (SPEC §10.2 cortex_verify).
 type VerifyInput struct {
-	TaskID       string
-	Claims       []string
-	ChangedFiles []string // optional; derived from git when empty
-	BrowserSpec  string   // cairn spec path (proves browser claims)
-	TerminalSpec string   // glyph spec path (proves terminal claims)
+	TaskID        string
+	Claims        []string
+	ChangedFiles  []string // optional; derived from git when empty
+	BrowserSpec   string   // cairn spec path (proves browser claims)
+	TerminalSpec  string   // glyph spec path (proves terminal claims)
+	ArtifactRef   string   // fcheap stash ID/URI to verify exists and is readable
+	SecretProject string   // tvault project whose value-free availability proves secret capability
 	// DisableAutoSpecs turns OFF verify-time auto-selection of covering specs
 	// (default on). Auto-selection runs only when no explicit spec is given for a
 	// declared behavioral surface and a diff exists.
@@ -70,6 +72,10 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	// surfaceStatus records each surface's verifier outcome this run. Surfaces
 	// with no entry were not verified at all.
 	surfaceStatus := map[domain.Surface]domain.VerificationStatus{}
+	revision, revisionWarning := k.currentRevision(ctx)
+	if revisionWarning != "" {
+		warnings = append(warnings, revisionWarning)
+	}
 
 	// 1) Structural review (always, for a change task with a diff). A review is
 	// passed only when codemap is indexed; an unindexed review is inconclusive.
@@ -92,7 +98,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			reviewNote = "codemap rated this diff HIGH risk — structural review is inconclusive, not a clean pass; address the risk factors or prove the change behaviorally (browser/terminal spec)"
 		}
 		surfaceStatus[domain.SurfaceCode] = st
-		if err := k.writeReceipt(c.ID, receiptSpec{Claim: "structural review of the diff", Surface: domain.SurfaceCode,
+		if err := k.writeReceipt(c.ID, revision, receiptSpec{Claim: "structural review of the diff", Surface: domain.SurfaceCode,
 			Tool: "codemap", Version: k.toolVersion(ctx, "codemap"), Status: st, Evidence: evs, Notes: reviewNote}); err != nil {
 			warnings = append(warnings, "could not persist review receipt: "+err.Error())
 		}
@@ -150,12 +156,44 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			if auto {
 				label = "auto-selected " + label
 			}
-			if err := k.writeReceipt(c.ID, receiptSpec{Claim: label + spec, Surface: bs.surface,
+			if err := k.writeReceipt(c.ID, revision, receiptSpec{Claim: label + spec, Surface: bs.surface,
 				Tool: bs.tool, Version: k.toolVersion(ctx, bs.tool), Status: st, Evidence: evs,
 				Artifact: artifact, Notes: behavioralLimitation(res, st)}); err != nil {
 				warnings = append(warnings, "could not persist "+string(bs.surface)+" receipt: "+err.Error())
 			}
 			warnings = append(warnings, k.annotateBehavior(ctx, c, bs.tool, spec, st, artifact)...)
+		}
+	}
+
+	// 2b) Artifact and secret-capability verifiers. These are intentionally
+	// explicit: a stash URI proves a durable artifact exists; a tvault project
+	// proves value-free secret capability is available. Neither silently falls
+	// through to structural code verification.
+	for _, sv := range []struct {
+		surface              domain.Surface
+		tool, operation, key string
+		value                string
+	}{
+		{domain.SurfaceArtifact, "fcheap", "verify", "stash", in.ArtifactRef},
+		{domain.SurfaceSecret, "tvault", "availability", "project", in.SecretProject},
+	} {
+		if !surfaceInScope(c, sv.surface) && sv.value == "" {
+			continue
+		}
+		if sv.value == "" {
+			surfaceStatus[sv.surface] = domain.VerifyNotRun
+			warnings = append(warnings, fmt.Sprintf("%s verification needs %s input; claims on this surface stay unverified", sv.surface, sv.key))
+			continue
+		}
+		res := k.run(ctx, sv.tool, adapters.Request{TaskID: c.ID, Operation: sv.operation, Input: map[string]any{sv.key: sv.value}})
+		warnings = append(warnings, res.Warnings...)
+		evs := k.stampAll(c.ID, res, &facts)
+		st := capabilityStatus(res)
+		surfaceStatus[sv.surface] = st
+		if err := k.writeReceipt(c.ID, revision, receiptSpec{Claim: fmt.Sprintf("%s verification %s", sv.surface, sv.value), Surface: sv.surface,
+			Tool: sv.tool, Version: k.toolVersion(ctx, sv.tool), Status: st, Evidence: evs,
+			Artifact: firstArtifactURI(res), Notes: capabilityLimitation(sv.surface, st)}); err != nil {
+			warnings = append(warnings, "could not persist "+string(sv.surface)+" receipt: "+err.Error())
 		}
 	}
 
@@ -171,7 +209,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			st = domain.VerifyNotRun
 			warnings = append(warnings, fmt.Sprintf("claim %q needs a %s verifier that was not run", clipStr(claim, 50), surf))
 		}
-		if err := k.writeReceipt(c.ID, receiptSpec{Claim: claim, Surface: surf, Tool: domain.SurfaceVerifier(surf),
+		if err := k.writeReceipt(c.ID, revision, receiptSpec{Claim: claim, Surface: surf, Tool: domain.SurfaceVerifier(surf),
 			Status: st, Notes: claimLimitation(st)}); err != nil {
 			warnings = append(warnings, "could not persist claim receipt: "+err.Error())
 		}
@@ -253,11 +291,7 @@ type receiptSpec struct {
 // writeReceipt persists a verification record naming the exact claim it
 // supports, its verifier + version, limitation notes, and a sensitivity label
 // (SPEC §14.3, §16.2 #5).
-func (k *Kernel) writeReceipt(taskID string, r receiptSpec) error {
-	rev := ""
-	if c, err := k.store.Load(taskID); err == nil {
-		rev = c.Workspace.CommitBefore
-	}
+func (k *Kernel) writeReceipt(taskID string, rev adapters.Revision, r receiptSpec) error {
 	return k.store.AppendVerification(taskID, domain.VerificationRecord{
 		ID:              ids.New("vr"),
 		Claim:           r.Claim,
@@ -268,10 +302,25 @@ func (k *Kernel) writeReceipt(taskID string, r receiptSpec) error {
 		Evidence:        r.Evidence,
 		Artifact:        r.Artifact,
 		Sensitive:       k.evidenceSensitive(taskID, r.Evidence),
-		Revision:        rev,
+		Revision:        rev.Commit,
+		DirtyDigest:     rev.DirtyDigest,
 		Notes:           r.Notes,
 		Timestamp:       k.now().UTC(),
 	})
+}
+
+// currentRevision captures the exact HEAD + dirty tree a verifier is about to
+// inspect. A capture failure is visible and leaves revision fields empty rather
+// than falsely binding the receipt to the task's start commit.
+func (k *Kernel) currentRevision(ctx context.Context) (adapters.Revision, string) {
+	if k.git == nil {
+		return adapters.Revision{}, "could not bind verification receipts to a revision: git adapter unavailable"
+	}
+	rev, err := k.git.CurrentRevision(ctx, k.cfg.Workspace)
+	if err != nil {
+		return adapters.Revision{}, "could not bind verification receipts to current HEAD/diff: " + err.Error()
+	}
+	return rev, ""
 }
 
 // toolVersion returns a verifier tool's version, best-effort (SPEC §14.3).
@@ -327,6 +376,34 @@ func reviewStatus(s adapters.Status) domain.VerificationStatus {
 		return domain.VerifyInconclusive
 	default:
 		return domain.VerifyBlocked
+	}
+}
+
+// capabilityStatus maps a value-free artifact/capability probe into a receipt.
+// Only an authoritative result passes; partial means the tool answered but could
+// not establish the capability, while missing/policy/error states are blocked.
+func capabilityStatus(res adapters.Result) domain.VerificationStatus {
+	switch res.Status {
+	case adapters.StatusAuthoritative:
+		return domain.VerifyPassed
+	case adapters.StatusPartial:
+		return domain.VerifyInconclusive
+	default:
+		return domain.VerifyBlocked
+	}
+}
+
+func capabilityLimitation(surface domain.Surface, st domain.VerificationStatus) string {
+	switch st {
+	case domain.VerifyPassed:
+		if surface == domain.SurfaceSecret {
+			return "tvault project availability is proven value-free; secret-dependent runtime behavior still needs scoped execution"
+		}
+		return ""
+	case domain.VerifyInconclusive:
+		return "the verifier answered but could not establish the requested artifact/capability"
+	default:
+		return "the verifier was unavailable, refused, or errored; the requested artifact/capability is not proven"
 	}
 }
 
@@ -439,7 +516,9 @@ func claimSurface(claim string) domain.Surface {
 		return domain.SurfaceTerminal
 	case containsWord(q, "page", "redirect", "browser", "click", "render", " ui ", "screen", "button", "login"):
 		return domain.SurfaceBrowser
-	case containsWord(q, "artifact", "output file", "bundle"):
+	case containsWord(q, "secret", "credential", "token", "api key", "env var"):
+		return domain.SurfaceSecret
+	case containsWord(q, "artifact", "output file", "bundle", "stash"):
 		return domain.SurfaceArtifact
 	default:
 		return domain.SurfaceCode

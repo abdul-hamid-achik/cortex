@@ -142,6 +142,8 @@ func defaultVerification(surfaces []domain.Surface) []string {
 			out = append(out, "glyphrun_flow")
 		case domain.SurfaceArtifact:
 			out = append(out, "fcheap_artifact")
+		case domain.SurfaceSecret:
+			out = append(out, "tvault_capability")
 		}
 	}
 	return dedupeStr(out)

@@ -17,9 +17,9 @@ argument (a kernel is built per call), so one server process serves any workspac
 | `cortex_start_task` | open a case; orient on git identity + tool health |
 | `cortex_investigate` | route a question through discovery → structure; record evidence |
 | `cortex_plan` | the planning gate — hypotheses (with disproof), boundary, verification plan |
-| `cortex_verify` | run verifiers, detect scope drift, write a receipt per claim |
+| `cortex_verify` | run verifiers, detect scope drift, write a receipt per claim. Browser/terminal use specs; artifact claims take `artifactRef` (fcheap stash); secret-capability claims take `secretProject` (value-free tvault availability) |
 | `cortex_remember` | persist the outcome and complete (needs a *passing* receipt, or `verificationNotPossible` / `acceptFailed`) |
-| `cortex_status` | phase, hypotheses, scope drift, missing verification, tool health |
+| `cortex_status` | phase, hypotheses, scope drift, missing/stale verification, tool health. New receipts are bound to full HEAD + dirty-tree digest and become stale after later edits |
 | `cortex_list_tasks` | list all tasks in the workspace (newest first) |
 | `cortex_sessions` | **cross-repo**: every session everywhere — id, goal, phase, repo, verified/required, active, timestamps (filter by `repo`/`active`) |
 | `cortex_timeline` | a session's time-sorted activity — phases, evidence, tool calls, receipts (located by task ID, any repo) |

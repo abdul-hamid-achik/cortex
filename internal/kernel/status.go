@@ -19,6 +19,7 @@ type StatusReport struct {
 	UnresolvedHypotheses []domain.HypView        `json:"unresolvedHypotheses,omitempty"`
 	VerificationRequired []string                `json:"verificationRequired,omitempty"`
 	VerificationDone     []string                `json:"verificationDone,omitempty"`
+	StaleVerification    []string                `json:"staleVerification,omitempty"`
 	MissingVerification  []string                `json:"missingVerification,omitempty"`
 	Scope                *ScopeReport            `json:"scope,omitempty"`
 	ToolHealth           []adapters.HealthReport `json:"toolHealth,omitempty"`
@@ -37,6 +38,10 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	evidence, _ := k.store.Evidence(taskID)
 	hyps, _ := k.store.Hypotheses(taskID)
 	receipts, _ := k.store.Verifications(taskID)
+	currentRev, revErr := adapters.Revision{}, error(nil)
+	if k.git != nil {
+		currentRev, revErr = k.git.CurrentRevision(ctx, k.cfg.Workspace)
+	}
 
 	rep := StatusReport{
 		Envelope: domain.Envelope{
@@ -59,13 +64,17 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	// Required vs done verification (SPEC acceptance: status detects missing verification).
 	done := map[string]bool{}
 	for _, r := range receipts {
+		if receiptStale(r, currentRev) {
+			rep.StaleVerification = append(rep.StaleVerification, r.Claim)
+			continue
+		}
 		if r.Proven() {
 			rep.VerificationDone = append(rep.VerificationDone, r.Claim)
 		}
 		done[string(r.Surface)] = done[string(r.Surface)] || r.Proven()
 	}
 	for _, req := range c.VerificationRequired {
-		if !verifierSatisfied(req, receipts) {
+		if !verifierSatisfiedCurrent(req, receipts, currentRev) {
 			rep.MissingVerification = append(rep.MissingVerification, req)
 		}
 	}
@@ -87,6 +96,14 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	if len(rep.MissingVerification) > 0 && c.Status != domain.PhaseComplete {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d required verification(s) still missing", len(rep.MissingVerification)))
 	}
+	if revErr != nil {
+		rep.Warnings = append(rep.Warnings, "could not check verification freshness: "+revErr.Error())
+	}
+	if len(rep.StaleVerification) > 0 {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d verification receipt(s) are stale because HEAD or the dirty diff changed", len(rep.StaleVerification)))
+		rep.NextActions = append([]string{"cortex verify — rerun verifiers for the current revision/diff"}, nextForPhase(c.Status)...)
+		return rep, nil
+	}
 	rep.NextActions = nextForPhase(c.Status)
 	return rep, nil
 }
@@ -95,9 +112,13 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 // receipt. The match is loose: a required "cairntrace_flow" is satisfied by a
 // passed browser-surface receipt.
 func verifierSatisfied(required string, receipts []domain.VerificationRecord) bool {
+	return verifierSatisfiedCurrent(required, receipts, adapters.Revision{})
+}
+
+func verifierSatisfiedCurrent(required string, receipts []domain.VerificationRecord, current adapters.Revision) bool {
 	surf := requiredSurface(required)
 	for _, r := range receipts {
-		if !r.Proven() {
+		if receiptStale(r, current) || !r.Proven() {
 			continue
 		}
 		if r.Surface == surf || string(r.Surface) == required || r.Tool == required {
@@ -105,6 +126,16 @@ func verifierSatisfied(required string, receipts []domain.VerificationRecord) bo
 		}
 	}
 	return false
+}
+
+// receiptStale is backward-compatible: legacy receipts without a dirty digest
+// retain their historical semantics. New receipts are stale when either HEAD
+// or the exact dirty tree differs from the state verified.
+func receiptStale(r domain.VerificationRecord, current adapters.Revision) bool {
+	if r.DirtyDigest == "" || current.Commit == "" {
+		return false
+	}
+	return r.Revision != current.Commit || r.DirtyDigest != current.DirtyDigest
 }
 
 func requiredSurface(required string) domain.Surface {
@@ -115,6 +146,8 @@ func requiredSurface(required string) domain.Surface {
 		return domain.SurfaceTerminal
 	case containsWord(required, "fcheap", "artifact"):
 		return domain.SurfaceArtifact
+	case containsWord(required, "tvault", "secret"):
+		return domain.SurfaceSecret
 	default:
 		return domain.SurfaceCode
 	}

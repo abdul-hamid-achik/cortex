@@ -28,6 +28,8 @@ receipt; a claim with no relevant verifier is recorded not_run — never passed.
 		changed, _ := cmd.Flags().GetStringArray("changed-file")
 		browser, _ := cmd.Flags().GetString("browser-spec")
 		terminal, _ := cmd.Flags().GetString("terminal-spec")
+		artifact, _ := cmd.Flags().GetString("artifact-ref")
+		secretProject, _ := cmd.Flags().GetString("secret-project")
 		noAuto, _ := cmd.Flags().GetBool("no-auto-specs")
 		env, err := k.Verify(cmd.Context(), kernel.VerifyInput{
 			TaskID:           args[0],
@@ -35,6 +37,8 @@ receipt; a claim with no relevant verifier is recorded not_run — never passed.
 			ChangedFiles:     changed,
 			BrowserSpec:      browser,
 			TerminalSpec:     terminal,
+			ArtifactRef:      artifact,
+			SecretProject:    secretProject,
 			DisableAutoSpecs: noAuto,
 		})
 		if err != nil {
@@ -49,6 +53,8 @@ func init() {
 	verifyCmd.Flags().StringArray("changed-file", nil, "override changed files (repeatable; derived from git when omitted)")
 	verifyCmd.Flags().String("browser-spec", "", "cairntrace spec path to prove browser claims")
 	verifyCmd.Flags().String("terminal-spec", "", "glyphrun spec path to prove terminal claims")
+	verifyCmd.Flags().String("artifact-ref", "", "fcheap stash ID or fcheap:// URI to prove an artifact claim")
+	verifyCmd.Flags().String("secret-project", "", "tvault project whose value-free availability proves secret capability")
 	verifyCmd.Flags().Bool("no-auto-specs", false, "don't auto-select and run the specs that cover the change when none is supplied")
 	rootCmd.AddCommand(verifyCmd)
 }

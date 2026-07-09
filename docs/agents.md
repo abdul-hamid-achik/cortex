@@ -16,9 +16,9 @@ Work through the six cognitive actions. Cortex enforces the discipline; you supp
    path**, a change boundary, and a verification plan. It rejects plans without a disproof path —
    restating a hypothesis more confidently will not get you through the gate.
 4. **Prove user-visible behavior with the right verifier.** `cortex_verify` runs a structural
-   review plus any browser/terminal specs you supply. A claim with no relevant verifier comes back
-   `not_run` — it is never counted as passed. Provide `browserSpec` / `terminalSpec` to actually
-   prove behavioral claims.
+   review plus browser/terminal specs, fcheap artifact-manifest checks, and value-free tvault
+   capability checks. A claim with no relevant input comes back `not_run` — never passed. New
+   receipts bind to the full HEAD + dirty-tree digest; edit again and `cortex_status` marks them stale.
 5. **Stay in the boundary.** Cortex compares your diff to the declared boundary and reports scope
    drift. If scope genuinely grew, expand the plan — don't let it drift silently.
 6. **Preserve evidence and state uncertainty.** `cortex_remember` completes the task and writes a

@@ -492,7 +492,7 @@ func TestReceiptSensitivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := k.writeReceipt(id, receiptSpec{Claim: "claim", Surface: domain.SurfaceCode, Tool: "codemap", Status: domain.VerifyPassed, Evidence: []string{ev.ID}}); err != nil {
+	if err := k.writeReceipt(id, adapters.Revision{}, receiptSpec{Claim: "claim", Surface: domain.SurfaceCode, Tool: "codemap", Status: domain.VerifyPassed, Evidence: []string{ev.ID}}); err != nil {
 		t.Fatalf("writeReceipt: %v", err)
 	}
 	recs, _ := k.Store().Verifications(id)
@@ -901,6 +901,74 @@ func TestCompletionRejectsNotRunOnly(t *testing.T) {
 	ok, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "done", VerificationNotPossible: true})
 	if !ok.OK || !hasWarning(ok.Warnings, "WITHOUT verification") {
 		t.Errorf("explicit unverified completion should succeed with a warning: ok=%v warnings=%v", ok.OK, ok.Warnings)
+	}
+}
+
+func TestVerificationReceiptsBindCurrentRevisionAndBecomeStale(t *testing.T) {
+	ws := testRepo(t)
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "reviewed"}}
+	k := newTestKernel(t, ws, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "bind proof", Surfaces: []domain.Surface{domain.SurfaceCode}})
+	id := env.TaskID
+	_, _ = k.Plan(PlanInput{TaskID: id, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}}, Uncertainty: "u"})
+	if err := os.WriteFile(filepath.Join(ws, "src", "callback.go"), []byte("package src\nfunc HandleCallback(){ _ = 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id, Claims: []string{"the diff is structurally sound"}})
+	recs, _ := k.Store().Verifications(id)
+	if len(recs) == 0 || recs[0].Revision == "" || recs[0].DirtyDigest == "" {
+		t.Fatalf("receipt should bind current HEAD + dirty digest: %+v", recs)
+	}
+	// Another edit at the SAME HEAD must stale the receipt via dirtyDigest.
+	if err := os.WriteFile(filepath.Join(ws, "src", "callback.go"), []byte("package src\nfunc HandleCallback(){ _ = 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := k.Status(context.Background(), id, "standard")
+	if len(status.StaleVerification) == 0 || len(status.MissingVerification) == 0 {
+		t.Fatalf("status should flag stale proof and missing required verifier: stale=%v missing=%v", status.StaleVerification, status.MissingVerification)
+	}
+	remember, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "done"})
+	if remember.OK {
+		t.Fatal("remember must reject stale-only verification")
+	}
+}
+
+func TestArtifactAndSecretClaimsUseTheirOwnVerifiers(t *testing.T) {
+	ws := testRepo(t)
+	fcheap := &fakeAdapter{name: "fcheap", caps: []adapters.Capability{adapters.CapabilityArtifacts},
+		result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "stash exists",
+			Facts:     []adapters.Fact{{Kind: "artifact", Claim: "stash exists", Confidence: "high", URI: "fcheap://stash/s1"}},
+			Artifacts: []adapters.ArtifactRef{{ID: "s1", URI: "fcheap://stash/s1"}}}}
+	tvault := &fakeAdapter{name: "tvault", caps: []adapters.Capability{adapters.CapabilitySecrets},
+		result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "project available"}}
+	k := newTestKernel(t, ws, fcheap, tvault)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "verify outputs", Mode: domain.ModeInvestigate,
+		Surfaces: []domain.Surface{domain.SurfaceArtifact, domain.SurfaceSecret}})
+	id := env.TaskID
+	_, _ = k.Plan(PlanInput{TaskID: id, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "d"}}, Uncertainty: "u"})
+	res, _ := k.Verify(context.Background(), VerifyInput{TaskID: id, ArtifactRef: "s1", SecretProject: "prod",
+		Claims: []string{"artifact stash is readable", "secret project is available"}})
+	if !strings.Contains(res.Summary, "2/2 claims verified") {
+		t.Fatalf("artifact + secret claims should use their own passing surfaces: %q warnings=%v", res.Summary, res.Warnings)
+	}
+	recs, _ := k.Store().Verifications(id)
+	seen := map[domain.Surface]bool{}
+	for _, r := range recs {
+		if r.Status == domain.VerifyPassed {
+			seen[r.Surface] = true
+		}
+	}
+	if !seen[domain.SurfaceArtifact] || !seen[domain.SurfaceSecret] {
+		t.Fatalf("expected passed artifact+secret receipts, got %+v", recs)
+	}
+}
+
+func TestLegacyReceiptWithoutDigestIsNotSilentlyInvalidated(t *testing.T) {
+	r := domain.VerificationRecord{Claim: "legacy", Status: domain.VerifyPassed, Revision: "old"}
+	if receiptStale(r, adapters.Revision{Commit: "new", DirtyDigest: "sha256:new"}) {
+		t.Fatal("legacy on-disk receipts without dirtyDigest must retain compatibility")
 	}
 }
 

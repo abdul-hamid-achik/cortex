@@ -1,10 +1,12 @@
 package kernel
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
@@ -64,6 +66,17 @@ func (k *Kernel) TaskMetrics(taskID string) (TaskMetrics, error) {
 	evidence, _ := k.store.Evidence(taskID)
 	hyps, _ := k.store.Hypotheses(taskID)
 	receipts, _ := k.store.Verifications(taskID)
+	currentRev := adapters.Revision{}
+	if k.git != nil {
+		currentRev, _ = k.git.CurrentRevision(context.Background(), k.cfg.Workspace)
+	}
+	freshReceipts := receipts[:0]
+	for _, r := range receipts {
+		if !receiptStale(r, currentRev) {
+			freshReceipts = append(freshReceipts, r)
+		}
+	}
+	receipts = freshReceipts
 
 	m := TaskMetrics{
 		TaskID: c.ID, Goal: c.Goal, Status: string(c.Status),

@@ -12,7 +12,7 @@ $XDG_STATE_HOME/cortex/sessions/<repo>/task_06FK…/
   evidence.jsonl     # append-only ledger of claims (provenance + confidence)
   hypotheses.json    # falsifiable explanations + disproof paths
   plan.json          # the planning gate (hypotheses + boundary + verification + uncertainty)
-  verification.json  # receipts: which claim, which verifier, passed/failed/not_run
+  verification.json  # receipts: claim/verifier/status + verified HEAD and dirty-tree digest
   commands.jsonl     # non-sensitive audit trail of tool invocations
   phases.jsonl       # phase-transition history (feeds `cortex timeline` + time-in-phase metrics)
   summary.md         # the readable outcome (written at completion)
