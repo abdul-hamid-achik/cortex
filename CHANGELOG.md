@@ -6,6 +6,11 @@ All notable changes to Cortex are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`cortex migrate`** moves a legacy `~/.cortex` (or `$CORTEX_HOME`-collapsed) tree onto the
+  split XDG layout: `config.yaml` → `$XDG_CONFIG_HOME/cortex`, `sessions/`/`archive/`/anything
+  else → `$XDG_STATE_HOME/cortex`, `cache/` → `$XDG_CACHE_HOME/cortex`. **Dry run by default** —
+  nothing moves until you pass `--apply`; a destination that already exists is skipped, never
+  overwritten, and the (now empty) legacy directory is removed once everything has moved out.
 - **`cortex_archive` / `cortex_unarchive` MCP tools** (17 tools total) — expose the session
   archive lifecycle to agents, mirroring the CLI `cortex archive`/`cortex unarchive` commands.
   Both are workspace-independent (the session is located by task ID across the central tree),

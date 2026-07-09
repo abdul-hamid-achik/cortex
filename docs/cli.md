@@ -209,6 +209,21 @@ Keys: `↑/↓` navigate · `g/G` jump · `a` active-only · `r` refresh · `q` 
 | `cortex read-artifact <taskId> <ref>` | resolve an evidence `rawRef` to the raw tool output |
 | `cortex serve` (`mcp`) | run the MCP server over stdio |
 
+### `cortex migrate`
+
+Moves a legacy `~/.cortex` (or `$CORTEX_HOME`-collapsed) tree onto the split XDG layout —
+`config.yaml` → `$XDG_CONFIG_HOME/cortex`, `sessions/`/`archive/`/anything else →
+`$XDG_STATE_HOME/cortex`, `cache/` → `$XDG_CACHE_HOME/cortex`. **Dry run by default** — it reports
+every planned move without touching disk; pass `--apply` to actually perform them. A destination
+that already exists is left alone and reported as skipped, never overwritten. If `~/.cortex` ends
+up empty afterward, it's removed. With `$CORTEX_HOME` still set, or with no legacy `~/.cortex`
+present, it's a no-op that explains why (`--json` reports this as `note`, `applied: false`).
+
+```bash
+cortex migrate            # dry run — see what would move
+cortex migrate --apply    # actually move config.yaml/sessions/archive/cache
+```
+
 ## Exit behavior
 
 An operational error returns a non-zero exit and prints `Error: …` to stderr. Rejected gates

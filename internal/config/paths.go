@@ -94,6 +94,39 @@ func CacheHome() string {
 	return filepath.Join(xdgDir("XDG_CACHE_HOME", ".cache"), appName)
 }
 
+// XDGConfigDir is where ConfigDir resolves once no legacy ~/.cortex (and no
+// $CORTEX_HOME) applies — i.e. the migration target for config.yaml. Unlike
+// ConfigDir it never honors baseOverride's legacy detection, so `cortex
+// migrate` can compute "where things go" independent of "where they are now".
+func XDGConfigDir() string {
+	if v := os.Getenv(EnvConfigDir); v != "" {
+		return ExpandPath(v)
+	}
+	return filepath.Join(xdgDir("XDG_CONFIG_HOME", ".config"), appName)
+}
+
+// XDGStateHome is the migration target for StateHome — the split-layout state
+// root, skipping the legacy ~/.cortex base.
+func XDGStateHome() string {
+	if v := os.Getenv(EnvStateDir); v != "" {
+		return ExpandPath(v)
+	}
+	return filepath.Join(xdgDir("XDG_STATE_HOME", filepath.Join(".local", "state")), appName)
+}
+
+// XDGCacheHome is the migration target for CacheHome — the split-layout cache
+// root, skipping the legacy ~/.cortex base.
+func XDGCacheHome() string {
+	if v := os.Getenv(EnvCacheDir); v != "" {
+		return ExpandPath(v)
+	}
+	return filepath.Join(xdgDir("XDG_CACHE_HOME", ".cache"), appName)
+}
+
+// LegacyBase exposes legacyBase to callers outside the package (`cortex
+// migrate`): the pre-XDG ~/.cortex directory, if it exists.
+func LegacyBase() (string, bool) { return legacyBase() }
+
 // SessionsRoot is the central directory under which every case (session) lives,
 // grouped by workspace: <state>/sessions/<slug>/<taskID>/. Walking it yields
 // every session across every repo — the substrate for cross-workspace audit.
