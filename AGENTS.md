@@ -23,7 +23,7 @@ user-visible behavior. See `SPEC.md` for the full design.
 Three surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
 
 - **CLI** — human commands *and* `--json` machine output for agents (Cobra + Charm v2 lipgloss).
-- **MCP server** — `cortex serve` (stdio), fifteen `cortex_*` tools for agents.
+- **MCP server** — `cortex serve` (stdio), seventeen `cortex_*` tools for agents.
 - **studio TUI** — `cortex studio` (Charm v2 bubbletea), a live, read-only board of **all** sessions
   across every repo: the session list plus the selected case's loop stepper, hypotheses, evidence,
   and receipts. Auto-refreshes; `--repo`/`--active` filters; `a` toggles active-only.
@@ -67,7 +67,7 @@ cortex/
 │   ├── store/
 │   │   ├── casefs/           #   JSON/JSONL case-file persistence ($XDG_STATE_HOME/cortex/sessions/<repo>/<id>/)
 │   │   └── redact/           #   secret-shape redaction (last-line filter before model output)
-│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (15 tools)
+│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (17 tools)
 │   ├── tui/board.go          # Charm v2 bubbletea studio — live cross-workspace board + loop stepper
 │   ├── config/               # XDG path resolution (paths.go) + cortex.yaml loader (budget/redact/cases_dir) + CORTEX_* env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_)

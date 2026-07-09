@@ -161,6 +161,14 @@ type overviewInput struct {
 	StaleAfterHours int `json:"staleAfterHours,omitempty" jsonschema:"hours an in-flight session may sit untouched before it counts as stale (default 24)"`
 }
 
+type archiveInput struct {
+	TaskID string `json:"taskId" jsonschema:"the terminal session to archive"`
+}
+
+type unarchiveInput struct {
+	TaskID string `json:"taskId" jsonschema:"the archived session to restore"`
+}
+
 type statusInput struct {
 	TaskID    string `json:"taskId" jsonschema:"the task to report on"`
 	Detail    string `json:"detail,omitempty" jsonschema:"standard | full (full adds tool health)"`
@@ -239,6 +247,14 @@ func (s *Server) register() {
 		Name:        "cortex_overview",
 		Description: "Cross-repository rollup of EVERY Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
 	}, s.handleOverview)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_archive",
+		Description: "Archive a terminal (complete/abandoned/blocked) session — MOVE it out of the active tree to the archive (reversible via cortex_unarchive; nothing is deleted). Refuses in-flight sessions. Workspace-independent; located by task ID.",
+	}, s.handleArchive)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_unarchive",
+		Description: "Restore an archived session back into the active tree. Workspace-independent; located by task ID.",
+	}, s.handleUnarchive)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_resolve",
 		Description: "Update a hypothesis's status as evidence accumulates (confirmed/challenged/rejected). History is retained and the resolution is appended to the evidence ledger — this is how contradicting evidence is handled without silently overwriting a prior explanation.",
@@ -375,6 +391,24 @@ func (s *Server) handleOverview(_ context.Context, _ *sdkmcp.CallToolRequest, in
 	}
 	o, err := kernel.BuildOverview(time.Duration(hours)*time.Hour, time.Now())
 	return result(o, err)
+}
+
+func (s *Server) handleArchive(_ context.Context, _ *sdkmcp.CallToolRequest, in archiveInput) (*sdkmcp.CallToolResult, any, error) {
+	// Workspace-independent: the session is located by task ID across the tree.
+	slug, err := kernel.ArchiveSession(in.TaskID)
+	if err != nil {
+		return result(nil, err)
+	}
+	return result(map[string]string{"archived": in.TaskID, "repo": slug}, nil)
+}
+
+func (s *Server) handleUnarchive(_ context.Context, _ *sdkmcp.CallToolRequest, in unarchiveInput) (*sdkmcp.CallToolResult, any, error) {
+	// Workspace-independent: the session is located by task ID across the tree.
+	slug, err := kernel.UnarchiveSession(in.TaskID)
+	if err != nil {
+		return result(nil, err)
+	}
+	return result(map[string]string{"unarchived": in.TaskID, "repo": slug}, nil)
 }
 
 func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in statusInput) (*sdkmcp.CallToolResult, any, error) {

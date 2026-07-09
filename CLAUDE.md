@@ -9,12 +9,12 @@ A local-first **agent kernel**: a small runtime between an LLM and the specialis
 (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault). It gives a task a durable **case file**
 and forces a reasoning loop — orient → investigate → plan → change → verify → preserve — through
 a **phase machine** with hard invariants. Two surfaces over one kernel: a CLI (`--json` for
-agents) and an MCP server (`cortex serve`, 15 tools).
+agents) and an MCP server (`cortex serve`, 17 tools).
 
 Surfaces / key files:
 - CLI: `cmd/cortex/` — cobra, split per-command; each `RunE` is thin → `kernelFor()` → `internal/kernel`.
 - Shared service layer (everything routes here): `internal/kernel/` (orient/investigate/plan/verify/persist/status/scope).
-- MCP server (thin, 15 tools): `internal/mcp/server.go`.
+- MCP server (thin, 17 tools): `internal/mcp/server.go`.
 - Domain (no internal deps): `internal/domain/` (case + phase machine, evidence, hypothesis, plan, verification, policy, envelope).
 - Adapters (flat, one file per tool): `internal/adapters/`.
 - Storage: `internal/store/casefs` (JSON/JSONL) + `internal/store/redact` (secret masking).

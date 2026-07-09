@@ -25,6 +25,8 @@ argument (a kernel is built per call), so one server process serves any workspac
 | `cortex_timeline` | a session's time-sorted activity — phases, evidence, tool calls, receipts (located by task ID, any repo) |
 | `cortex_metrics` | observability metrics — a task's evidence trail + time-in-phase, or the workspace aggregate |
 | `cortex_overview` | **cross-repo** rollup — completion/verified rates, mean time to complete, per-repo breakdown |
+| `cortex_archive` | archive a terminal session — move it out of the active tree to the archive (reversible, nothing deleted); refuses in-flight sessions (located by task ID, any repo) |
+| `cortex_unarchive` | restore an archived session back into the active tree (located by task ID, any repo) |
 | `cortex_resolve` | mark a hypothesis confirmed/challenged/rejected as evidence accumulates (history retained) |
 | `cortex_abort_task` | stop without deleting evidence (reason required) |
 | `cortex_read_evidence` | full evidence record by ID |

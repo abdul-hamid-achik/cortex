@@ -119,10 +119,10 @@ Cortex speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC)
 cortex serve
 ```
 
-It exposes fifteen tools: `cortex_start_task`, `cortex_investigate`, `cortex_plan`,
+It exposes seventeen tools: `cortex_start_task`, `cortex_investigate`, `cortex_plan`,
 `cortex_verify`, `cortex_remember`, `cortex_status`, `cortex_list_tasks`, `cortex_sessions`,
-`cortex_timeline`, `cortex_metrics`, `cortex_overview`, `cortex_resolve`, `cortex_abort_task`,
-`cortex_read_evidence`, `cortex_read_artifact`.
+`cortex_timeline`, `cortex_metrics`, `cortex_overview`, `cortex_archive`, `cortex_unarchive`,
+`cortex_resolve`, `cortex_abort_task`, `cortex_read_evidence`, `cortex_read_artifact`.
 
 Register it with [mcphub](https://github.com/abdul-hamid-achik/mcphub):
 

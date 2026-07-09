@@ -5,6 +5,13 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`cortex_archive` / `cortex_unarchive` MCP tools** (17 tools total) — expose the session
+  archive lifecycle to agents, mirroring the CLI `cortex archive`/`cortex unarchive` commands.
+  Both are workspace-independent (the session is located by task ID across the central tree),
+  reversible, and refuse in-flight sessions. Completes archive-lifecycle parity between the CLI
+  and MCP surfaces.
+
 ### Removed
 - **`config.AgentDir`**, the deprecated alias for `config.StateDir`, has been retired. Use
   `config.StateDir` directly.
