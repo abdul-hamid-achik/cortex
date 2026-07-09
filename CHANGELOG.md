@@ -5,6 +5,12 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+- **`config.AgentDir`**, the deprecated alias for `config.StateDir`, has been retired. Use
+  `config.StateDir` directly.
+
+## [0.5.0] — 2026-07-09
+
 ### Added — session archiving (safe, reversible lifecycle)
 - **`cortex archive <taskId>` / `cortex unarchive <taskId>`** complete the session lifecycle. Archiving
   **moves** a terminal (complete/abandoned/blocked) session from the active tree to
@@ -59,7 +65,7 @@ All notable changes to Cortex are documented here. The format follows
 
 ### Added — storage transparency in `config` and `doctor`
 - **`cortex config`** now prints a **Storage (XDG)** section — the resolved config, sessions,
-  cache, and registry paths — so it's obvious where Cortex keeps everything (and `--json` exposes
+  archive, and cache paths — so it's obvious where Cortex keeps everything (and `--json` exposes
   `configDir`/`sessionsRoot`/`archiveRoot`/`cacheDir`). Auditability without guessing.
 - **`cortex doctor`** gained a **Sessions** line — total · active · distinct repos · sessions root —
   a cross-workspace monitoring glance (also in `--json` under `sessions`).

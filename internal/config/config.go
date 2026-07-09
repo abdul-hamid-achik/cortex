@@ -21,10 +21,6 @@ import (
 // pollutes workspaces; Cortex brands its own dir and still git-ignores it.
 const StateDir = ".cortex"
 
-// AgentDir is a deprecated alias for StateDir kept for external importers.
-// Prefer StateDir.
-const AgentDir = StateDir
-
 // Config holds resolved runtime policy for a kernel instance.
 type Config struct {
 	// Workspace is the absolute path to the repository/working directory.
