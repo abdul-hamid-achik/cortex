@@ -141,12 +141,16 @@ Cortex routes questions to the smallest appropriate tool set rather than exposin
 | Signal | First tool | Then | Why |
 |---|---|---|---|
 | vague behavior | vecgrep | codemap | discover by meaning, then resolve structure |
-| known symbol | codemap | vecgrep | a known symbol resolves directly in the graph |
-| "what breaks if…" | codemap | review | blast radius is structural, not semantic |
+| known symbol | codemap | codemap | a known symbol resolves directly in the graph |
+| "what breaks if…" | codemap | codemap | blast radius is structural, not semantic |
 | browser bug | cairntrace | codemap | prove the failure, then map to code |
 | terminal bug | glyphrun | codemap | prove terminal behavior, then map to code |
 | old artifact | fcheap | vecgrep | recover prior evidence, then link to code |
 | secret-dependent | tvault | codemap | check capability without exposing values |
+
+`cortex --json route` exports this ordered executable matrix. `cortex --json route <question>`
+returns the selected row, so gateway instructions and agent prompts can consume policy data
+without copying the keyword table.
 
 Routing is **causal, not parallel**: bounded discovery (vecgrep/vidtrace) runs first, capped by
 `max_candidate_files_returned`; the top deduplicated file/symbol candidates are then fed into

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -466,6 +467,114 @@ func TestCLISessions(t *testing.T) {
 	}
 	if !strings.Contains(sout, "no stale sessions") {
 		t.Errorf("a fresh session should not be flagged stale, got:\n%s", sout)
+	}
+}
+
+func TestCLIRouteResolvedJSON(t *testing.T) {
+	question := "sporadic behavior with no clear owner"
+	out, err := runCLI(t, "--json", "route", question)
+	if err != nil {
+		t.Fatalf("route default: %v (%s)", err, out)
+	}
+	var got struct {
+		Question string   `json:"question"`
+		Surfaces []string `json:"surfaces"`
+		First    string   `json:"first"`
+		FollowUp string   `json:"followUp"`
+		Why      string   `json:"why"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("route output not JSON: %v (%s)", err, out)
+	}
+	want := domain.RouteFor(question, nil)
+	if got.Question != question || got.First != want.First || got.FollowUp != want.FollowUp || got.Why != want.Why {
+		t.Fatalf("route JSON is not a RouteFor projection: got %+v, want %+v", got, want)
+	}
+	if got.Surfaces == nil || len(got.Surfaces) != 0 {
+		t.Fatalf("default route surfaces = %#v, want empty array", got.Surfaces)
+	}
+}
+
+func TestCLIRouteRedactsQuestionWithoutChangingDecision(t *testing.T) {
+	token := "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"
+	question := "does this deploy have token " + token
+	for _, args := range [][]string{{"--json", "route", question}, {"route", question}} {
+		out, err := runCLI(t, args...)
+		if err != nil {
+			t.Fatalf("route secret question: %v (%s)", err, out)
+		}
+		if strings.Contains(out, token) {
+			t.Fatalf("route output leaked the raw question secret: %s", out)
+		}
+		if !strings.Contains(out, "tvault") {
+			t.Fatalf("redaction changed the secret-capability route: %s", out)
+		}
+	}
+}
+
+func TestCLIRouteRepeatableBrowserSurface(t *testing.T) {
+	question := "behavior is wrong"
+	out, err := runCLI(t, "--json", "route", question, "--surface", "code", "--surface", "browser")
+	if err != nil {
+		t.Fatalf("route browser: %v (%s)", err, out)
+	}
+	var got struct {
+		Surfaces []string `json:"surfaces"`
+		First    string   `json:"first"`
+		FollowUp string   `json:"followUp"`
+		Why      string   `json:"why"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("route output not JSON: %v (%s)", err, out)
+	}
+	want := domain.RouteFor(question, []domain.Surface{domain.SurfaceCode, domain.SurfaceBrowser})
+	if got.First != want.First || got.FollowUp != want.FollowUp || got.Why != want.Why {
+		t.Fatalf("browser route JSON = %+v, want %+v", got, want)
+	}
+	if strings.Join(got.Surfaces, ",") != "code,browser" {
+		t.Fatalf("repeatable surfaces lost or reordered: %v", got.Surfaces)
+	}
+}
+
+func TestCLIRouteExportsMatrixAndRejectsInvalidSurfaces(t *testing.T) {
+	out, err := runCLI(t, "--json", "route")
+	if err != nil {
+		t.Fatalf("route matrix: %v (%s)", err, out)
+	}
+	var matrix []domain.RoutingRule
+	if err := json.Unmarshal([]byte(out), &matrix); err != nil {
+		t.Fatalf("route matrix output not JSON: %v (%s)", err, out)
+	}
+	if len(matrix) != len(domain.RoutingMatrix) {
+		t.Fatalf("route matrix has %d rows, want %d", len(matrix), len(domain.RoutingMatrix))
+	}
+	for _, surface := range []string{"", "database"} {
+		if _, err := runCLI(t, "route", "question", "--surface", surface); err == nil {
+			t.Errorf("route accepted invalid surface %q", surface)
+		}
+	}
+}
+
+func TestCLIReindexCasesEmptyJSON(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	out, err := runCLI(t, "--json", "reindex-cases")
+	if err != nil {
+		t.Fatalf("reindex-cases: %v (%s)", err, out)
+	}
+	var got struct {
+		SessionsScanned   int      `json:"sessionsScanned"`
+		SessionLoadFailed int      `json:"sessionLoadFailed"`
+		RecordsScanned    int      `json:"recordsScanned"`
+		Indexed           int      `json:"indexed"`
+		Skipped           int      `json:"skipped"`
+		Failed            int      `json:"failed"`
+		Warnings          []string `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("reindex output not JSON: %v (%s)", err, out)
+	}
+	if got.SessionsScanned != 0 || got.SessionLoadFailed != 0 || got.RecordsScanned != 0 || got.Indexed != 0 || got.Skipped != 0 || got.Failed != 0 || got.Warnings == nil || len(got.Warnings) != 0 {
+		t.Fatalf("empty reindex report = %+v, want all-zero counts and empty warnings", got)
 	}
 }
 

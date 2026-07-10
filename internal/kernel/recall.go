@@ -2,11 +2,18 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
+	"github.com/abdul-hamid-achik/cortex/internal/config"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
+	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
+	"github.com/abdul-hamid-achik/cortex/internal/store/redact"
 )
 
 // caseRecaller is the subset of the veclite adapter the kernel uses for
@@ -23,6 +30,31 @@ type caseRecaller interface {
 func (k *Kernel) SetRecaller(r caseRecaller) { k.recaller = r }
 
 // --- indexing (redaction-gated, sensitive-excluded) ---
+// ReindexCasesReport summarizes a central-session recall backfill. Session and
+// record counts are separate so a load failure is never mistaken for an empty
+// case, and every non-indexed record is classified as skipped or failed.
+type ReindexCasesReport struct {
+	SessionsScanned   int      `json:"sessionsScanned"`
+	SessionLoadFailed int      `json:"sessionLoadFailed"`
+	RecordsScanned    int      `json:"recordsScanned"`
+	Indexed           int      `json:"indexed"`
+	Skipped           int      `json:"skipped"`
+	Failed            int      `json:"failed"`
+	Warnings          []string `json:"warnings"`
+}
+
+type recallIndexOutcome uint8
+
+const (
+	recallIndexSkipped recallIndexOutcome = iota
+	recallIndexIndexed
+	recallIndexFailed
+)
+
+type recallIndexResult struct {
+	outcome recallIndexOutcome
+	err     error
+}
 
 // indexResolvedHypothesis redacts and indexes one resolved hypothesis
 // (rejected/challenged are the gold; confirmed is lower value but still useful).
@@ -33,31 +65,44 @@ func (k *Kernel) indexResolvedHypothesis(ctx context.Context, c *domain.CaseFile
 	if k.recaller == nil {
 		return
 	}
-	stmt := k.red.String(h.Statement)
-	reason = k.red.String(reason)
-	goal := k.red.String(c.Goal)
-	disproof := disproofNote(h.DisproveBy)
-	// Redaction gate (SPEC §16.3): a hypothesis that triggered a redactor match
-	// is excluded from the cross-repo index, not masked into it.
-	if k.red.Detected(h.Statement) || k.red.Detected(reason) || k.red.Detected(disproof) {
+	evidence, err := k.store.Evidence(c.ID)
+	if err != nil {
+		k.recordWrite(c.ID, "veclite", "case_index", fmt.Errorf("load evidence for recall gate: %w", err))
 		return
 	}
+	if result := k.indexResolvedHypothesisResult(ctx, c, h, reason, evidence); result.err != nil {
+		k.recordWrite(c.ID, "veclite", "case_index", result.err)
+	}
+}
+
+func (k *Kernel) indexResolvedHypothesisResult(ctx context.Context, c *domain.CaseFile, h domain.Hypothesis, reason string, evidence []domain.Evidence) recallIndexResult {
+	if k.recaller == nil {
+		return recallIndexResult{outcome: recallIndexFailed, err: fmt.Errorf("cross-case recall is unavailable")}
+	}
+	key := c.ID + "/" + h.ID
+	disproof := disproofNote(h.DisproveBy)
+	if k.indexFieldsDetected(key, c.ID, c.Workspace.Repository, c.Goal, h.Statement,
+		string(h.Status), string(h.Confidence), disproof, reason) ||
+		referencesSensitiveEvidence(h.Supports, evidence) {
+		return recallIndexResult{outcome: recallIndexSkipped}
+	}
 	rec := adapters.IndexRecord{
-		Key:            c.ID + "/" + h.ID,
-		Kind:           "hypothesis",
-		TaskID:         c.ID,
-		Repo:           c.Workspace.Repository,
-		Goal:           goal,
-		Statement:      stmt,
-		Status:         string(h.Status),
-		Confidence:     string(h.Confidence),
-		DisproveBy:     disproof,
-		ResolvedReason: reason,
+		Key:            k.red.String(key),
+		Kind:           k.red.String("hypothesis"),
+		TaskID:         k.red.String(c.ID),
+		Repo:           k.red.String(c.Workspace.Repository),
+		Goal:           k.red.String(c.Goal),
+		Statement:      k.red.String(h.Statement),
+		Status:         k.red.String(string(h.Status)),
+		Confidence:     k.red.String(string(h.Confidence)),
+		DisproveBy:     k.red.String(disproof),
+		ResolvedReason: k.red.String(reason),
 		Timestamp:      k.now(),
 	}
 	if err := k.recaller.IndexCase(ctx, rec); err != nil {
-		k.recordWrite(c.ID, "veclite", "case_index", err)
+		return recallIndexResult{outcome: recallIndexFailed, err: err}
 	}
+	return recallIndexResult{outcome: recallIndexIndexed}
 }
 
 // indexReceipt redacts and indexes one definitive (passed/failed) verification
@@ -67,49 +112,229 @@ func (k *Kernel) indexReceipt(ctx context.Context, c *domain.CaseFile, r domain.
 	if k.recaller == nil || r.Sensitive {
 		return
 	}
-	claim := k.red.String(r.Claim)
-	goal := k.red.String(c.Goal)
-	if k.red.Detected(r.Claim) || k.red.Detected(r.Notes) {
+	evidence, err := k.store.Evidence(c.ID)
+	if err != nil {
+		k.recordWrite(c.ID, "veclite", "case_index", fmt.Errorf("load evidence for recall gate: %w", err))
 		return
 	}
-	rec := adapters.IndexRecord{
-		Key:            c.ID + "/" + r.ID,
-		Kind:           "verification",
-		TaskID:         c.ID,
-		Repo:           c.Workspace.Repository,
-		Goal:           goal,
-		Statement:      claim,
-		Status:         string(r.Status),
-		Confidence:     "medium",
-		ResolvedReason: k.red.String(r.Notes),
-		Surface:        string(r.Surface),
-		Artifact:       r.Artifact,
-		Timestamp:      r.Timestamp,
-	}
-	if err := k.recaller.IndexCase(ctx, rec); err != nil {
-		k.recordWrite(c.ID, "veclite", "case_index", err)
+	if result := k.indexReceiptResult(ctx, c, r, evidence); result.err != nil {
+		k.recordWrite(c.ID, "veclite", "case_index", result.err)
 	}
 }
 
+func (k *Kernel) indexReceiptResult(ctx context.Context, c *domain.CaseFile, r domain.VerificationRecord, evidence []domain.Evidence) recallIndexResult {
+	if k.recaller == nil {
+		return recallIndexResult{outcome: recallIndexFailed, err: fmt.Errorf("cross-case recall is unavailable")}
+	}
+	if r.Sensitive || referencesSensitiveEvidence(r.Evidence, evidence) {
+		return recallIndexResult{outcome: recallIndexSkipped}
+	}
+	key := c.ID + "/" + r.ID
+	if k.indexFieldsDetected(key, c.ID, c.Workspace.Repository, c.Goal, r.Claim,
+		string(r.Status), string(r.Surface), r.Notes, r.Artifact) {
+		return recallIndexResult{outcome: recallIndexSkipped}
+	}
+	rec := adapters.IndexRecord{
+		Key:            k.red.String(key),
+		Kind:           k.red.String("verification"),
+		TaskID:         k.red.String(c.ID),
+		Repo:           k.red.String(c.Workspace.Repository),
+		Goal:           k.red.String(c.Goal),
+		Statement:      k.red.String(r.Claim),
+		Status:         k.red.String(string(r.Status)),
+		Confidence:     k.red.String("medium"),
+		ResolvedReason: k.red.String(r.Notes),
+		Surface:        k.red.String(string(r.Surface)),
+		Artifact:       k.red.String(r.Artifact),
+		Timestamp:      r.Timestamp,
+	}
+	if err := k.recaller.IndexCase(ctx, rec); err != nil {
+		return recallIndexResult{outcome: recallIndexFailed, err: err}
+	}
+	return recallIndexResult{outcome: recallIndexIndexed}
+}
+
 // indexCaseForRecall is the completion-time sweep: index all resolved
-// (non-active) hypotheses and definitive (passed/failed) receipts. The
-// just-resolved hypothesis was already indexed by the resolve hook with its
-// reason; this backfills the rest (reason empty — the ledger is authoritative).
+// (non-active) hypotheses and definitive (passed/failed) receipts. Resolution
+// evidence reconstructs each reason so an upsert cannot erase the richer record
+// written by the resolve hook.
 // Called from Remember after the case is durably saved.
 func (k *Kernel) indexCaseForRecall(ctx context.Context, c *domain.CaseFile, hyps []domain.Hypothesis, receipts []domain.VerificationRecord) {
 	if k.recaller == nil {
 		return
 	}
+	evidence, err := k.store.Evidence(c.ID)
+	if err != nil {
+		k.recordWrite(c.ID, "veclite", "case_index", fmt.Errorf("load evidence for recall gate: %w", err))
+		return
+	}
 	for _, h := range hyps {
 		if h.Status != domain.HypActive {
-			k.indexResolvedHypothesis(ctx, c, h, "")
+			if result := k.indexResolvedHypothesisResult(ctx, c, h, resolvedReasonFromEvidence(h.ID, evidence), evidence); result.err != nil {
+				k.recordWrite(c.ID, "veclite", "case_index", result.err)
+			}
 		}
 	}
 	for _, r := range receipts {
 		if r.Status == domain.VerifyPassed || r.Status == domain.VerifyFailed {
-			k.indexReceipt(ctx, c, r)
+			if result := k.indexReceiptResult(ctx, c, r, evidence); result.err != nil {
+				k.recordWrite(c.ID, "veclite", "case_index", result.err)
+			}
 		}
 	}
+}
+
+// ReindexCases rebuilds the recall index from active central sessions only.
+// Strict directory enumeration counts corrupt case.json files that the regular
+// session list intentionally hides from human audit views.
+func (k *Kernel) ReindexCases(ctx context.Context) (ReindexCasesReport, error) {
+	report := ReindexCasesReport{Warnings: []string{}}
+	sessions, err := centralSessionCandidates()
+	if err != nil {
+		return report, fmt.Errorf("enumerate central sessions: %w", err)
+	}
+	for _, session := range sessions {
+		report.SessionsScanned++
+		sessionStore, err := casefs.New(filepath.Join(config.SessionsRoot(), session.slug))
+		if err != nil {
+			report.SessionLoadFailed++
+			report.Warnings = append(report.Warnings, "one central session store was unreadable and was skipped")
+			continue
+		}
+		caseFile, err := sessionStore.Load(session.id)
+		if err != nil {
+			report.SessionLoadFailed++
+			report.Warnings = append(report.Warnings, "one central session had an unreadable case.json and was skipped")
+			continue
+		}
+		caseCfg := config.For(caseFile.Workspace.Root)
+		indexer := *k
+		indexer.red = redact.New(caseCfg.RedactLiterals...)
+		detail, err := LoadSession(session.slug, session.id)
+		if err != nil {
+			report.SessionLoadFailed++
+			warning := fmt.Sprintf("load %s/%s: %v", caseFile.Workspace.Repository, caseFile.ID, err)
+			report.Warnings = append(report.Warnings, indexer.red.String(warning))
+			continue
+		}
+		records, indexed, skipped, failed, warnings := indexer.indexCaseForRecallResults(ctx, detail.Case, detail.Evidence, detail.Hyps, detail.Receipts)
+		report.RecordsScanned += records
+		report.Indexed += indexed
+		report.Skipped += skipped
+		report.Failed += failed
+		report.Warnings = append(report.Warnings, warnings...)
+	}
+	return report, nil
+}
+
+type centralSessionCandidate struct {
+	slug string
+	id   string
+}
+
+func centralSessionCandidates() ([]centralSessionCandidate, error) {
+	root := config.SessionsRoot()
+	slugs, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var candidates []centralSessionCandidate
+	for _, slug := range slugs {
+		if !slug.IsDir() {
+			continue
+		}
+		tasks, err := os.ReadDir(filepath.Join(root, slug.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, task := range tasks {
+			if task.IsDir() {
+				candidates = append(candidates, centralSessionCandidate{slug: slug.Name(), id: task.Name()})
+			}
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].slug == candidates[j].slug {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].slug < candidates[j].slug
+	})
+	return candidates, nil
+}
+
+func (k *Kernel) indexCaseForRecallResults(ctx context.Context, c *domain.CaseFile, evidence []domain.Evidence, hyps []domain.Hypothesis, receipts []domain.VerificationRecord) (records, indexed, skipped, failed int, warnings []string) {
+	record := func(kind, id string, result recallIndexResult) {
+		switch result.outcome {
+		case recallIndexIndexed:
+			indexed++
+		case recallIndexSkipped:
+			skipped++
+		case recallIndexFailed:
+			failed++
+			warning := fmt.Sprintf("index %s/%s %s %s: %v", c.Workspace.Repository, c.ID, kind, id, result.err)
+			warnings = append(warnings, k.red.String(warning))
+		}
+	}
+	for _, h := range hyps {
+		records++
+		if h.Status == domain.HypActive {
+			skipped++
+			continue
+		}
+		record("hypothesis", h.ID, k.indexResolvedHypothesisResult(ctx, c, h, resolvedReasonFromEvidence(h.ID, evidence), evidence))
+	}
+	for _, r := range receipts {
+		records++
+		if r.Status != domain.VerifyPassed && r.Status != domain.VerifyFailed {
+			skipped++
+			continue
+		}
+		record("verification", r.ID, k.indexReceiptResult(ctx, c, r, evidence))
+	}
+	return records, indexed, skipped, failed, warnings
+}
+
+func resolvedReasonFromEvidence(hypothesisID string, evidence []domain.Evidence) string {
+	prefix := "hypothesis " + hypothesisID + " "
+	for i := len(evidence) - 1; i >= 0; i-- {
+		claim := evidence[i].Claim
+		if !strings.HasPrefix(claim, prefix) {
+			continue
+		}
+		separator := strings.Index(claim, ": ")
+		if separator < 0 {
+			continue
+		}
+		reason := claim[separator+2:]
+		if evidenceSuffix := strings.Index(reason, " [evidence:"); evidenceSuffix >= 0 {
+			reason = reason[:evidenceSuffix]
+		}
+		return strings.TrimSpace(reason)
+	}
+	return ""
+}
+
+func (k *Kernel) indexFieldsDetected(fields ...string) bool {
+	for _, field := range fields {
+		if k.red.Detected(field) {
+			return true
+		}
+	}
+	return false
+}
+
+func referencesSensitiveEvidence(ids []string, evidence []domain.Evidence) bool {
+	for _, id := range ids {
+		for _, item := range evidence {
+			if item.ID == id && item.Sensitivity == domain.SensitivitySensitive {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // disproofNote flattens a Disproof into a single string for the payload.

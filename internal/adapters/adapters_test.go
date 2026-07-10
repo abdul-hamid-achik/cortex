@@ -72,10 +72,13 @@ func TestRegistryThreadsRetryBudget(t *testing.T) {
 	}
 	// An adapter without an exec path (no SetMaxAutoRetries method) is skipped.
 	var cur, peak int32
-	r2 := NewRegistry(NewCodemap(), &slowHealthAdapter{name: "slow", cur: &cur, peak: &peak})
+	r2 := NewRegistry(nil, NewCodemap(), &slowHealthAdapter{name: "slow", cur: &cur, peak: &peak})
 	r2.SetMaxAutoRetries(2) // must not panic on the slow adapter
 	if cm := r2.Get("codemap").(*Codemap); cm.retries != 2 {
 		t.Errorf("codemap budget should be 2, got %d", cm.retries)
+	}
+	if len(r2.Names()) != 2 {
+		t.Errorf("nil adapter should be ignored, got names %v", r2.Names())
 	}
 }
 

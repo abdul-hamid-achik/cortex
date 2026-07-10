@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +71,64 @@ func TestCodemapReviewUnindexedIsPartial(t *testing.T) {
 	}
 	if !strings.Contains(factClaims(res), "not indexed") {
 		t.Errorf("review should note it's not indexed, got: %s", factClaims(res))
+	}
+}
+
+func TestCodemapReviewGoldenV1(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/codemap.review.v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, _ := (&Codemap{tool: fakeTool(string(fixture), "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	if res.Status != StatusPartial || !strings.Contains(strings.Join(res.Warnings, " "), "stale") {
+		t.Fatalf("canonical stale v1 review should be parsed but remain partial, got %s %v", res.Status, res.Warnings)
+	}
+	if !strings.Contains(res.Summary, "1 file") || !strings.Contains(res.Summary, "1 symbol") || !strings.Contains(res.Summary, "1 covering test") {
+		t.Errorf("canonical schema v1 fields were not parsed: %q", res.Summary)
+	}
+}
+
+func TestCodemapReviewUnsupportedSchemaVersion(t *testing.T) {
+	fixture := `{"schema_version":2,"indexed":true,"is_repo":true,"changed_files":[{"path":"a.go","status":"M","symbols":1}],"changed_symbols":[{"symbol":"Run"}],"covering_tests":[{"symbol":"TestRun"}]}`
+	res, _ := (&Codemap{tool: fakeTool(fixture, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	if res.Status != StatusPartial {
+		t.Fatalf("unsupported schema v2 must be partial, never authoritative; got %s", res.Status)
+	}
+	if len(res.Facts) != 0 {
+		t.Errorf("unsupported schema v2 must not produce review facts, got %d", len(res.Facts))
+	}
+	joined := res.Summary + " " + strings.Join(res.Warnings, " ")
+	if !strings.Contains(joined, "inconclusive") || !strings.Contains(joined, "schema_version 2") {
+		t.Errorf("unsupported schema warning must be explicit, got %q", joined)
+	}
+}
+
+func TestCodemapReviewLegacyNameAndPathAliasesRemainVisible(t *testing.T) {
+	fixture := `{"indexed":true,"is_repo":true,"changed_files":[{"path":"a.go","status":"M","symbols":1}],"changed_symbols":[{"name":"Run","kind":"function","path":"a.go","start_line":5,"end_line":7}],"blast_radius":[],"covering_tests":[],"untested_symbols":[],"stale":false}`
+	res, _ := (&Codemap{tool: fakeTool(fixture, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	if res.Status != StatusAuthoritative || !strings.Contains(res.Summary, "1 symbol") {
+		t.Fatalf("legacy name/path aliases were silently dropped: %s %q", res.Status, res.Summary)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, " "), "exported symbol") {
+		t.Fatalf("legacy aliased symbol did not reach public-contract checks: %v", res.Warnings)
+	}
+}
+
+func TestCodemapReviewRejectsExplicitLegacyAndMalformedV1(t *testing.T) {
+	fixtures := []string{
+		`{"schema_version":0,"indexed":true}`,
+		`{"schema_version":null,"indexed":true}`,
+		`{"schemaVersion":1,"indexed":true}`,
+		`{"schema_version":1,"project":"x","mode":"working","depth":3,"is_repo":true,"indexed":true,"changed_files":[],"changed_symbols":[],"blast_radius":[],"covering_tests":[],"stale":false}`,
+		`{"schema_version":1,"project":"x","mode":"working","depth":3,"is_repo":true,"indexed":true,"changed_files":[],"changed_symbols":[{"name":"Run"}],"blast_radius":[{"name":"Caller"}],"covering_tests":[],"untested_symbols":[],"stale":false}`,
+		`{"schema_version":1,"project":"x","mode":"working","depth":3,"is_repo":true,"indexed":true,"changed_files":[],"changed_symbols":[{"symbol":"Run","kind":"function","file":"a.go","start_line":7,"end_line":5}],"blast_radius":[],"covering_tests":[],"untested_symbols":[],"stale":false}`,
+		`{"schema_version":1,"project":"x","mode":"working","depth":3,"is_repo":true,"indexed":true,"changed_files":[],"changed_symbols":[],"blast_radius":[],"covering_tests":[],"untested_symbols":[],"stale":false,"risk":{"level":"high","score":2,"factors":[]}}`,
+	}
+	for _, fixture := range fixtures {
+		res, _ := (&Codemap{tool: fakeTool(fixture, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+		if res.Status != StatusPartial || len(res.Facts) != 0 {
+			t.Errorf("incompatible versioned review must be partial with no facts: %s => %s %+v", fixture, res.Status, res.Facts)
+		}
 	}
 }
 
@@ -552,6 +611,11 @@ func TestCodemapReviewRiskBand(t *testing.T) {
 	r2, _ := (&Codemap{tool: fakeTool(noRisk, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
 	if r2.Status != StatusAuthoritative || strings.Contains(strings.Join(r2.Warnings, " "), "diff risk") {
 		t.Errorf("a review with no risk band must not emit a risk warning, got %s %v", r2.Status, r2.Warnings)
+	}
+	explicitZero := strings.Replace(noRisk, "{", `{"schema_version":0,`, 1)
+	r3, _ := (&Codemap{tool: fakeTool(explicitZero, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	if r3.Status != StatusPartial || len(r3.Facts) != 0 {
+		t.Errorf("explicit schema version 0 must be rejected; only an absent version is legacy, got %s %+v", r3.Status, r3.Facts)
 	}
 }
 
