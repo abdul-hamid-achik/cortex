@@ -14,13 +14,12 @@ import (
 // newTestVeclite builds a veclite adapter with a stubbed embedder (no ollama)
 // and a fake runner the test drives.
 func newTestVeclite(t *testing.T, r runner) *Veclite {
-	t.Helper()
 	v := &Veclite{
-		tool:       tool{bin: "veclite", run: r, redact: redact.New(), timeout: 5 * time.Second, retries: 0},
-		dbPath:     "/tmp/test-cases.veclite",
-		embedModel: "nomic-embed-text",
-		embedURL:   "http://localhost:11434/api/embeddings",
-		enabled:    true,
+		// bin is "git" (on PATH in CI) so binExists passes and the fake runner
+		// drives the call; the real veclite binary need not be installed.
+		tool:     tool{bin: "git", run: r, redact: redact.New(), timeout: 5 * time.Second, retries: 0},
+		embedURL: "http://localhost:11434/api/embeddings",
+		enabled:  true,
 	}
 	v.embedFn = func(context.Context, string) ([]float64, error) {
 		return make([]float64, 768), nil // static zero vector — only shape matters
