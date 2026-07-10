@@ -1,9 +1,12 @@
 package adapters
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -146,6 +149,26 @@ type cmSymbolRef struct {
 	EndLine   int    `json:"end_line"`
 	Signature string `json:"signature"`
 	Doc       string `json:"doc"`
+}
+
+func (r *cmSymbolRef) UnmarshalJSON(data []byte) error {
+	type symbolRef cmSymbolRef
+	var decoded struct {
+		symbolRef
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = cmSymbolRef(decoded.symbolRef)
+	if r.Symbol == "" {
+		r.Symbol = decoded.Name
+	}
+	if r.File == "" {
+		r.File = decoded.Path
+	}
+	return nil
 }
 
 func (c *Codemap) impact(ctx context.Context, dir, symbol string, depth int) (Result, error) {
@@ -292,6 +315,194 @@ func (c *Codemap) searchLike(ctx context.Context, dir, op, query string, top int
 
 // --- review ---
 
+var cmReviewV1RequiredFields = []string{
+	"schema_version", "project", "mode", "depth", "is_repo", "indexed",
+	"changed_files", "changed_symbols", "blast_radius", "covering_tests",
+	"untested_symbols", "stale",
+}
+
+func reviewSchema(data string) (version int, present bool, err error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(data), &fields); err != nil {
+		return 0, false, err
+	}
+	for field := range fields {
+		normalized := strings.ToLower(strings.ReplaceAll(field, "_", ""))
+		if field != "schema_version" && normalized == "schemaversion" {
+			return 0, true, fmt.Errorf("schema field %q is unsupported; use schema_version", field)
+		}
+	}
+	raw, present := fields["schema_version"]
+	if !present {
+		return 0, false, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &version) != nil {
+		return 0, true, fmt.Errorf("schema_version must be integer 1")
+	}
+	if version != 1 {
+		return version, true, fmt.Errorf("schema_version %d is unsupported; only version 1 can be interpreted", version)
+	}
+	for _, field := range cmReviewV1RequiredFields {
+		value, ok := fields[field]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return version, true, fmt.Errorf("schema_version 1 report is missing required field %q", field)
+		}
+	}
+	if err := validateReviewV1Fields(fields); err != nil {
+		return version, true, err
+	}
+	return version, true, nil
+}
+
+func validateReviewV1Fields(fields map[string]json.RawMessage) error {
+	var project, mode string
+	var depth int
+	var isRepo, indexed, stale bool
+	if json.Unmarshal(fields["project"], &project) != nil ||
+		json.Unmarshal(fields["mode"], &mode) != nil ||
+		json.Unmarshal(fields["depth"], &depth) != nil ||
+		json.Unmarshal(fields["is_repo"], &isRepo) != nil ||
+		json.Unmarshal(fields["indexed"], &indexed) != nil ||
+		json.Unmarshal(fields["stale"], &stale) != nil ||
+		(mode != "working" && mode != "staged" && mode != "since") || depth < 1 {
+		return fmt.Errorf("schema_version 1 report has invalid required scalar fields")
+	}
+	if err := validateReviewV1Rows(fields["changed_files"], "changed_files", validateReviewV1ChangedFile); err != nil {
+		return err
+	}
+	for _, field := range []string{"changed_symbols", "untested_symbols"} {
+		if err := validateReviewV1Rows(fields[field], field, validateReviewV1Symbol); err != nil {
+			return err
+		}
+	}
+	for _, field := range []string{"blast_radius", "covering_tests"} {
+		if err := validateReviewV1Rows(fields[field], field, validateReviewV1Impact); err != nil {
+			return err
+		}
+	}
+	if raw, ok := fields["hotspots"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if err := validateReviewV1Rows(raw, "hotspots", validateReviewV1Symbol); err != nil {
+			return err
+		}
+	}
+	if raw, ok := fields["call_graph"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		var callGraph string
+		if json.Unmarshal(raw, &callGraph) != nil ||
+			(callGraph != "resolved" && callGraph != "name" && callGraph != "unresolved" && callGraph != "none") {
+			return fmt.Errorf("schema_version 1 field %q is invalid", "call_graph")
+		}
+	}
+	if raw, ok := fields["risk"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if err := validateReviewV1Risk(raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateReviewV1Rows(raw json.RawMessage, field string, validate func(map[string]json.RawMessage) bool) error {
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return fmt.Errorf("schema_version 1 field %q must be an array of objects", field)
+	}
+	for i, row := range rows {
+		if !validate(row) {
+			return fmt.Errorf("schema_version 1 field %q item %d is malformed", field, i)
+		}
+	}
+	return nil
+}
+
+func validateReviewV1ChangedFile(row map[string]json.RawMessage) bool {
+	var path, status string
+	var symbols int
+	return decodeRequiredString(row, "path", &path) && decodeRequiredString(row, "status", &status) &&
+		(status == "A" || status == "M" || status == "D" || status == "?") &&
+		decodeRequiredInt(row, "symbols", &symbols) && symbols >= 0
+}
+
+func validateReviewV1Symbol(row map[string]json.RawMessage) bool {
+	var symbol, kind, file string
+	var start, end int
+	return decodeRequiredString(row, "symbol", &symbol) && decodeRequiredString(row, "kind", &kind) &&
+		validReviewSymbolKind(kind) && decodeRequiredString(row, "file", &file) &&
+		decodeRequiredInt(row, "start_line", &start) && start >= 1 &&
+		decodeRequiredInt(row, "end_line", &end) && end >= start
+}
+
+func validateReviewV1Impact(row map[string]json.RawMessage) bool {
+	var symbol, kind, file string
+	var start, depth int
+	return decodeRequiredString(row, "symbol", &symbol) && decodeRequiredString(row, "kind", &kind) &&
+		validReviewSymbolKind(kind) && decodeRequiredString(row, "file", &file) &&
+		decodeRequiredInt(row, "start_line", &start) && start >= 1 &&
+		decodeRequiredInt(row, "depth", &depth) && depth >= 0
+}
+
+func validReviewSymbolKind(kind string) bool {
+	switch kind {
+	case "file", "function", "method", "type", "class", "module", "variable", "test":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateReviewV1Risk(raw json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("schema_version 1 field %q must be an object", "risk")
+	}
+	var level string
+	var score float64
+	if !decodeRequiredString(fields, "level", &level) ||
+		(level != "low" && level != "medium" && level != "high") ||
+		!decodeRequiredFloat(fields, "score", &score) || score < 0 || score > 1 {
+		return fmt.Errorf("schema_version 1 field %q has invalid level or score", "risk")
+	}
+	var factors []map[string]json.RawMessage
+	if rawFactors, ok := fields["factors"]; !ok || json.Unmarshal(rawFactors, &factors) != nil {
+		return fmt.Errorf("schema_version 1 field %q must contain a factors array", "risk")
+	}
+	if len(factors) > 5 {
+		return fmt.Errorf("schema_version 1 field %q has too many factors", "risk")
+	}
+	for i, factor := range factors {
+		var name, detail string
+		var severity float64
+		if !decodeRequiredString(factor, "factor", &name) || !validReviewRiskFactor(name) ||
+			!decodeRequiredFloat(factor, "severity", &severity) || severity < 0 || severity > 1 ||
+			!decodeRequiredString(factor, "detail", &detail) {
+			return fmt.Errorf("schema_version 1 field %q factor %d is malformed", "risk", i)
+		}
+	}
+	return nil
+}
+
+func validReviewRiskFactor(factor string) bool {
+	switch factor {
+	case "untested_changes", "hotspot_fanin", "cross_package", "ambiguity", "unresolved":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeRequiredString(row map[string]json.RawMessage, key string, out *string) bool {
+	raw, ok := row[key]
+	return ok && json.Unmarshal(raw, out) == nil && strings.TrimSpace(*out) != ""
+}
+
+func decodeRequiredInt(row map[string]json.RawMessage, key string, out *int) bool {
+	raw, ok := row[key]
+	return ok && json.Unmarshal(raw, out) == nil
+}
+
+func decodeRequiredFloat(row map[string]json.RawMessage, key string, out *float64) bool {
+	raw, ok := row[key]
+	return ok && json.Unmarshal(raw, out) == nil
+}
+
 type cmReview struct {
 	Indexed         bool            `json:"indexed"`
 	IsRepo          bool            `json:"is_repo"`
@@ -304,6 +515,7 @@ type cmReview struct {
 	Note            string          `json:"note"`
 	Resolution      string          `json:"resolution"`
 	CallGraph       string          `json:"call_graph"`
+	Stale           bool            `json:"stale"`
 	Risk            *cmReviewRisk   `json:"risk"` // codemap ≥0.36 diff-scoped aggregate risk
 }
 
@@ -344,6 +556,16 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 	if res, ok := codemapError("review", stdout); ok {
 		return res, nil
 	}
+	_, _, schemaErr := reviewSchema(stdout)
+	if schemaErr != nil {
+		warning := "codemap review " + schemaErr.Error()
+		return Result{
+			Tool: "codemap", Operation: "review", Status: StatusPartial,
+			Summary:  "codemap review is inconclusive: incompatible schema",
+			Warnings: []string{warning},
+			Raw:      stdout,
+		}, nil
+	}
 	var r cmReview
 	if derr := decodeJSON(stdout, &r); derr != nil {
 		return degraded("codemap", "review", stdout, stderr, code), nil
@@ -381,6 +603,9 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 	if !r.Indexed {
 		status, conf = StatusPartial, "medium"
 		claim = fmt.Sprintf("diff touches %s (codemap not indexed — no blast radius; run `codemap index`)", pluralize(len(r.ChangedFiles), "file"))
+	} else if r.Stale {
+		status, conf = StatusPartial, "medium"
+		warns = append(warns, "codemap review is stale — run `codemap index` before trusting its blast radius")
 	}
 	facts := []Fact{{Kind: "code_graph", Claim: claim, Confidence: conf}}
 	// Diff-scoped aggregate risk band (codemap ≥0.36). A medium/high band warns

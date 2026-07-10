@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -118,9 +119,18 @@ func LoadSession(slug, taskID string) (SessionDetail, error) {
 	if err != nil {
 		return SessionDetail{}, err
 	}
-	ev, _ := store.Evidence(taskID)
-	hyps, _ := store.Hypotheses(taskID)
-	recs, _ := store.Verifications(taskID)
+	ev, err := store.Evidence(taskID)
+	if err != nil {
+		return SessionDetail{}, fmt.Errorf("load evidence: %w", err)
+	}
+	hyps, err := store.Hypotheses(taskID)
+	if err != nil {
+		return SessionDetail{}, fmt.Errorf("load hypotheses: %w", err)
+	}
+	recs, err := store.Verifications(taskID)
+	if err != nil {
+		return SessionDetail{}, fmt.Errorf("load verifications: %w", err)
+	}
 	return SessionDetail{Case: c, Evidence: ev, Hyps: hyps, Receipts: recs}, nil
 }
 

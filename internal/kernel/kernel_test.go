@@ -1825,6 +1825,267 @@ func (f *fakeRecaller) RecallCases(_ context.Context, query, repo string, limit 
 	}
 	return f.hits, nil
 }
+func TestReindexCasesScansOnlyCentralSessionsAndUsesRecallGate(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	ctx := context.Background()
+	ws := repoNamed(t, "central")
+	projectLiteral := "violet-sunbeam-unique"
+	if err := os.WriteFile(filepath.Join(ws, "cortex.yaml"), []byte("redact_literals:\n  - "+projectLiteral+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := kernelAt(t, ws)
+	started, err := source.StartTask(ctx, StartInput{Goal: "rebuild prior case recall"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"
+	planned, err := source.Plan(PlanInput{
+		TaskID: started.TaskID,
+		Hypotheses: []HypothesisInput{
+			{Statement: "resolved central hypothesis", DisproveBy: "focused test"},
+			{Statement: "leaked " + secret, DisproveBy: "focused test"},
+			{Statement: "project literal " + projectLiteral, DisproveBy: "focused test"},
+			{Statement: "still active", DisproveBy: "focused test"},
+		},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"central.go"}},
+		Uncertainty:    "none",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range planned.Hypotheses[:3] {
+		if _, err := source.Resolve(ResolveInput{
+			TaskID: started.TaskID, HypothesisID: h.ID, Status: string(domain.HypRejected), Reason: "resolved",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, receipt := range []domain.VerificationRecord{
+		{ID: "vr_pass", Claim: "definitive central receipt", Status: domain.VerifyPassed},
+		{ID: "vr_sensitive", Claim: "sensitive central receipt", Status: domain.VerifyPassed, Sensitive: true},
+		{ID: "vr_redacted", Claim: "receipt contains " + secret, Status: domain.VerifyFailed},
+		{ID: "vr_not_run", Claim: "not definitive", Status: domain.VerifyNotRun},
+	} {
+		if err := source.Store().AppendVerification(started.TaskID, receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	archivedWS := repoNamed(t, "archived")
+	archivedKernel := kernelAt(t, archivedWS)
+	archived, err := archivedKernel.StartTask(ctx, StartInput{Goal: "archived case"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archivedKernel.Store().SaveHypotheses(archived.TaskID, []domain.Hypothesis{{
+		ID: "hyp_archived", Statement: "must stay excluded", Status: domain.HypRejected,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	archivedCase, err := archivedKernel.Store().Load(archived.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivedCase.Status = domain.PhaseAbandoned
+	if err := archivedKernel.Store().Save(archivedCase); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ArchiveSession(archived.TaskID); err != nil {
+		t.Fatal(err)
+	}
+
+	localWS := repoNamed(t, "local")
+	localCfg := config.For(localWS)
+	localCfg.CasesDir = filepath.Join(t.TempDir(), "repo-local-cases")
+	localStore, err := casefs.New(localCfg.CasesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localKernel := NewWith(localCfg, localStore, adapters.NewRegistry(adapters.NewGit()))
+	local, err := localKernel.StartTask(ctx, StartInput{Goal: "repo-local case"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := localStore.SaveHypotheses(local.TaskID, []domain.Hypothesis{{
+		ID: "hyp_local", Statement: "must stay excluded", Status: domain.HypRejected,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	corruptWS := repoNamed(t, "corrupt")
+	corruptKernel := kernelAt(t, corruptWS)
+	corrupt, err := corruptKernel.StartTask(ctx, StartInput{Goal: "corrupt ledger"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptHypotheses := filepath.Join(config.SessionsRoot(), "corrupt", corrupt.TaskID, "hypotheses.json")
+	if err := os.WriteFile(corruptHypotheses, []byte("{not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	brokenCaseDir := filepath.Join(config.SessionsRoot(), "broken", "task_broken")
+	if err := os.MkdirAll(brokenCaseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenCaseDir, "case.json"), []byte("{not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fr := &fakeRecaller{}
+	reindexer := kernelAt(t, ws)
+	reindexer.SetRecaller(fr)
+	report, err := reindexer.ReindexCases(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SessionsScanned != 3 || report.RecordsScanned != 8 {
+		t.Fatalf("reindex scan scope = %+v, want 3 central session directories and 8 readable records", report)
+	}
+	if report.Indexed != 2 || report.Skipped != 6 || report.Failed != 0 || report.SessionLoadFailed != 2 || len(report.Warnings) != 2 {
+		t.Fatalf("reindex classification = %+v, want indexed=2 skipped=6 record-failed=0 session-load-failed=2", report)
+	}
+	warningText := strings.Join(report.Warnings, " ")
+	if !strings.Contains(warningText, "unreadable case.json") || !strings.Contains(warningText, "load hypotheses") {
+		t.Fatalf("corrupt session warnings = %q", warningText)
+	}
+	if len(fr.indexed) != 2 {
+		t.Fatalf("recaller got %d records, want 2: %+v", len(fr.indexed), fr.indexed)
+	}
+	kinds := map[string]bool{}
+	for _, record := range fr.indexed {
+		kinds[record.Kind] = true
+		if record.Key == "hyp_archived" || record.Key == "hyp_local" || strings.Contains(record.Statement, secret) || strings.Contains(record.Statement, projectLiteral) {
+			t.Errorf("excluded or unredacted record reached recall index: %+v", record)
+		}
+		if record.Kind == "hypothesis" && record.ResolvedReason != "resolved" {
+			t.Errorf("reindex erased the hypothesis resolution reason: %+v", record)
+		}
+	}
+	if !kinds["hypothesis"] || !kinds["verification"] {
+		t.Errorf("resolved hypothesis and definitive receipt were not both indexed: %+v", fr.indexed)
+	}
+}
+
+func TestReindexCasesRedactsLoadWarningsWithOriginWorkspaceConfig(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	literal := "warning-violet"
+	ws := repoNamed(t, literal)
+	if err := os.WriteFile(filepath.Join(ws, "cortex.yaml"), []byte("redact_literals:\n  - "+literal+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := kernelAt(t, ws)
+	started, err := source.StartTask(context.Background(), StartInput{Goal: "corrupt one source ledger"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := filepath.Join(config.SessionsRoot(), filepath.Base(ws), started.TaskID, "hypotheses.json")
+	if err := os.WriteFile(ledger, []byte("{not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reindexer := kernelAt(t, repoNamed(t, "reindex-origin"))
+	reindexer.SetRecaller(&fakeRecaller{})
+	report, err := reindexer.ReindexCases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SessionLoadFailed != 1 || len(report.Warnings) != 1 {
+		t.Fatalf("corrupt origin classification = %+v", report)
+	}
+	if strings.Contains(report.Warnings[0], literal) || !strings.Contains(report.Warnings[0], "«redacted»") {
+		t.Fatalf("origin workspace literal leaked through reindex warning: %q", report.Warnings[0])
+	}
+}
+
+func TestReindexCasesEmptyState(t *testing.T) {
+	k := newTestKernel(t, testRepo(t))
+	k.SetRecaller(&fakeRecaller{})
+	report, err := k.ReindexCases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SessionsScanned != 0 || report.SessionLoadFailed != 0 || report.RecordsScanned != 0 || report.Indexed != 0 ||
+		report.Skipped != 0 || report.Failed != 0 || report.Warnings == nil || len(report.Warnings) != 0 {
+		t.Fatalf("empty reindex report = %+v, want zero counts and empty warnings", report)
+	}
+}
+func TestRecallIndexGateExcludesSensitiveLinksAndEveryRedactedField(t *testing.T) {
+	k := newTestKernel(t, testRepo(t))
+	started, err := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Store().AppendEvidence(started.TaskID, domain.Evidence{
+		ID: "ev_sensitive", Claim: "sensitive source", Source: domain.Source{Tool: "test"},
+		Sensitivity: domain.SensitivitySensitive, Timestamp: k.now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRecaller{}
+	k.SetRecaller(fr)
+	c, err := k.Store().Load(started.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"
+	k.indexResolvedHypothesis(context.Background(), c, domain.Hypothesis{
+		ID: "hyp_reason", Statement: "safe", Status: domain.HypRejected,
+	}, "reason "+secret)
+	k.indexResolvedHypothesis(context.Background(), c, domain.Hypothesis{
+		ID: "hyp_disproof", Statement: "safe", Status: domain.HypRejected,
+		DisproveBy: domain.Disproof{Note: "run " + secret},
+	}, "")
+	k.indexResolvedHypothesis(context.Background(), c, domain.Hypothesis{
+		ID: "hyp_support", Statement: "safe", Status: domain.HypRejected,
+		Supports: []string{"ev_sensitive"},
+	}, "")
+	k.indexReceipt(context.Background(), c, domain.VerificationRecord{
+		ID: "vr_artifact", Claim: "safe", Status: domain.VerifyPassed, Artifact: "stash://" + secret,
+	})
+	k.indexReceipt(context.Background(), c, domain.VerificationRecord{
+		ID: "vr_evidence", Claim: "safe", Status: domain.VerifyPassed, Evidence: []string{"ev_sensitive"},
+	})
+	if len(fr.indexed) != 0 {
+		t.Fatalf("redacted fields or sensitive links reached recall index: %+v", fr.indexed)
+	}
+
+	k.indexResolvedHypothesis(context.Background(), c, domain.Hypothesis{
+		ID: "hyp_clean", Statement: "clean hypothesis", Status: domain.HypRejected,
+		DisproveBy: domain.Disproof{Note: "focused test"},
+	}, "clean reason")
+	k.indexReceipt(context.Background(), c, domain.VerificationRecord{
+		ID: "vr_clean", Claim: "clean receipt", Status: domain.VerifyPassed, Artifact: "fcheap://stash/clean",
+	})
+	if len(fr.indexed) != 2 {
+		t.Fatalf("clean records should pass the same gate, got %+v", fr.indexed)
+	}
+}
+
+func TestLiveRecallIndexingFailsClosedWhenEvidenceLedgerIsUnreadable(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	ws := repoNamed(t, "ledger-failure")
+	k := kernelAt(t, ws)
+	started, err := k.StartTask(context.Background(), StartInput{Goal: "exercise the live recall gate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := filepath.Join(config.SessionsRoot(), filepath.Base(ws), started.TaskID, "evidence.jsonl")
+	if err := os.WriteFile(ledger, []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRecaller{}
+	k.SetRecaller(fr)
+	c, err := k.Store().Load(started.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hypothesis := domain.Hypothesis{ID: "hyp_safe", Statement: "safe hypothesis", Status: domain.HypRejected}
+	receipt := domain.VerificationRecord{ID: "vr_safe", Claim: "safe receipt", Status: domain.VerifyPassed}
+	k.indexResolvedHypothesis(context.Background(), c, hypothesis, "safe reason")
+	k.indexReceipt(context.Background(), c, receipt)
+	k.indexCaseForRecall(context.Background(), c, []domain.Hypothesis{hypothesis}, []domain.VerificationRecord{receipt})
+	if len(fr.indexed) != 0 {
+		t.Fatalf("unreadable evidence ledger must block every live recall entry point: %+v", fr.indexed)
+	}
+}
 
 func TestResolveIndexesRejectedHypothesis(t *testing.T) {
 	fr := &fakeRecaller{}

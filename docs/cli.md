@@ -50,6 +50,21 @@ cortex investigate task_06FK… "where is the OAuth return URL handled"
 | `--surface` (repeatable) | override the routing surfaces |
 | `--depth` | `quick` \| `standard` \| `deep` |
 
+### `cortex route [question]`
+
+Export the executable routing matrix for agents and gateway instructions:
+
+```bash
+cortex --json route
+```
+
+Pass a question to resolve one decision, or repeat `--surface` to override the detected
+surface. Unknown surfaces fail instead of silently falling through.
+
+```bash
+cortex --json route --surface browser "the login flow is wrong"
+```
+
 ### `cortex recall-cases <query>`
 
 Search the cross-case recall index (veclite) for prior resolved hypotheses and definitive
@@ -64,6 +79,22 @@ cortex recall-cases "where is the login redirect handled" --repo liftclub --limi
 |---|---|
 | `--repo` | scope to a repository name (empty = cross-repo) |
 | `--limit` | max prior cases to return (default 5) |
+
+### `cortex reindex-cases`
+
+Backfill the cross-case recall index from active central sessions under
+`$XDG_STATE_HOME/cortex/sessions/**`:
+
+```bash
+cortex --json reindex-cases
+```
+
+The command is idempotent. It uses each origin workspace's redaction policy and the same
+sensitivity exclusions as live indexing. The JSON report separates `sessionLoadFailed` from
+record-level `failed`, counts every active central session directory (including an unreadable
+`case.json`), continues scanning after individual failures, then exits non-zero if either failure
+count is non-zero. Archives and repository-local `cases_dir` overrides are intentionally outside
+this central backfill.
 
 ### `cortex plan <taskId>`
 

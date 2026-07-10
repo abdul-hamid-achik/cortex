@@ -17,6 +17,9 @@ type Registry struct {
 func NewRegistry(as ...Adapter) *Registry {
 	r := &Registry{byName: make(map[string]Adapter), maxParallel: 3}
 	for _, a := range as {
+		if a == nil {
+			continue
+		}
 		if _, seen := r.byName[a.Name()]; !seen {
 			r.order = append(r.order, a.Name())
 		}

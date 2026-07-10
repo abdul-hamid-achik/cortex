@@ -23,6 +23,20 @@ All notable changes to Cortex are documented here. The format follows
   Both are workspace-independent (the session is located by task ID across the central tree),
   reversible, and refuse in-flight sessions. Completes archive-lifecycle parity between the CLI
   and MCP surfaces.
+- **Routing policy export** — `cortex --json route` returns the ordered executable routing matrix;
+  `cortex --json route <question>` returns the selected first/follow-up tools and rationale.
+  Repeatable `--surface` inputs are validated rather than silently ignored.
+- **`cortex reindex-cases`** — idempotently backfills the recall index from active central XDG
+  sessions. Strict directory enumeration counts corrupt `case.json` sessions that human list views
+  omit; `sessionLoadFailed` is separate from record-level failures, warnings use each origin
+  workspace's redactor, and the CLI exits non-zero after completing the scan if either counter is
+  non-zero. Archives and repo-local stores remain excluded. The backfill and all live index hooks
+  now fail closed when the evidence ledger cannot be read, and completion/reindex upserts preserve
+  the hypothesis resolution reason.
+- **Versioned codemap review consumer** — the adapter accepts legacy unversioned output and the
+  canonical `schema_version: 1` producer golden. Unknown future versions degrade to
+  partial/inconclusive with an explicit warning, so structural verification cannot pass on an
+  unsupported contract.
 - **Cross-case disproof recall** — the fourth memory layer. Resolved hypotheses
   (rejected/challenged are the gold) and definitive verification receipts are indexed into a
   veclite collection (redaction-gated; sensitive records are **excluded**, not masked). At
@@ -47,6 +61,10 @@ All notable changes to Cortex are documented here. The format follows
   (default 1; 0 disables), and the attempt count + final cause are recorded on the degraded
   result and in `commands.jsonl`. Previously this was a fixed single retry. Mutating operations
   (memory writes, stashes, annotations) still never retry.
+- **Codemap review v1 parsing is strict at the verification boundary.** Canonical versioned rows,
+  scalar enums, risk fields, and `schema_version` placement are validated before any structural
+  fact is emitted; malformed v1 remains partial/inconclusive. Explicitly unversioned legacy output
+  still accepts historical `name`/`path` symbol aliases without silently dropping changed symbols.
 
 ### Removed
 - **`config.AgentDir`**, the deprecated alias for `config.StateDir`, has been retired. Use

@@ -18,6 +18,8 @@ func TestRouteFor(t *testing.T) {
 		{"bug video → vidtrace", "investigate the old bug video recording", nil, "vidtrace"},
 		{"artifact question → fcheap", "recover the old run log bundle from the stash", nil, "fcheap"},
 		{"secret question → tvault", "does the deploy have the api key credential", nil, "tvault"},
+		{"artifact surface override → fcheap", "perform the operation", []Surface{SurfaceArtifact}, "fcheap"},
+		{"secret surface override → tvault", "perform the operation", []Surface{SurfaceSecret}, "tvault"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -29,6 +31,35 @@ func TestRouteFor(t *testing.T) {
 				t.Error("route should carry a rationale")
 			}
 		})
+	}
+}
+func TestRoutingMatrixDrivesRouteForInOrder(t *testing.T) {
+	if len(RoutingMatrix) != 8 {
+		t.Fatalf("routing matrix has %d rows, want 8", len(RoutingMatrix))
+	}
+	if !RoutingMatrix[len(RoutingMatrix)-1].Default {
+		t.Fatal("routing matrix must end with the default route")
+	}
+	cases := []struct {
+		rule     int
+		question string
+		surfaces []Surface
+	}{
+		{0, "page output is wrong", []Surface{SurfaceBrowser, SurfaceTerminal}},
+		{1, "behavior is wrong", []Surface{SurfaceBrowser}},
+		{2, "what breaks if I change auth", nil},
+		{3, "auth.HandleCallback", nil},
+		{4, "inspect this bug video", nil},
+		{5, "recover the log bundle", nil},
+		{6, "check the api key", nil},
+		{7, "sporadic behavior with no clear owner", nil},
+	}
+	for _, tc := range cases {
+		want := RoutingMatrix[tc.rule]
+		got := RouteFor(tc.question, tc.surfaces)
+		if got.First != want.First || got.FollowUp != want.FollowUp || got.Why != want.Why {
+			t.Errorf("rule %d mismatch: got %+v, want %s → %s (%s)", tc.rule, got, want.First, want.FollowUp, want.Why)
+		}
 	}
 }
 
