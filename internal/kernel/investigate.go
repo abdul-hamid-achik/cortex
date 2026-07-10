@@ -77,10 +77,22 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		c.Notes = append(c.Notes, "budget: "+note)
 	}
 
-	// Execute the routed tool sequence (first, then follow-up if distinct). An
+	// Causal routing (SPEC §7.1): discovery (vecgrep/vidtrace) runs first; the
+	// top deduplicated file/symbol candidates are then fed into codemap as a
+	// second structural stage, recording derivedFrom provenance on the
+	// structural evidence (symptom → candidate → structural expansion). An
 	// explicit bug-video bundle runs a vidtrace investigation up front, linking
-	// the visible failure to code before the usual discovery→structure route.
-	steps := routeSteps(route, in.Question, surfaces, candLimit)
+	// the visible failure to code before discovery.
+	//
+	// Stage 1 builds the discovery steps. When codemap is the structural
+	// follow-up of a discovery-first route, its step is deferred to stage 2 so
+	// codemap receives candidates, not the raw question. A codemap-first route
+	// (known symbol) or a non-codemap follow-up runs the full route in stage 1.
+	discoveryRoute := route
+	if route.FollowUp == "codemap" && route.First != "codemap" {
+		discoveryRoute = domain.Route{First: route.First, FollowUp: route.First, Why: route.Why}
+	}
+	steps := routeSteps(discoveryRoute, in.Question, surfaces, candLimit)
 	if depth == "quick" {
 		// Quick: primary route tool only (no follow-up), still after memory recall.
 		steps = firstRouteStep(steps, route)
@@ -100,33 +112,62 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 			"connect": true, "limit": candLimit,
 		}}}, steps...)
 	}
-	// Execute the routed tool sequence with bounded parallelism (SPEC §7.3
-	// max_parallel_calls). The steps are independent adapter calls — step N's
-	// result does not feed step N+1's input — so they can run concurrently.
-	// Results are collected back in step order so the evidence/warnings order
-	// stays deterministic. The expensive part (subprocess spawn) parallelizes;
-	// evidence stamping runs sequentially after, serializing store writes.
+	// Execute stage 1 with bounded parallelism (SPEC §7.3 max_parallel_calls).
+	// The steps are independent adapter calls — step N's result does not feed
+	// step N+1's input here — so they fan out; evidence stamping runs
+	// sequentially after, serializing store writes.
 	results := k.runStepsParallel(ctx, c.ID, steps)
-	for _, res := range results {
-		// A non-authoritative result (partial/unavailable/error) means this step's
-		// facts (if any) are stale, incomplete, or a fallback — never silently as
-		// trustworthy as a clean search. Surfaced as a top-level flag, not just a
-		// warning string the caller has to notice (dogfooding 2026-07-07).
-		if res.Status != adapters.StatusAuthoritative {
-			degraded = true
-		}
-		warnings = append(warnings, res.Warnings...)
-		rawRef := k.storeRaw(c.ID, res) // one stored blob per tool call, shared by its facts
-		for _, f := range res.Facts {
-			if len(facts) >= budget {
-				warnings = append(warnings, fmt.Sprintf("evidence truncated to %d items (budget)", budget))
-				break
+	var sErr error
+	facts, warnings, degraded, sErr = k.stampResults(c, results, budget, facts, warnings, nil)
+	if sErr != nil {
+		return errEnvelope(c.ID, sErr.Error()), sErr
+	}
+
+	// Stage 2: structural expansion. Only when codemap is the deferred
+	// structural follow-up of a discovery-first route, depth allows it, and the
+	// evidence budget is not yet exhausted. Discovery candidates are deduplicated
+	// and fed into codemap; each structural fact records derivedFrom provenance
+	// linking it back to the discovery candidate that produced it. When
+	// discovery yields no locatable candidates, the raw question falls through
+	// to codemap exactly as the previous parallel route did (byte-identical).
+	expanded := 0
+	if route.FollowUp == "codemap" && route.First != "codemap" {
+		if lim := expansionLimit(depth, candLimit); lim > 0 && len(facts) < budget {
+			cands := candidatesFrom(facts, lim)
+			if len(cands) > 0 {
+				steps2 := structuralSteps(cands, candLimit)
+				if len(steps2) > 0 {
+					res2 := k.runStepsParallel(ctx, c.ID, steps2)
+					var d2 bool
+					facts, warnings, d2, sErr = k.stampResults(c, res2, budget, facts, warnings, func(i int) []string {
+						if i < len(cands) {
+							return []string{cands[i].EvidenceID}
+						}
+						return nil
+					})
+					if sErr != nil {
+						return errEnvelope(c.ID, sErr.Error()), sErr
+					}
+					degraded = degraded || d2
+					expanded = len(cands)
+				}
+			} else {
+				// Fallback: no locatable candidates — feed the raw question to
+				// codemap exactly as the previous parallel route did.
+				var fb []step
+				if isSymbolish(in.Question) {
+					fb = []step{{tool: "codemap", op: "impact", input: map[string]any{"symbol": symbolToken(in.Question)}}}
+				} else {
+					fb = []step{{tool: "codemap", op: "find", input: map[string]any{"query": in.Question, "top": candLimit}}}
+				}
+				res2 := k.runStepsParallel(ctx, c.ID, fb)
+				var d2 bool
+				facts, warnings, d2, sErr = k.stampResults(c, res2, budget, facts, warnings, nil)
+				if sErr != nil {
+					return errEnvelope(c.ID, sErr.Error()), sErr
+				}
+				degraded = degraded || d2
 			}
-			ev, err := k.stampEvidenceRaw(c.ID, res.Tool, f, rawRef)
-			if err != nil {
-				return errEnvelope(c.ID, err.Error()), err
-			}
-			facts = append(facts, ev)
 		}
 	}
 
@@ -136,6 +177,12 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 
 	summary := fmt.Sprintf("investigated %q via %s→%s: %s recorded (%s)",
 		clipStr(in.Question, 60), route.First, route.FollowUp, pluralizeEv(len(facts)), route.Why)
+	if expanded > 0 {
+		// Stage 2 expanded discovery candidates into structural evidence;
+		// surface the causal-routing provenance count (SPEC §7.1).
+		summary = fmt.Sprintf("investigated %q via %s→%s: %s recorded; %d discovery candidate(s) expanded structurally (%s)",
+			clipStr(in.Question, 60), route.First, route.FollowUp, pluralizeEv(len(facts)), expanded, route.Why)
+	}
 	if degraded {
 		warnings = append([]string{"degraded: one or more discovery tools did not return an authoritative result this round — treat facts below with extra caution, not as a clean search"}, warnings...)
 	}
@@ -186,6 +233,43 @@ func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []st
 	}
 	wg.Wait()
 	return results
+}
+
+// stampResults stamps every fact of every result into durable evidence,
+// honoring the evidence budget. derivedFor(i) supplies the causal-routing
+// provenance links for results[i]'s facts (nil for discovery stage). It
+// returns the accumulated evidence, warnings, a degraded flag (true when any
+// result was non-authoritative), and a stamping error. Shared by both
+// investigation stages so evidence ordering and budget handling stay identical.
+func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, budget int, facts []domain.Evidence, warnings []string, derivedFor func(i int) []string) ([]domain.Evidence, []string, bool, error) {
+	degraded := false
+	for ri, res := range results {
+		// A non-authoritative result (partial/unavailable/error) means this
+		// step's facts (if any) are stale, incomplete, or a fallback — never
+		// silently as trustworthy as a clean search. Surfaced as a top-level
+		// flag, not just a warning string (dogfooding 2026-07-07).
+		if res.Status != adapters.StatusAuthoritative {
+			degraded = true
+		}
+		warnings = append(warnings, res.Warnings...)
+		rawRef := k.storeRaw(c.ID, res) // one stored blob per tool call, shared by its facts
+		var links []string
+		if derivedFor != nil {
+			links = derivedFor(ri)
+		}
+		for _, f := range res.Facts {
+			if len(facts) >= budget {
+				warnings = append(warnings, fmt.Sprintf("evidence truncated to %d items (budget)", budget))
+				break
+			}
+			ev, err := k.stampEvidenceDerived(c.ID, res.Tool, f, rawRef, links)
+			if err != nil {
+				return facts, warnings, degraded, err
+			}
+			facts = append(facts, ev)
+		}
+	}
+	return facts, warnings, degraded, nil
 }
 
 // normalizeDepth maps free-form depth strings to quick | standard | deep.
@@ -290,6 +374,144 @@ func routeSteps(r domain.Route, question string, surfaces []domain.Surface, cand
 		steps = append(steps, search("vecgrep"))
 	}
 	return steps
+}
+
+// candidate is one deduplicated discovery hit selected for structural expansion
+// (causal routing stage 2). Symbol is the preferred expansion key (codemap
+// impact); File is the fallback (codemap find on the base name). EvidenceID
+// links the structural fact back to the discovery evidence that produced it.
+type candidate struct {
+	Symbol     string
+	File       string
+	EvidenceID string
+}
+
+// candidatesFrom extracts up to max deduplicated file/symbol candidates from
+// freshly stamped discovery evidence, preserving evidence order. Records
+// without a location, tool_unavailable records, and model_inference records
+// (memory recall) never become candidates. A symbol wins over a file-only
+// candidate sharing its file: symbol candidates are collected first, then a
+// file-only candidate whose file already backs a symbol candidate is suppressed.
+func candidatesFrom(evs []domain.Evidence, max int) []candidate {
+	if max <= 0 {
+		return nil
+	}
+	var out []candidate
+	seenSymbol := map[string]bool{}
+	seenFile := map[string]bool{}
+	symbolFiles := map[string]bool{} // files already backing a symbol candidate
+	// First pass: symbol-bearing candidates (a symbol is the strongest
+	// structural key — codemap impact resolves the blast radius directly).
+	for _, ev := range evs {
+		if len(out) >= max {
+			break
+		}
+		if ev.Kind == domain.KindToolUnavailable || ev.Kind == domain.KindModelInference {
+			continue
+		}
+		if ev.Location == nil || strings.TrimSpace(ev.Location.Symbol) == "" {
+			continue
+		}
+		key := strings.ToLower(ev.Location.Symbol)
+		if seenSymbol[key] {
+			continue
+		}
+		seenSymbol[key] = true
+		if ev.Location.File != "" {
+			symbolFiles[ev.Location.File] = true
+		}
+		out = append(out, candidate{Symbol: ev.Location.Symbol, File: ev.Location.File, EvidenceID: ev.ID})
+	}
+	// Second pass: file-only candidates, suppressed when a symbol candidate
+	// already covers that file (symbol wins).
+	for _, ev := range evs {
+		if len(out) >= max {
+			break
+		}
+		if ev.Kind == domain.KindToolUnavailable || ev.Kind == domain.KindModelInference {
+			continue
+		}
+		if ev.Location == nil || ev.Location.Symbol != "" {
+			continue
+		}
+		f := strings.TrimSpace(ev.Location.File)
+		if f == "" {
+			continue
+		}
+		if symbolFiles[f] || seenFile[f] {
+			continue
+		}
+		seenFile[f] = true
+		out = append(out, candidate{File: f, EvidenceID: ev.ID})
+	}
+	return out
+}
+
+// structuralSteps expands candidates into codemap operations: a candidate with
+// a symbol becomes `impact`; a file-only candidate becomes `find` keyed by the
+// file's base name (path and extension stripped). The steps are independent and
+// parallel-safe. A candidate with neither a symbol nor a file token is skipped.
+func structuralSteps(cands []candidate, candLimit int) []step {
+	if candLimit < 1 {
+		candLimit = 8
+	}
+	var steps []step
+	for _, c := range cands {
+		s := strings.TrimSpace(c.Symbol)
+		f := strings.TrimSpace(c.File)
+		if s == "" && f == "" {
+			continue
+		}
+		if s != "" {
+			steps = append(steps, step{tool: "codemap", op: "impact", input: map[string]any{"symbol": s}})
+		} else {
+			tok := fileQueryToken(f)
+			if tok == "" {
+				continue
+			}
+			steps = append(steps, step{tool: "codemap", op: "find", input: map[string]any{"query": tok, "top": candLimit}})
+		}
+	}
+	return steps
+}
+
+// expansionLimit bounds how many discovery candidates feed codemap per round:
+// standard → min(3, candLimit); deep → min(6, candLimit); quick → 0 (no
+// structural expansion — quick stays discovery-only).
+func expansionLimit(depth string, candLimit int) int {
+	switch depth {
+	case "deep":
+		n := 6
+		if candLimit < n {
+			n = candLimit
+		}
+		return n
+	case "quick":
+		return 0
+	default:
+		n := 3
+		if candLimit < n {
+			n = candLimit
+		}
+		return n
+	}
+}
+
+// fileQueryToken reduces "src/auth/callback.go" → "callback" for codemap find:
+// the directory path and extension are stripped, leaving the base name. A bare
+// name like "README" is returned unchanged; "" stays "".
+func fileQueryToken(path string) string {
+	if path == "" {
+		return ""
+	}
+	base := path
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	if i := strings.LastIndex(base, "."); i >= 0 {
+		base = base[:i]
+	}
+	return base
 }
 
 func isSymbolish(q string) bool {

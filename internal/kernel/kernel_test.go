@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
@@ -15,7 +16,8 @@ import (
 )
 
 // fakeAdapter returns canned results, letting the kernel be tested without real
-// downstream tools (SPEC §23.2 uses fixtures/fakes).
+// downstream tools (SPEC §23.2 uses fixtures/fakes). It captures every Execute
+// request (race-safe) so routing assertions can inspect what each tool received.
 type fakeAdapter struct {
 	name   string
 	caps   []adapters.Capability
@@ -23,6 +25,8 @@ type fakeAdapter struct {
 	byOp   map[string]adapters.Result // optional per-operation results
 	err    error
 	down   bool
+	mu     sync.Mutex
+	reqs   []adapters.Request
 }
 
 func (f *fakeAdapter) Name() string                        { return f.name }
@@ -34,6 +38,9 @@ func (f *fakeAdapter) Health(context.Context) error {
 	return nil
 }
 func (f *fakeAdapter) Execute(_ context.Context, req adapters.Request) (adapters.Result, error) {
+	f.mu.Lock()
+	f.reqs = append(f.reqs, req)
+	f.mu.Unlock()
 	if f.err != nil {
 		return adapters.Result{}, f.err
 	}
@@ -43,6 +50,13 @@ func (f *fakeAdapter) Execute(_ context.Context, req adapters.Request) (adapters
 	}
 	r.Tool = f.name
 	return r, nil
+}
+
+// requests returns a snapshot of every captured Execute request (race-safe).
+func (f *fakeAdapter) requests() []adapters.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]adapters.Request(nil), f.reqs...)
 }
 
 // testRepo creates a temp git repo with one committed file and returns its path.
@@ -598,6 +612,295 @@ func TestRouteStepsCapsCandidates(t *testing.T) {
 	}
 	if !sawSearch {
 		t.Error("expected a discovery search step")
+	}
+}
+
+func TestInvestigateFeedsCandidatesIntoCodemap(t *testing.T) {
+	// Causal routing (SPEC §7.1): discovery runs first, then the top
+	// deduplicated file/symbol candidates are fed into codemap — not the raw
+	// question — and the structural fact records derivedFrom provenance.
+	vecgrep := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative}, // memory_recall default: nothing
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "semantic_search", Confidence: "low",
+					Claim:    "HandleCallback in src/auth/callback.go (score 0.91)",
+					Location: &adapters.Location{File: "src/auth/callback.go", Symbol: "HandleCallback"}},
+			}},
+		}}
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"impact": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "code_graph", Confidence: "medium", Claim: "HandleCallback blast radius: 3 callers"},
+			}},
+		}}
+	k := newTestKernel(t, testRepo(t), vecgrep, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	inv, err := k.Investigate(context.Background(), InvestigateInput{
+		TaskID: env.TaskID, Question: "where is the login redirect handled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// (a) codemap received op impact with the candidate symbol, NOT the question.
+	var impactReq *adapters.Request
+	for i, r := range codemap.requests() {
+		if r.Operation == "impact" {
+			impactReq = &codemap.requests()[i]
+			break
+		}
+	}
+	if impactReq == nil {
+		t.Fatal("expected codemap to receive an impact request")
+	}
+	if got := impactReq.Str("symbol"); got != "HandleCallback" {
+		t.Errorf("codemap impact should expand the candidate symbol, got %q", got)
+	}
+	// (b) the envelope's codemap fact carries derivedFrom pointing at the
+	// vecgrep discovery fact's evidence id.
+	var vgFact *domain.FactView
+	for i := range inv.Facts {
+		if inv.Facts[i].Source == "vecgrep" {
+			vgFact = &inv.Facts[i]
+			break
+		}
+	}
+	if vgFact == nil {
+		t.Fatal("expected a vecgrep discovery fact")
+	}
+	var cmFact *domain.FactView
+	for i := range inv.Facts {
+		if inv.Facts[i].Source == "codemap" {
+			cmFact = &inv.Facts[i]
+			break
+		}
+	}
+	if cmFact == nil {
+		t.Fatal("expected a codemap structural fact")
+	}
+	if len(cmFact.DerivedFrom) == 0 || cmFact.DerivedFrom[0] != vgFact.ID {
+		t.Errorf("codemap fact derivedFrom should link to vecgrep fact %s, got %v", vgFact.ID, cmFact.DerivedFrom)
+	}
+	// (c) the persisted codemap evidence record carries the same DerivedFrom.
+	ev, err := k.ReadEvidence(env.TaskID, cmFact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev.DerivedFrom) == 0 || ev.DerivedFrom[0] != vgFact.ID {
+		t.Errorf("persisted codemap evidence derivedFrom mismatch, got %v", ev.DerivedFrom)
+	}
+}
+
+func TestInvestigateFallsBackWhenNoCandidates(t *testing.T) {
+	// When discovery yields no locatable candidates, the raw question falls
+	// through to codemap exactly as the previous parallel route did.
+	vecgrep := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative}} // empty, no Location
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	k := newTestKernel(t, testRepo(t), vecgrep, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	_, _ = k.Investigate(context.Background(), InvestigateInput{
+		TaskID: env.TaskID, Question: "where is the login redirect handled"})
+	// codemap should have received a find keyed by the question (fallback).
+	var findReq *adapters.Request
+	for i, r := range codemap.requests() {
+		if r.Operation == "find" {
+			findReq = &codemap.requests()[i]
+			break
+		}
+	}
+	if findReq == nil {
+		t.Fatal("expected codemap to receive a find request (fallback)")
+	}
+	if got := findReq.Str("query"); got != "where is the login redirect handled" {
+		t.Errorf("fallback find should use the raw question, got %q", got)
+	}
+}
+
+func TestInvestigateQuickSkipsStructuralExpansion(t *testing.T) {
+	// Quick depth runs discovery only — no structural expansion stage.
+	vecgrep := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "semantic_search", Confidence: "low", Claim: "x",
+					Location: &adapters.Location{File: "src/x.go", Symbol: "X"}},
+			}},
+		}}
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	k := newTestKernel(t, testRepo(t), vecgrep, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	_, _ = k.Investigate(context.Background(), InvestigateInput{
+		TaskID: env.TaskID, Question: "where is the login redirect handled", Depth: "quick"})
+	if n := len(codemap.requests()); n != 0 {
+		t.Errorf("quick depth should issue zero codemap requests, got %d", n)
+	}
+}
+
+func TestInvestigateDedupesAndBoundsCandidates(t *testing.T) {
+	// Discovery candidates are deduplicated (symbol and file) and bounded by
+	// expansionLimit. 3 HandleCallback symbols → 1 impact; 2 src/x.go files →
+	// 1 find; 1 no-Location → skipped. standard depth, candLimit 8 → limit 3.
+	vecgrep := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "semantic_search", Confidence: "low", Claim: "h1",
+					Location: &adapters.Location{File: "src/auth.go", Symbol: "HandleCallback"}},
+				{Kind: "semantic_search", Confidence: "low", Claim: "h2",
+					Location: &adapters.Location{File: "src/auth.go", Symbol: "HandleCallback"}},
+				{Kind: "semantic_search", Confidence: "low", Claim: "h3",
+					Location: &adapters.Location{File: "src/auth.go", Symbol: "HandleCallback"}},
+				{Kind: "semantic_search", Confidence: "low", Claim: "f1",
+					Location: &adapters.Location{File: "src/x.go"}},
+				{Kind: "semantic_search", Confidence: "low", Claim: "f2",
+					Location: &adapters.Location{File: "src/x.go"}},
+				{Kind: "semantic_search", Confidence: "low", Claim: "noloc"},
+			}},
+		}}
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	k := newTestKernel(t, testRepo(t), vecgrep, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	_, _ = k.Investigate(context.Background(), InvestigateInput{
+		TaskID: env.TaskID, Question: "where is the login redirect handled"})
+	reqs := codemap.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected exactly 2 codemap requests (1 impact + 1 find), got %d", len(reqs))
+	}
+	if len(reqs) > expansionLimit("standard", 8) {
+		t.Errorf("codemap requests should not exceed expansionLimit(standard,8)=%d, got %d",
+			expansionLimit("standard", 8), len(reqs))
+	}
+	ops := map[string]int{}
+	for _, r := range reqs {
+		ops[r.Operation]++
+	}
+	if ops["impact"] != 1 || ops["find"] != 1 {
+		t.Errorf("expected one impact and one find, got %v", ops)
+	}
+}
+
+func TestInvestigateVideoCandidatesFeedCodemap(t *testing.T) {
+	// A vidtrace owning-code fact (artifact with a Location) becomes a
+	// discovery candidate like any other — a bug video now causally feeds
+	// codemap. fileQueryToken reduces "src/checkout.go" → "checkout".
+	vidtrace := &fakeAdapter{name: "vidtrace", caps: []adapters.Capability{adapters.CapabilityArtifacts},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"investigate": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "artifact", Confidence: "low", Claim: "video failure owned by checkout",
+					Location: &adapters.Location{File: "src/checkout.go", StartLine: 42}},
+			}},
+		}}
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"find": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "code_location", Confidence: "medium", Claim: "checkout defined in src/checkout.go:42"},
+			}},
+		}}
+	k := newTestKernel(t, testRepo(t), vidtrace, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	inv, _ := k.Investigate(context.Background(), InvestigateInput{
+		TaskID: env.TaskID, Question: "the checkout button does nothing",
+		Video: "/tmp/bug_artifacts/bundle"})
+	var findReq *adapters.Request
+	for i, r := range codemap.requests() {
+		if r.Operation == "find" {
+			findReq = &codemap.requests()[i]
+			break
+		}
+	}
+	if findReq == nil {
+		t.Fatal("expected codemap to receive a find request from the video candidate")
+	}
+	if got := findReq.Str("query"); got != "checkout" {
+		t.Errorf("video candidate find should use fileQueryToken, got %q", got)
+	}
+	// The codemap evidence's derivedFrom points at the vidtrace evidence id.
+	var vtFact *domain.FactView
+	for i := range inv.Facts {
+		if inv.Facts[i].Source == "vidtrace" {
+			vtFact = &inv.Facts[i]
+			break
+		}
+	}
+	if vtFact == nil {
+		t.Fatal("expected a vidtrace discovery fact")
+	}
+	var cmFact *domain.FactView
+	for i := range inv.Facts {
+		if inv.Facts[i].Source == "codemap" {
+			cmFact = &inv.Facts[i]
+			break
+		}
+	}
+	if cmFact == nil {
+		t.Fatal("expected a codemap structural fact expanded from the video candidate")
+	}
+	if len(cmFact.DerivedFrom) == 0 || cmFact.DerivedFrom[0] != vtFact.ID {
+		t.Errorf("codemap fact derivedFrom should link to vidtrace fact %s, got %v", vtFact.ID, cmFact.DerivedFrom)
+	}
+}
+
+func TestCandidatesFromFilteringAndDedup(t *testing.T) {
+	// Pure unit test: kind/location filtering, dedupe order, max bound, and
+	// symbol-wins-over-file suppression.
+	ev := func(id, kind, sym, file string) domain.Evidence {
+		e := domain.Evidence{ID: id, Kind: domain.EvidenceKind(kind)}
+		if sym != "" || file != "" {
+			e.Location = &domain.Location{File: file, Symbol: sym}
+		}
+		return e
+	}
+	evs := []domain.Evidence{
+		ev("a", "semantic_search", "HandleCallback", "src/auth.go"),
+		ev("b", "semantic_search", "HandleCallback", "src/auth.go"), // dup symbol
+		ev("c", "semantic_search", "", "src/x.go"),                  // file-only
+		ev("d", "semantic_search", "", "src/x.go"),                  // dup file
+		ev("e", "model_inference", "Memory", ""),                    // skipped (kind)
+		ev("f", "tool_unavailable", "", ""),                         // skipped (kind)
+		ev("g", "semantic_search", "", ""),                          // skipped (no location)
+		ev("h", "semantic_search", "Login", "src/auth.go"),          // symbol sharing file with a
+	}
+	cands := candidatesFrom(evs, 3)
+	if len(cands) != 3 {
+		t.Fatalf("expected 3 candidates, got %d: %+v", len(cands), cands)
+	}
+	if cands[0].Symbol != "HandleCallback" || cands[0].EvidenceID != "a" {
+		t.Errorf("first candidate should be HandleCallback/a, got %+v", cands[0])
+	}
+	if cands[1].Symbol != "Login" {
+		t.Errorf("second candidate should be Login, got %+v", cands[1])
+	}
+	// src/x.go file-only is the third (suppressed only if a symbol shares its file).
+	if cands[2].File != "src/x.go" || cands[2].EvidenceID != "c" {
+		t.Errorf("third candidate should be src/x.go/c, got %+v", cands[2])
+	}
+	// max bound: cap at 2.
+	if got := candidatesFrom(evs, 2); len(got) != 2 {
+		t.Errorf("expected max bound 2, got %d", len(got))
+	}
+	// zero/empty returns nil.
+	if got := candidatesFrom(evs, 0); got != nil {
+		t.Errorf("max 0 should return nil, got %+v", got)
+	}
+}
+
+func TestFileQueryToken(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"src/auth/callback.go", "callback"},
+		{"README", "README"},
+		{"", ""},
+		{"a/b/c.def.gh", "c.def"}, // only the final extension is stripped
+		{"/abs/path/x.go", "x"},
+	} {
+		if got := fileQueryToken(tc.in); got != tc.want {
+			t.Errorf("fileQueryToken(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 

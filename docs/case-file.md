@@ -69,9 +69,13 @@ One JSON object per line, appended in order:
   "location": { "file": "src/auth/callback.ts", "startLine": 42, "endLine": 61, "symbol": "HandleCallback" },
   "confidence": 0.93,
   "sensitivity": "normal",
-  "rawRef": "case://task_06FK…/evidence/ev_06FK…"
+  "rawRef": "case://task_06FK…/evidence/ev_06FK…",
+  "derivedFrom": ["ev_06FJ…"]
 }
 ```
+
+`derivedFrom` links structurally-expanded evidence back to the discovery candidate(s) that led to
+it — causal routing records the symptom → candidate → structure chain on the evidence itself.
 
 ## `verification.json`
 
@@ -104,3 +108,5 @@ An array of receipts, each naming the exact claim it supports:
 - Ledgers (`evidence.jsonl`, `commands.jsonl`, `phases.jsonl`) are append-only.
 - No secret value is ever written to a case file — the redactor filters tool output first, and
   `commands.jsonl` records capability and result, never secret contents.
+- `commands.jsonl` notes include retry attempt counts/final cause when a read-only tool call was
+  retried and still failed (transient spawn/transport errors only; exits are data, never replayed).

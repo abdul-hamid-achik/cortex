@@ -38,7 +38,8 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 
 ### `cortex investigate <taskId> <question>`
 
-Route a question through discovery then structure, recording evidence.
+Route a question causally: bounded discovery first, then the top file/symbol candidates are
+expanded through codemap, recording provenance (`derivedFrom`) on the structural evidence.
 
 ```bash
 cortex investigate task_06FK… "where is the OAuth return URL handled"

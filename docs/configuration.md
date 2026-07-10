@@ -32,7 +32,7 @@ budget:
   max_raw_output_bytes_per_tool: 32768   # per-tool raw-output cap
   max_evidence_items_returned: 12    # evidence items per investigation
   max_candidate_files_returned: 8    # discovery hits per search
-  max_auto_retries_per_tool: 1       # read-only retry budget
+  max_auto_retries_per_tool: 1       # read-only retry budget (0 = never retry; mutations never retry)
 
 # Extra exact strings the redactor always masks (e.g. known secret NAMES).
 # Never put secret VALUES here.

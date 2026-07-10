@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"time"
 
@@ -60,21 +61,32 @@ func binExists(bin string) bool {
 }
 
 // tool bundles the shared machinery every CLI adapter needs: the binary name,
-// a runner, a redactor, and a default timeout.
+// a runner, a redactor, a default timeout, and the read-only retry budget.
 type tool struct {
 	bin     string
 	run     runner
 	redact  *redact.Redactor
 	timeout time.Duration
+	retries int // max automatic retries for read-only exec (SPEC §17.3 / budget max_auto_retries_per_tool)
 }
 
 func newTool(bin string, timeout time.Duration) tool {
-	return tool{bin: bin, run: execRunner{}, redact: redact.New(), timeout: timeout}
+	return tool{bin: bin, run: execRunner{}, redact: redact.New(), timeout: timeout, retries: 1}
+}
+
+// SetMaxAutoRetries threads budget.max_auto_retries_per_tool into this tool's
+// read-only exec path. 0 disables automatic retry; negatives clamp to 0.
+// Mutations are unaffected — they run via execOnce, which never retries.
+func (t *tool) SetMaxAutoRetries(n int) {
+	if n < 0 {
+		n = 0
+	}
+	t.retries = n
 }
 
 // exec runs a READ-ONLY idempotent query and returns redacted stdout/stderr.
 // A missing binary yields ErrToolMissing. On a transient process/transport
-// failure it retries ONCE (SPEC §17.3 / budget max_auto_retries_per_tool: 1) —
+// failure it retries up to budget.max_auto_retries_per_tool (SPEC §17.3) —
 // safe because query ops are idempotent. A non-zero exit is data, not a
 // transient failure, so it is never retried. Mutating ops (fcheap save,
 // vecgrep memory remember) must call execOnce to avoid a double write.
@@ -82,13 +94,29 @@ func (t tool) exec(ctx context.Context, dir string, args ...string) (stdout, std
 	if !binExists(t.bin) {
 		return "", "", -1, ErrToolMissing
 	}
-	stdout, stderr, exit, err = t.execOnce(ctx, dir, args...)
-	// Retry once only on a transient runner error and only if the caller's
-	// context is still live (don't retry a genuine timeout/cancellation).
-	if err != nil && ctx.Err() == nil {
+	attempts := 0
+	for {
+		attempts++
 		stdout, stderr, exit, err = t.execOnce(ctx, dir, args...)
+		if err == nil || attempts > t.retries || !retryableExecErr(ctx, err) {
+			break
+		}
+	}
+	// Record attempt count and final cause durably: the wrapped error reaches the
+	// adapter's unavailable() fact/warning and the kernel's commands.jsonl note.
+	if err != nil && attempts > 1 {
+		err = fmt.Errorf("failed after %d attempts (retry budget %d); final cause: %w", attempts, t.retries, err)
 	}
 	return
+}
+
+// retryableExecErr classifies a failure as transient and safe to retry
+// (SPEC §17.3): the runner itself errored (spawn/pipe/child-timeout) while the
+// CALLER's context is still live. A non-zero exit never reaches here — execOnce
+// returns it as data with err == nil — so behavioral failures and tool errors
+// are never replayed; only infrastructure failures are.
+func retryableExecErr(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() == nil
 }
 
 // execOnce runs the binary exactly once (no retry). Callers must have verified

@@ -53,7 +53,8 @@ func New(cfg config.Config) (*Kernel, error) {
 		adapters.NewVidtrace(),
 		adapters.NewTvault(),
 	)
-	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls) // SPEC §7.3
+	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls)         // SPEC §7.3
+	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool) // SPEC §17.3
 	k := &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now}
 	// SPEC §16.2 #4: wire an env-gated approver so a harness/CI can allow
 	// external mutations without code changes. Default (unset) keeps the
@@ -90,6 +91,7 @@ func NewWith(cfg config.Config, store *casefs.Store, reg *adapters.Registry) *Ke
 	if g, ok := reg.Get("git").(*adapters.Git); ok {
 		k.git = g
 	}
+	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool) // SPEC §17.3
 	if approveExternal() {
 		k.SetApprover(envApprover{})
 	}
@@ -160,10 +162,10 @@ func capRawForStore(s string, max int) string {
 	return s
 }
 
-// stampEvidenceRaw promotes a Fact into a durable Evidence record. When rawRef
-// is non-empty every fact from the same tool call shares it, pointing at the
-// stored raw blob; otherwise the record self-references (SPEC §9.1, §10.4).
-func (k *Kernel) stampEvidenceRaw(taskID string, tool string, f adapters.Fact, rawRef string) (domain.Evidence, error) {
+// stampEvidenceDerived promotes a Fact into a durable Evidence record carrying
+// causal-routing provenance: derivedFrom names the discovery evidence whose
+// candidate produced this structural claim. Empty derivedFrom is a plain stamp.
+func (k *Kernel) stampEvidenceDerived(taskID, tool string, f adapters.Fact, rawRef string, derivedFrom []string) (domain.Evidence, error) {
 	id := ids.New("ev")
 	// Enforce invariant #4 (SPEC §6.3): no secret value enters an evidence
 	// record. Adapter facts are parsed from already-redacted tool output, but
@@ -186,6 +188,7 @@ func (k *Kernel) stampEvidenceRaw(taskID string, tool string, f adapters.Fact, r
 		Confidence:  mapConfidence(f.Confidence),
 		Sensitivity: sensitivity(sens),
 		RawRef:      ref,
+		DerivedFrom: derivedFrom,
 	}
 	if f.Location != nil {
 		ev.Location = &domain.Location{
@@ -197,6 +200,10 @@ func (k *Kernel) stampEvidenceRaw(taskID string, tool string, f adapters.Fact, r
 		return domain.Evidence{}, err
 	}
 	return ev, nil
+}
+
+func (k *Kernel) stampEvidenceRaw(taskID string, tool string, f adapters.Fact, rawRef string) (domain.Evidence, error) {
+	return k.stampEvidenceDerived(taskID, tool, f, rawRef, nil)
 }
 
 // recordCommand writes a non-sensitive audit entry for a tool invocation,

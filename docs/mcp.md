@@ -15,7 +15,7 @@ argument (a kernel is built per call), so one server process serves any workspac
 | Tool | Purpose |
 |---|---|
 | `cortex_start_task` | open a case; orient on git identity + tool health |
-| `cortex_investigate` | route a question through discovery → structure; record evidence |
+| `cortex_investigate` | route a question causally — bounded discovery (vecgrep/vidtrace) first, top candidates fed into codemap; structural evidence carries `derivedFrom` provenance |
 | `cortex_plan` | the planning gate — hypotheses (with disproof), boundary, verification plan |
 | `cortex_verify` | run verifiers, detect scope drift, write a receipt per claim. Browser/terminal use specs; artifact claims take `artifactRef` (fcheap stash); secret-capability claims take `secretProject` (value-free tvault availability) |
 | `cortex_remember` | persist the outcome and complete (needs a *passing* receipt, or `verificationNotPossible` / `acceptFailed`) |
@@ -44,9 +44,9 @@ Every tool returns the same outer shape, so a weaker model learns the interface 
   "summary": "investigated … via vecgrep→codemap: 3 evidence items recorded",
   "facts": [
     { "id": "ev_06FK…", "claim": "HandleCallback redirects to '/' when returnTo is missing",
-      "confidence": "medium", "source": "codemap", "kind": "code_graph" }
+      "confidence": "medium", "source": "codemap", "kind": "code_graph",
+      "derivedFrom": ["ev_06FJ…"] }
   ],
-  "hypotheses": [],
   "warnings": [],
   "nextActions": ["cortex plan — state a hypothesis with a disproof path"],
   "artifacts": [],
@@ -56,6 +56,9 @@ Every tool returns the same outer shape, so a weaker model learns the interface 
 
 Raw downstream output is **not** included by default — it is stored in the case file and fetched
 on demand with `cortex_read_evidence`, protecting the model's context window.
+
+`derivedFrom` on a fact links structurally-expanded evidence back to the discovery candidate(s)
+that produced it (causal routing: symptom → candidate → structure).
 
 ## Registering with mcphub
 

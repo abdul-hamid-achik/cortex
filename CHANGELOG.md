@@ -24,6 +24,20 @@ All notable changes to Cortex are documented here. The format follows
   reversible, and refuse in-flight sessions. Completes archive-lifecycle parity between the CLI
   and MCP surfaces.
 
+### Changed
+- **`cortex investigate` routing is now causal, not parallel.** Discovery (vecgrep/vidtrace)
+  runs first; the top deduplicated file/symbol candidates are then fed into codemap as a second
+  structural stage, instead of codemap receiving the raw question alongside discovery. Structural
+  evidence records `derivedFrom` provenance linking it back to the discovery candidate that
+  produced it (schema-additive — old case files stay byte-compatible). When discovery yields no
+  locatable candidates, the question falls through to codemap as before. Quick depth stays
+  discovery-only.
+- **Read-only adapter retries now honor `budget.max_auto_retries_per_tool`.** A transient
+  process failure (spawn/pipe/child-timeout — never a behavioral exit) retries up to the budget
+  (default 1; 0 disables), and the attempt count + final cause are recorded on the degraded
+  result and in `commands.jsonl`. Previously this was a fixed single retry. Mutating operations
+  (memory writes, stashes, annotations) still never retry.
+
 ### Removed
 - **`config.AgentDir`**, the deprecated alias for `config.StateDir`, has been retired. Use
   `config.StateDir` directly.

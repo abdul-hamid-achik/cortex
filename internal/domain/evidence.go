@@ -79,6 +79,10 @@ type Evidence struct {
 	Confidence  Confidence   `json:"confidence"`
 	Sensitivity Sensitivity  `json:"sensitivity,omitempty"`
 	RawRef      string       `json:"rawRef,omitempty"` // case://.../evidence/<id>
+	// DerivedFrom links structurally-expanded evidence back to the discovery
+	// evidence record(s) whose candidate was fed into the structural tool
+	// (causal routing: symptom → candidate → structural expansion).
+	DerivedFrom []string `json:"derivedFrom,omitempty"`
 }
 
 // Validate enforces the evidence invariants (SPEC §9.1): a claim, an origin,

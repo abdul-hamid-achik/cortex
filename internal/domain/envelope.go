@@ -27,11 +27,12 @@ type Envelope struct {
 // FactView is the compact, model-facing projection of an Evidence record. Raw
 // output stays out of the envelope to protect the context window (SPEC §10.4).
 type FactView struct {
-	ID         string       `json:"id"`
-	Claim      string       `json:"claim"`
-	Confidence Confidence   `json:"confidence"`
-	Source     string       `json:"source"`
-	Kind       EvidenceKind `json:"kind,omitempty"`
+	ID          string       `json:"id"`
+	Claim       string       `json:"claim"`
+	Confidence  Confidence   `json:"confidence"`
+	Source      string       `json:"source"`
+	Kind        EvidenceKind `json:"kind,omitempty"`
+	DerivedFrom []string     `json:"derivedFrom,omitempty"`
 }
 
 // HypView is the compact projection of a Hypothesis.
@@ -56,7 +57,7 @@ func ToFactView(e Evidence) FactView {
 	if src == "" {
 		src = e.Source.Origin
 	}
-	return FactView{ID: e.ID, Claim: e.Claim, Confidence: e.Confidence, Source: src, Kind: e.Kind}
+	return FactView{ID: e.ID, Claim: e.Claim, Confidence: e.Confidence, Source: src, Kind: e.Kind, DerivedFrom: e.DerivedFrom}
 }
 
 // ToHypView projects a hypothesis into the envelope's compact form.

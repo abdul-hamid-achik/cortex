@@ -39,7 +39,8 @@ cortex investigate task_06FK… "where is the OAuth return URL handled"
 ```
 
 The router sends vague behavioral questions to **vecgrep** (discovery) then **codemap**
-(structure). Each result is recorded as evidence with a confidence band — search hits are
+(structure) — discovery runs first, and what it found feeds into **codemap** (structure) as
+candidates. Each result is recorded as evidence with a confidence band — search hits are
 `low`/`medium` **candidates**, never proof.
 
 ### 3. Plan — the gate

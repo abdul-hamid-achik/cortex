@@ -30,6 +30,11 @@ When a tool runs but returns output Cortex can't parse, the result is `partial` 
 first line of the tool's message becomes a warning and the raw (redacted) output is retained as
 evidence. This keeps Cortex honest under version skew rather than crashing or guessing.
 
+Transient spawn/transport failures on read-only queries retry automatically up to
+`budget.max_auto_retries_per_tool` (default 1; 0 disables). A still-failing call reports
+`failed after N attempts … final cause: …` in its `tool_unavailable` fact. A non-zero exit is
+data — never retried — so behavioral failures are never replayed.
+
 ## Flag dialects (they differ)
 
 The adapters intentionally speak each tool's real dialect:
@@ -61,7 +66,8 @@ code is left untouched.
 
 1. Add a `case` to the adapter's `Execute` switch.
 2. Shell out via the shared `tool.exec` helper — it checks the binary exists, applies a timeout,
-   and redacts stdout/stderr.
+   retries transient failures within the retry budget, and redacts stdout/stderr. Mutations must
+   use `execOnce` (never retried).
 3. Parse the tool's machine output into `Fact`s with an appropriate confidence band (search hits
    are `low`; structural results are `high` only when the tool reports precise resolution).
 4. Degrade to `unavailable` / `degraded` on any failure — never fabricate.

@@ -199,7 +199,7 @@ cortex investigate $TID "the checkout button does nothing" --video vidtrace://vt
 ```
 
 Cortex runs vidtrace to turn the recording into timestamped evidence and links the visible failure
-to the code that owns it, then continues the normal discovery → structure route.
+to the code that owns it, then continues the normal discovery → candidates → structure route.
 
 ### Does it work outside a git repository?
 

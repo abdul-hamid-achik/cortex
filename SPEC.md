@@ -403,6 +403,11 @@ Cortex SHALL preserve these invariants:
 | secret-dependent operation | tvault availability/use | tool execution | model must not receive secret values |
 | changed diff needs review | codemap review/impact | behavioral verifier | structural review precedes behavior claim |
 
+Routing is causal: discovery (vecgrep/vidtrace) runs first, the top deduplicated file/symbol
+candidates are deduplicated and fed into the structural follow-up, and the structural evidence
+records `derivedFrom` provenance linking it back to the discovery candidate that produced it.
+When discovery yields no locatable candidates, the question itself falls through to codemap.
+
 ### 7.2 Explicit negative routing rules
 
 Cortex SHOULD avoid:

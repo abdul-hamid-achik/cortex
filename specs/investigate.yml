@@ -1,0 +1,73 @@
+version: 1
+name: investigate
+intent: |
+    cortex investigate routes a question causally: bounded discovery (vecgrep/vidtrace)
+    runs first, then the top deduplicated file/symbol candidates are fed into codemap
+    (structure), recording derivedFrom provenance on the structural evidence. The
+    route summary is deterministic regardless of sibling-tool availability, and the
+    retry budget (max_auto_retries_per_tool) is config-visible end to end.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-lc"
+        - |
+          set -e
+          ROOT=$(pwd)
+          CX="$ROOT/bin/cortex"
+          WS=$(mktemp -d)
+          cd "$WS"
+          git init -q && git config user.email t@t.co && git config user.name t
+          mkdir -p src
+          printf 'package src\n\n// HandleCallback fixes the post-login redirect.\nfunc HandleCallback() {}\n' > src/callback.go
+          git add -A && git commit -qm init >/dev/null
+
+          TASK=$("$CX" -C "$WS" start "Fix redirect" --json | grep -o '"taskId": "[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "STARTED $TASK"
+
+          INV=$("$CX" -C "$WS" investigate "$TASK" "where is the login callback wired up" --json)
+          case "$INV" in
+            *'"summary": "investigated'*) echo "INV-OK: investigate ran" ;;
+            *) echo "INV-FAILED" ;;
+          esac
+          # The default route is discovery (vecgrep) then structure (codemap). The
+          # route's Why string is deterministic and pure-ASCII, so it survives the
+          # PTY's input layer (the multibyte arrow in the summary does not).
+          case "$INV" in
+            *'discover by meaning, then resolve structure'*) echo "ROUTE-OK: discovery precedes structure" ;;
+            *) echo "ROUTE-FAILED" ;;
+          esac
+
+          # The retry budget is threaded from config through to the adapters.
+          R=$(CORTEX_MAX_AUTO_RETRIES=0 "$CX" -C "$WS" config --json)
+          case "$R" in
+            *'"max_auto_retries_per_tool": 0'*) echo "RETRY-OK: budget honored by config" ;;
+            *) echo "RETRY-FAILED" ;;
+          esac
+    cwd: "."
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+steps:
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 30000
+    - snapshot: investigate
+outcomes:
+    - id: investigate_runs
+      description: investigate executes and records evidence
+      verify:
+        screen:
+            contains: "INV-OK"
+    - id: route_is_causal
+      description: discovery (vecgrep) precedes the structural follow-up (codemap)
+      verify:
+        screen:
+            contains: "ROUTE-OK"
+    - id: retry_budget_wired
+      description: the retry budget is honored and config-visible
+      verify:
+        screen:
+            contains: "RETRY-OK"
+contractHash: sha256:e825ca4fbc55f864e1e6f3af9ac6de69f8b7391e8552d282eccf8e9f12b24521

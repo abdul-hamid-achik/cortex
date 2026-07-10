@@ -33,6 +33,20 @@ func (r *Registry) SetMaxParallel(n int) {
 	}
 }
 
+// SetMaxAutoRetries threads budget.max_auto_retries_per_tool into every
+// registered adapter that shells out (SPEC §17.3). Adapters without an exec
+// path (fakes, git-free stubs) are skipped. Negative values are ignored.
+func (r *Registry) SetMaxAutoRetries(n int) {
+	if n < 0 {
+		return
+	}
+	for _, a := range r.byName {
+		if rc, ok := a.(interface{ SetMaxAutoRetries(int) }); ok {
+			rc.SetMaxAutoRetries(n)
+		}
+	}
+}
+
 // Get returns the adapter with the given name, or nil.
 func (r *Registry) Get(name string) Adapter { return r.byName[name] }
 

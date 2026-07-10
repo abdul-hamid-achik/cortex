@@ -50,7 +50,7 @@ cortex/
 │   ├── kernel/               # SHARED SERVICE LAYER — CLI + MCP both call this
 │   │   ├── kernel.go         #   Kernel struct, evidence stamping, phase transition helper
 │   │   ├── orient.go         #   StartTask (git identity + tool health)
-│   │   ├── investigate.go    #   Investigate (route → run adapters → record evidence)
+│   │   ├── investigate.go    #   Investigate (route → discovery → candidates → structural expansion → record evidence)
 │   │   ├── plan.go           #   Plan (rejects no-disproof / no-boundary plans)
 │   │   ├── verify.go         #   Verify (review + behavioral specs + scope drift → receipts)
 │   │   ├── persist.go        #   Remember (durable memory + summary.md + completion invariant)

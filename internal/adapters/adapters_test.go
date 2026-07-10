@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,6 +52,30 @@ func TestRegistryHealthBounded(t *testing.T) {
 	r.Health(context.Background())
 	if p := atomic.LoadInt32(&peak); p > 2 {
 		t.Errorf("health fan-out exceeded max_parallel=2: peak=%d", p)
+	}
+}
+
+func TestRegistryThreadsRetryBudget(t *testing.T) {
+	// SPEC §17.3: the budget threads into every adapter that shells out.
+	r := NewRegistry(NewCodemap(), NewVecgrep())
+	r.SetMaxAutoRetries(0)
+	if cm := r.Get("codemap").(*Codemap); cm.retries != 0 {
+		t.Errorf("codemap budget not threaded: got %d", cm.retries)
+	}
+	if vg := r.Get("vecgrep").(*Vecgrep); vg.retries != 0 {
+		t.Errorf("vecgrep budget not threaded: got %d", vg.retries)
+	}
+	// Negative is ignored; budget stays 0.
+	r.SetMaxAutoRetries(-5)
+	if cm := r.Get("codemap").(*Codemap); cm.retries != 0 {
+		t.Errorf("negative should be ignored, got %d", cm.retries)
+	}
+	// An adapter without an exec path (no SetMaxAutoRetries method) is skipped.
+	var cur, peak int32
+	r2 := NewRegistry(NewCodemap(), &slowHealthAdapter{name: "slow", cur: &cur, peak: &peak})
+	r2.SetMaxAutoRetries(2) // must not panic on the slow adapter
+	if cm := r2.Get("codemap").(*Codemap); cm.retries != 2 {
+		t.Errorf("codemap budget should be 2, got %d", cm.retries)
 	}
 }
 
@@ -136,7 +161,7 @@ func (c *countingRunner) run(context.Context, string, string, ...string) ([]byte
 func TestExecRetriesReadOnlyOnce(t *testing.T) {
 	// SPEC §17.3: a read-only query retries once on a transient failure.
 	r := &countingRunner{failFirst: 1, stdout: "ok"}
-	tl := tool{bin: "git", run: r, redact: redact.New()}
+	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 1}
 	out, _, _, err := tl.exec(context.Background(), "", "x")
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
@@ -156,6 +181,85 @@ func TestExecOnceDoesNotRetry(t *testing.T) {
 	}
 	if r.calls != 1 {
 		t.Errorf("execOnce should run exactly once, got %d", r.calls)
+	}
+}
+
+func TestExecHonorsRetryBudgetZero(t *testing.T) {
+	// SPEC §17.3: a budget of 0 disables automatic retry.
+	r := &countingRunner{failFirst: 1, stdout: "ok"}
+	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 0}
+	if _, _, _, err := tl.exec(context.Background(), "", "x"); err == nil {
+		t.Error("expected failure with 0 retries")
+	}
+	if r.calls != 1 {
+		t.Errorf("budget 0 should run exactly once, got %d", r.calls)
+	}
+}
+
+func TestExecHonorsLargerRetryBudget(t *testing.T) {
+	// SPEC §17.3: a larger budget retries until success within the budget.
+	r := &countingRunner{failFirst: 2, stdout: "ok"}
+	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 2}
+	out, _, _, err := tl.exec(context.Background(), "", "x")
+	if err != nil {
+		t.Fatalf("expected success after 2 retries, got %v", err)
+	}
+	if out != "ok" || r.calls != 3 {
+		t.Errorf("expected 3 attempts and success, got calls=%d out=%q", r.calls, out)
+	}
+}
+
+func TestExecFinalFailureRecordsAttemptsAndCause(t *testing.T) {
+	// SPEC §17.3: a still-failing call reports attempt count + final cause.
+	r := &countingRunner{failFirst: 99, stdout: "ok"}
+	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 1}
+	_, _, _, err := tl.exec(context.Background(), "", "x")
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if !strings.Contains(err.Error(), "after 2 attempts") {
+		t.Errorf("expected attempt count in error, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "retry budget 1") {
+		t.Errorf("expected budget in error, got %q", err.Error())
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected wrapped final cause, got %v", err)
+	}
+}
+
+// exitRunner returns a non-zero exit with err == nil (data, never retried).
+type exitRunner struct{ calls int }
+
+func (e *exitRunner) run(context.Context, string, string, ...string) ([]byte, []byte, int, error) {
+	e.calls++
+	return []byte("boom"), nil, 2, nil
+}
+
+func TestExecNeverRetriesNonZeroExit(t *testing.T) {
+	// SPEC §17.3: a non-zero exit is data — never replayed.
+	r := &exitRunner{}
+	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 3}
+	out, _, exit, err := tl.exec(context.Background(), "", "x")
+	if err != nil {
+		t.Fatalf("non-zero exit is data, not error: %v", err)
+	}
+	if exit != 2 || out != "boom" || r.calls != 1 {
+		t.Errorf("expected one call exit=2 boom, got calls=%d exit=%d out=%q", r.calls, exit, out)
+	}
+}
+
+func TestExecDoesNotRetryAfterCallerCancel(t *testing.T) {
+	// SPEC §17.3: a pre-cancelled caller context is not retried.
+	r := &countingRunner{failFirst: 99, stdout: "ok"}
+	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 3}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, _, err := tl.exec(ctx, "", "x"); err == nil {
+		t.Error("expected failure")
+	}
+	if r.calls != 1 {
+		t.Errorf("cancelled context should not retry, got %d", r.calls)
 	}
 }
 

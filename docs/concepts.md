@@ -137,6 +137,13 @@ Cortex routes questions to the smallest appropriate tool set rather than exposin
 | old artifact | fcheap | vecgrep | recover prior evidence, then link to code |
 | secret-dependent | tvault | codemap | check capability without exposing values |
 
+Routing is **causal, not parallel**: bounded discovery (vecgrep/vidtrace) runs first, capped by
+`max_candidate_files_returned`; the top deduplicated file/symbol candidates are then fed into
+codemap as a second structural stage. Each structural fact records `derivedFrom` links back to the
+discovery evidence whose candidate produced it, preserving symptom → candidate → structural
+expansion provenance. When discovery yields no locatable candidates, the question itself falls
+through to codemap (the previous behavior).
+
 ## Action classes & approval
 
 Every tool operation is classified by side-effect risk, and the class drives what's allowed:
@@ -164,3 +171,8 @@ increments a counter, and exceeding the budget warns and nudges the agent to for
 plan. Exceeding is *allowed* — a legitimately deep investigation isn't blocked — but the reason is
 recorded on the case, and `cortex status` surfaces the round count (`rounds N/budget`). Evidence
 returned per call is likewise capped so a single query can't flood the model's context.
+
+The retry budget `max_auto_retries_per_tool` is honored by every read-only adapter call: a
+transient process failure (spawn/pipe/child-timeout, not a behavioral exit) retries up to the
+budget, the attempt count and final cause are recorded on the degraded result and in
+`commands.jsonl`, and mutating operations (memory writes, stashes, annotations) never retry.
