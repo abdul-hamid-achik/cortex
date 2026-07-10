@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
@@ -112,6 +113,12 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 	if err := k.store.SaveHypotheses(in.TaskID, hyps); err != nil {
 		return errEnvelope(in.TaskID, err.Error()), err
 	}
+
+	// Cross-case disproof recall (SPEC §15.4): index the resolved hypothesis
+	// immediately — rejected/challenged are the gold. Best-effort, decoupled
+	// from this request's lifecycle (a cancelled caller must not drop a save
+	// that already landed), so a background context is correct here.
+	k.indexResolvedHypothesis(context.Background(), c, hyps[idx], in.Reason)
 
 	env := domain.Envelope{
 		OK:      true,

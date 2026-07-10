@@ -121,6 +121,12 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		return errEnvelope(c.ID, err.Error()), err
 	}
 
+	// Cross-case disproof recall (SPEC §15.4): index all resolved hypotheses
+	// and definitive receipts now that the case is durably complete. The
+	// just-resolved hypothesis was already indexed at resolve time with its
+	// reason; this backfills the rest. Best-effort, background-decoupled.
+	k.indexCaseForRecall(context.Background(), c, hyps, receipts)
+
 	var warnings []string
 	// Durable semantic memory via vecgrep (best-effort; SPEC §15.1 semantic recall).
 	if v, ok := k.reg.Get("vecgrep").(*adapters.Vecgrep); ok {

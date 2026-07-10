@@ -34,6 +34,13 @@ budget:
   max_candidate_files_returned: 8    # discovery hits per search
   max_auto_retries_per_tool: 1       # read-only retry budget (0 = never retry; mutations never retry)
 
+# Cross-case disproof recall (SPEC §15.4) — the fourth memory layer. Best-effort.
+recall:
+  enabled: true                     # set false to disable recall entirely
+  db_path: ~/.local/share/cortex/cases.veclite   # the veclite index (default: XDG data home)
+  embed_model: nomic-embed-text     # ollama embedding model
+  embed_url: http://localhost:11434/api/embeddings  # ollama embeddings endpoint
+
 # Extra exact strings the redactor always masks (e.g. known secret NAMES).
 # Never put secret VALUES here.
 redact_literals:
@@ -86,6 +93,10 @@ Env vars have the highest precedence, handy for CI or a one-off run:
 | `CORTEX_MAX_PARALLEL_CALLS` | `budget.max_parallel_calls` |
 | `CORTEX_MAX_INVESTIGATION_ROUNDS` | `budget.max_investigation_rounds` |
 | `CORTEX_MAX_RAW_OUTPUT_BYTES` | `budget.max_raw_output_bytes_per_tool` |
+| `CORTEX_RECALL_ENABLED` | `recall.enabled` (truthy: 1/true/yes/on) |
+| `CORTEX_RECALL_DB` | `recall.db_path` |
+| `CORTEX_RECALL_EMBED_MODEL` | `recall.embed_model` |
+| `CORTEX_RECALL_EMBED_URL` | `recall.embed_url` |
 | `CORTEX_MAX_EVIDENCE_ITEMS` | `budget.max_evidence_items_returned` |
 | `CORTEX_MAX_CANDIDATE_FILES` | `budget.max_candidate_files_returned` |
 | `CORTEX_MAX_AUTO_RETRIES` | `budget.max_auto_retries_per_tool` |

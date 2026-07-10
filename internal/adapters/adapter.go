@@ -18,6 +18,7 @@ const (
 	CapabilityTerminal  Capability = "terminal"  // glyphrun
 	CapabilityArtifacts Capability = "artifacts" // fcheap
 	CapabilitySecrets   Capability = "secrets"   // tvault
+	CapabilityRecall    Capability = "recall"    // veclite cross-case disproof recall
 )
 
 // Status reports how much trust a result carries (SPEC §11.4).

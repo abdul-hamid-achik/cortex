@@ -31,6 +31,7 @@ argument (a kernel is built per call), so one server process serves any workspac
 | `cortex_abort_task` | stop without deleting evidence (reason required) |
 | `cortex_read_evidence` | full evidence record by ID |
 | `cortex_read_artifact` | resolve an evidence `rawRef` (or artifact ref) to the raw tool output |
+| `cortex_recall_cases` | recall prior resolved cases (rejected/challenged hypotheses + definitive receipts) related to a query, cross-repo or scoped — prior disproofs to read before re-deriving a theory |
 
 ## The shared result envelope
 

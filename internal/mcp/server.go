@@ -204,6 +204,13 @@ type readArtifactInput struct {
 	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
+type recallCasesInput struct {
+	Query     string `json:"query" jsonschema:"the question/goal to recall prior resolved cases for"`
+	Repo      string `json:"repo,omitempty" jsonschema:"scope to a repository name (empty = cross-repo)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max prior cases to return (default 5)"`
+	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+}
+
 func (s *Server) register() {
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_start_task",
@@ -273,6 +280,10 @@ func (s *Server) register() {
 		Name:        "cortex_read_artifact",
 		Description: "Resolve an evidence rawRef (case://…/raw/…) to the raw tool output that backed it, or an fcheap:// stash reference to retrieval guidance. Use when a compact fact isn't enough and you need the underlying detail.",
 	}, s.handleReadArtifact)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_recall_cases",
+		Description: "Recall prior resolved cases (rejected/challenged hypotheses and definitive receipts) related to a query, across repos or scoped to one. Returns low-confidence model_inference evidence — prior disproofs to read before re-deriving a theory. Best-effort: no veclite → empty, never an error.",
+	}, s.handleRecallCases)
 }
 
 // ---- handlers (thin: build kernel, call kernel, return JSON) ----
@@ -456,6 +467,14 @@ func (s *Server) handleReadEvidence(_ context.Context, _ *sdkmcp.CallToolRequest
 	return result(ev, nil)
 }
 
+func (s *Server) handleRecallCases(ctx context.Context, _ *sdkmcp.CallToolRequest, in recallCasesInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	env, err := k.RecallCasesEnvelope(ctx, in.Query, in.Repo, in.Limit)
+	return result(env, err)
+}
 func (s *Server) handleReadArtifact(_ context.Context, _ *sdkmcp.CallToolRequest, in readArtifactInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {

@@ -108,6 +108,33 @@ func TestEnvOverridesAutoRetries(t *testing.T) {
 	}
 }
 
+func TestRecallDefaultsAndEnv(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	cfg := For(dir)
+	// Defaults: enabled, nomic model, localhost ollama, a central DB path.
+	if !cfg.Recall.Enabled || cfg.Recall.EmbedModel != "nomic-embed-text" {
+		t.Errorf("recall defaults wrong: %+v", cfg.Recall)
+	}
+	if !strings.HasSuffix(cfg.Recall.DBPath, "cases.veclite") {
+		t.Errorf("recall DB path should end in cases.veclite, got %s", cfg.Recall.DBPath)
+	}
+	// Env overrides.
+	t.Setenv("CORTEX_RECALL_ENABLED", "false")
+	t.Setenv("CORTEX_RECALL_DB", "/tmp/custom.veclite")
+	t.Setenv("CORTEX_RECALL_EMBED_MODEL", "bge-small")
+	cfg = For(dir)
+	if cfg.Recall.Enabled {
+		t.Error("CORTEX_RECALL_ENABLED=false should disable recall")
+	}
+	if cfg.Recall.DBPath != "/tmp/custom.veclite" {
+		t.Errorf("CORTEX_RECALL_DB should override, got %s", cfg.Recall.DBPath)
+	}
+	if cfg.Recall.EmbedModel != "bge-small" {
+		t.Errorf("CORTEX_RECALL_EMBED_MODEL should override, got %s", cfg.Recall.EmbedModel)
+	}
+}
+
 func TestCasesDirOutsideWorkspace(t *testing.T) {
 	// Absolute / home-relative cases_dir keeps the workspace free of Cortex state.
 	isolate(t)

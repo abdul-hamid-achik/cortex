@@ -1804,3 +1804,208 @@ func (d *deadlineAdapter) Execute(ctx context.Context, _ adapters.Request) (adap
 	d.onExec(ctx)
 	return adapters.Result{Tool: d.name, Status: adapters.StatusAuthoritative}, nil
 }
+
+// fakeRecaller is a test stand-in for the veclite adapter's cross-case recall
+// surface. It records every IndexCase call and serves canned RecallCases hits.
+type fakeRecaller struct {
+	indexed   []adapters.IndexRecord
+	indexErr  error
+	hits      []adapters.RecallHit
+	recallErr error
+}
+
+func (f *fakeRecaller) IndexCase(_ context.Context, rec adapters.IndexRecord) error {
+	f.indexed = append(f.indexed, rec)
+	return f.indexErr
+}
+
+func (f *fakeRecaller) RecallCases(_ context.Context, query, repo string, limit int) ([]adapters.RecallHit, error) {
+	if f.recallErr != nil {
+		return nil, f.recallErr
+	}
+	return f.hits, nil
+}
+
+func TestResolveIndexesRejectedHypothesis(t *testing.T) {
+	fr := &fakeRecaller{}
+	k := newTestKernel(t, testRepo(t))
+	k.SetRecaller(fr)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "fix post-login redirect"})
+	id := env.TaskID
+	plan, _ := k.Plan(PlanInput{TaskID: id,
+		Hypotheses:     []HypothesisInput{{Statement: "returnTo dropped", DisproveBy: "run browser flow"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}},
+		Uncertainty:    "unsure"})
+	hypID := plan.Hypotheses[0].ID
+	if _, err := k.Resolve(ResolveInput{TaskID: id, HypothesisID: hypID, Status: "rejected", Reason: "browser flow returned to checkout"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fr.indexed) != 1 {
+		t.Fatalf("resolve should index one hypothesis, got %d", len(fr.indexed))
+	}
+	rec := fr.indexed[0]
+	if rec.Kind != "hypothesis" || rec.Status != "rejected" {
+		t.Errorf("indexed record wrong kind/status: %+v", rec)
+	}
+	if rec.Key != id+"/"+hypID {
+		t.Errorf("indexed key should be taskID/hypID, got %q", rec.Key)
+	}
+	if !strings.Contains(rec.Statement, "returnTo dropped") {
+		t.Errorf("statement should be preserved, got %q", rec.Statement)
+	}
+}
+
+func TestResolveSkipsRedactedHypothesis(t *testing.T) {
+	fr := &fakeRecaller{}
+	k := newTestKernel(t, testRepo(t))
+	k.SetRecaller(fr)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	id := env.TaskID
+	secret := "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"
+	plan, _ := k.Plan(PlanInput{TaskID: id,
+		Hypotheses:     []HypothesisInput{{Statement: "the token " + secret + " leaked", DisproveBy: "diff review"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/x.go"}},
+		Uncertainty:    "u"})
+	hypID := plan.Hypotheses[0].ID
+	_, _ = k.Resolve(ResolveInput{TaskID: id, HypothesisID: hypID, Status: "rejected", Reason: "r"})
+	if len(fr.indexed) != 0 {
+		t.Errorf("a hypothesis tripping the redactor must be EXCLUDED from the index, got %d records", len(fr.indexed))
+	}
+}
+
+func TestRememberIndexesResolvedHypothesesAndDefinitiveReceipts(t *testing.T) {
+	fr := &fakeRecaller{}
+	k := newTestKernel(t, testRepo(t), adapters.NewCodemap())
+	k.SetRecaller(fr)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	id := env.TaskID
+	plan, _ := k.Plan(PlanInput{TaskID: id,
+		Hypotheses:     []HypothesisInput{{Statement: "h1", DisproveBy: "d1"}, {Statement: "h2", DisproveBy: "d2"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/x.go"}},
+		Uncertainty:    "u"})
+	h1 := plan.Hypotheses[0].ID
+	// Reject h1 (gold); leave the second hypothesis active.
+	_, _ = k.Resolve(ResolveInput{TaskID: id, HypothesisID: h1, Status: "rejected", Reason: "r1"})
+	// Verify to produce a definitive receipt, then remember.
+	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id, Claims: []string{"the diff is sound"}, ChangedFiles: []string{"src/x.go"}})
+	_, _ = k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "done", VerificationNotPossible: true})
+	// Expect at least: h1 (rejected, indexed at resolve) + the receipt (if it ran).
+	// codemap may be unindexed here → receipt status not_run, so only h1 indexes.
+	// Assert the rejected hypothesis was indexed and h2 (active) was NOT.
+	var rejectedCount, activeCount int
+	for _, rec := range fr.indexed {
+		if rec.Kind == "hypothesis" && rec.Status == "rejected" {
+			rejectedCount++
+		}
+		if rec.Kind == "hypothesis" && rec.Status == "active" {
+			activeCount++
+		}
+	}
+	if rejectedCount < 1 {
+		t.Errorf("expected the rejected hypothesis indexed at least once, got %d", rejectedCount)
+	}
+	if activeCount != 0 {
+		t.Errorf("an active hypothesis must not be indexed, got %d", activeCount)
+	}
+}
+
+func TestSensitiveReceiptNotIndexed(t *testing.T) {
+	fr := &fakeRecaller{}
+	k := newTestKernel(t, testRepo(t), adapters.NewCodemap())
+	k.SetRecaller(fr)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	id := env.TaskID
+	_, _ = k.Plan(PlanInput{TaskID: id,
+		Hypotheses:     []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/x.go"}},
+		Uncertainty:    "u"})
+	// Write a sensitive receipt directly into the store, then remember.
+	if err := k.Store().AppendVerification(id, domain.VerificationRecord{
+		ID: "vr_sens", Claim: "the secret was rotated", Surface: domain.SurfaceSecret,
+		Status: domain.VerifyPassed, Sensitive: true, Timestamp: k.now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "done", VerificationNotPossible: true})
+	for _, rec := range fr.indexed {
+		if rec.Kind == "verification" && rec.Key == id+"/vr_sens" {
+			t.Errorf("a sensitive receipt must NOT be indexed cross-repo, got %+v", rec)
+		}
+	}
+}
+
+func TestOrientRecallsPriorCases(t *testing.T) {
+	fr := &fakeRecaller{hits: []adapters.RecallHit{{
+		ID: 1, Score: 0.5, Payload: map[string]interface{}{
+			"kind": "hypothesis", "task_id": "task_old", "repo": "liftclub",
+			"statement": "returnTo dropped", "status": "rejected", "resolved_reason": "missing returnTo",
+		},
+	}}}
+	k := newTestKernel(t, testRepo(t))
+	k.SetRecaller(fr)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "fix post-login redirect"})
+	found := false
+	for _, f := range env.Facts {
+		if strings.Contains(f.Claim, "PRIOR CASE") && strings.Contains(f.Claim, "rejected") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("orient should surface recalled prior cases as evidence; facts=%v", env.Facts)
+	}
+	// NextActions should mention the prior cases nudge.
+	if !strings.Contains(strings.Join(env.NextActions, " "), "prior related case") {
+		t.Errorf("orient should nudge to read prior cases, nextActions=%v", env.NextActions)
+	}
+}
+
+func TestRecallBestEffortWhenAbsent(t *testing.T) {
+	// No SetRecaller → k.recaller is nil. All phases must still succeed.
+	k := newTestKernel(t, testRepo(t))
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	id := env.TaskID
+	plan, _ := k.Plan(PlanInput{TaskID: id,
+		Hypotheses:     []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/x.go"}},
+		Uncertainty:    "u"})
+	hypID := plan.Hypotheses[0].ID
+	if res, _ := k.Resolve(ResolveInput{TaskID: id, HypothesisID: hypID, Status: "rejected", Reason: "r"}); !res.OK {
+		t.Fatalf("resolve must succeed without veclite: %s", res.Error)
+	}
+	if _, err := k.Investigate(context.Background(), InvestigateInput{TaskID: id, Question: "where is x"}); err != nil {
+		t.Fatalf("investigate must succeed without veclite: %v", err)
+	}
+}
+
+func TestInvestigateRunsCaseRecallStep(t *testing.T) {
+	// A veclite fake adapter (Execute op case_recall) returning a model_inference
+	// fact; assert it lands in stage-1 evidence and is NOT expanded into codemap.
+	vl := &fakeAdapter{name: "veclite", caps: []adapters.Capability{adapters.CapabilityRecall},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"case_recall": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "model_inference", Confidence: "low", Claim: "PRIOR CASE task_old: hypothesis was rejected"},
+			}},
+		}}
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	k := newTestKernel(t, testRepo(t), vl, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	inv, _ := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is the login callback wired up"})
+	found := false
+	for _, f := range inv.Facts {
+		if strings.Contains(f.Claim, "PRIOR CASE task_old") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("investigate should surface the recalled prior case; facts=%v", inv.Facts)
+	}
+	// The recall fact is model_inference → candidatesFrom skips it, so with no
+	// discovery candidates the fallback feeds the raw question to codemap (find),
+	// not an expansion of the recall claim.
+	reqs := codemap.requests()
+	if len(reqs) == 0 || reqs[0].Operation != "find" || reqs[0].Str("query") != "where is the login callback wired up" {
+		t.Errorf("expected the no-candidate codemap fallback (find on the raw question); got %d reqs %+v", len(reqs), reqs)
+	}
+}

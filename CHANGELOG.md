@@ -23,6 +23,16 @@ All notable changes to Cortex are documented here. The format follows
   Both are workspace-independent (the session is located by task ID across the central tree),
   reversible, and refuse in-flight sessions. Completes archive-lifecycle parity between the CLI
   and MCP surfaces.
+- **Cross-case disproof recall** — the fourth memory layer. Resolved hypotheses
+  (rejected/challenged are the gold) and definitive verification receipts are indexed into a
+  veclite collection (redaction-gated; sensitive records are **excluded**, not masked). At
+  orient and investigate, prior related cases surface as low-confidence `model_inference`
+  evidence ("PRIOR CASE task_x (repo Y): hypothesis '…' was REJECTED — …") so a weak model
+  reads prior disproofs before re-deriving a theory. Two-tier recall: repo-scoped first, then
+  cross-repo. New `cortex_recall_cases` MCP tool (18 total) + `cortex recall-cases` CLI.
+  Best-effort: a missing veclite or unreachable ollama degrades to a warning, never a hard
+  failure. Configured via the `recall:` block / `CORTEX_RECALL_*` env (defaults: a central
+  veclite DB, nomic-embed-text via ollama at localhost:11434, enabled).
 
 ### Changed
 - **`cortex investigate` routing is now causal, not parallel.** Discovery (vecgrep/vidtrace)

@@ -50,6 +50,21 @@ cortex investigate task_06FK… "where is the OAuth return URL handled"
 | `--surface` (repeatable) | override the routing surfaces |
 | `--depth` | `quick` \| `standard` \| `deep` |
 
+### `cortex recall-cases <query>`
+
+Search the cross-case recall index (veclite) for prior resolved hypotheses and definitive
+receipts related to a query — the prior disproofs to read before re-deriving a theory.
+Best-effort: no veclite configured → empty, never an error.
+
+```bash
+cortex recall-cases "where is the login redirect handled" --repo liftclub --limit 5
+```
+
+| Flag | Meaning |
+|---|---|
+| `--repo` | scope to a repository name (empty = cross-repo) |
+| `--limit` | max prior cases to return (default 5) |
+
 ### `cortex plan <taskId>`
 
 The planning gate. Rejects plans with no disproof path, and change tasks with no boundary.

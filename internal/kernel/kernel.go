@@ -29,6 +29,7 @@ type Kernel struct {
 	red      *redact.Redactor
 	approver Approver
 	now      func() time.Time
+	recaller caseRecaller // cross-case disproof recall surface (veclite); nil when absent
 }
 
 // New builds a kernel for a workspace with a default adapter registry (git,
@@ -52,10 +53,20 @@ func New(cfg config.Config) (*Kernel, error) {
 		adapters.NewFcheap(),
 		adapters.NewVidtrace(),
 		adapters.NewTvault(),
+		adapters.NewVeclite(),
 	)
 	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls)         // SPEC §7.3
 	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool) // SPEC §17.3
 	k := &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now}
+	if vl, ok := reg.Get("veclite").(*adapters.Veclite); ok {
+		vl.Configure(adapters.VecliteConfig{
+			DBPath:     cfg.Recall.DBPath,
+			EmbedModel: cfg.Recall.EmbedModel,
+			EmbedURL:   cfg.Recall.EmbedURL,
+			Enabled:    cfg.Recall.Enabled,
+		})
+		k.recaller = vl // cross-case recall surface (SPEC §15.4)
+	}
 	// SPEC §16.2 #4: wire an env-gated approver so a harness/CI can allow
 	// external mutations without code changes. Default (unset) keeps the
 	// built-in deny — external actions stay blocked until explicitly approved.
@@ -90,6 +101,13 @@ func NewWith(cfg config.Config, store *casefs.Store, reg *adapters.Registry) *Ke
 	k := &Kernel{cfg: cfg, store: store, reg: reg, red: redact.New(cfg.RedactLiterals...), now: time.Now}
 	if g, ok := reg.Get("git").(*adapters.Git); ok {
 		k.git = g
+	}
+	if vl, ok := reg.Get("veclite").(*adapters.Veclite); ok {
+		vl.Configure(adapters.VecliteConfig{
+			DBPath: cfg.Recall.DBPath, EmbedModel: cfg.Recall.EmbedModel,
+			EmbedURL: cfg.Recall.EmbedURL, Enabled: cfg.Recall.Enabled,
+		})
+		k.recaller = vl
 	}
 	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool) // SPEC §17.3
 	if approveExternal() {

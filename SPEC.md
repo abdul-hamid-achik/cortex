@@ -1161,13 +1161,14 @@ A verification receipt contains:
 
 ## 15. Memory Strategy
 
-### 15.1 Three layers of memory
+### 15.1 Four layers of memory
 
 | Layer | Storage | Purpose |
 |---|---|---|
-| working memory | case file | current task state and evidence |
+| working memory | The case file | the current task's state, evidence, and receipts |
 | structural memory | Codemap annotations | code-symbol relationships and behavior ownership |
 | semantic recall | Vecgrep memory / Fcheap search | cross-session discovery of prior conclusions and artifacts |
+| cross-case recall | Veclite recall index | prior resolved hypotheses and definitive receipts as prior disproofs (§15.4) |
 
 ### 15.2 What should be remembered
 
@@ -1200,6 +1201,19 @@ evidence=case task_01J9Q5Y8B0M6D2; cairntrace artifact fc_019
 confidence=high
 commit=7e1f4d2..9c1ee0a
 ```
+
+### 15.4 Cross-case disproof recall
+
+Resolved hypotheses (rejected/challenged are the gold) and definitive verification receipts are
+indexed into a veclite collection as a fourth memory layer, so a weak model stops re-forming the
+same wrong theory every session. The kernel indexes at resolve time (immediately, with the
+reason) and at remember time (a completion sweep of all resolved hypotheses + definitive
+receipts). Every string is redaction-gated; records that trip the redactor or carry the
+`sensitive` flag are **excluded** from the cross-repo index, not masked into it. At orient and
+investigate, prior related cases surface as low-confidence `model_inference` evidence — prior
+disproofs to read before re-deriving a theory. Recall is two-tier: repo-scoped first, then
+cross-repo. Best-effort: a missing veclite or unreachable ollama degrades to a warning, never a
+hard failure that blocks a phase.
 
 ---
 

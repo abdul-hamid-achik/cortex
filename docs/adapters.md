@@ -47,6 +47,7 @@ The adapters intentionally speak each tool's real dialect:
 | cairn | `--json` / `--format` | — | `cairn doctor --format json` |
 | glyph | `--format json` (precedes sub-flags) | — | `glyph doctor` |
 | tvault | `--json` (persistent) | — | `tvault doctor --json` |
+| veclite | `--json` (persistent) | `--top-k` | `veclite version` (no `doctor`; embeddings via ollama) |
 
 ## Secret safety
 

@@ -90,6 +90,15 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 		warnings = append(warnings, "tools unavailable: "+joinStr(down, ", ")+" — verification on their surfaces will be blocked")
 	}
 
+	// Cross-case disproof recall (SPEC §15.4): surface prior related cases as
+	// low-confidence orientation so a weak model reads prior disproofs before
+	// re-deriving a theory. Best-effort — a missing veclite is warn-once.
+	prior, recallWarn, nPrior := k.recallPriorCases(ctx, c, c.Goal, 5)
+	facts = append(facts, prior...)
+	if recallWarn != "" {
+		warnings = append(warnings, recallWarn)
+	}
+
 	// orienting → investigating: identity and tool health are known.
 	if err := k.transition(c, domain.PhaseInvestigating); err != nil {
 		return errEnvelope(c.ID, err.Error()), nil
@@ -98,10 +107,14 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 		return errEnvelope(c.ID, err.Error()), err
 	}
 
-	env := k.envelope(c, fmt.Sprintf("started task %s (%s); oriented and ready to investigate", c.ID, c.Goal), facts, warnings, []string{
+	next := []string{
 		"cortex investigate — discover by meaning, then resolve structure",
 		"treat search output as candidates, not proof",
-	})
+	}
+	if nPrior > 0 {
+		next = append([]string{fmt.Sprintf("%d prior related case(s) recalled — read before re-deriving a theory", nPrior)}, next...)
+	}
+	env := k.envelope(c, fmt.Sprintf("started task %s (%s); oriented and ready to investigate", c.ID, c.Goal), facts, warnings, next)
 	return env, nil
 }
 

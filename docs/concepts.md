@@ -108,20 +108,31 @@ A **verification receipt** names the exact claim it supports and its status: `pa
 `inconclusive`, `blocked`, `not_applicable`, or `not_run`. **`not_run` is never rendered as
 `passed`.**
 
-## Three layers of memory
+## Four layers of memory
 
-A proven behavior is preserved in three places so it survives beyond the current context window:
+A proven behavior is preserved in four places so it survives beyond the current context window:
 
 | Layer | Where | What |
 |---|---|---|
 | working | the case file | the current task's state, evidence, and receipts |
 | structural | codemap annotations | the proven/failed behavior attached to its owning code symbol |
 | semantic | vecgrep memory | a compact, cross-session recall of the outcome |
+| cross-case | veclite recall index | prior resolved hypotheses (rejected/challenged are the gold) and definitive receipts, recalled as prior disproofs |
 
 After a definitive browser or terminal verification, Cortex annotates the code symbols the task
 declared it would change with the behavior and its evidence reference — so the next agent asking
 codemap about that symbol sees what it's known to do. A failed behavioral run is also archived to
 fcheap and linked on its receipt, turning an ephemeral run into durable, discoverable evidence.
+
+The **cross-case** layer (SPEC §15.4) breaks the loop where a weak model re-forms the same wrong
+theory every session. When a hypothesis is resolved (rejected/challenged) or a verification
+definitively passes/fails, the case is redaction-gated (sensitive records are **excluded**, not
+masked) and indexed into a veclite collection. At orient and investigate time, prior related
+cases surface as low-confidence `model_inference` evidence — "PRIOR CASE task_x (repo Y):
+hypothesis '…' was REJECTED — …" — so the model reads prior disproofs before re-deriving a theory.
+Recall is two-tier: repo-scoped first (this project's prior disproofs are the strongest signal),
+then cross-repo. Best-effort: a missing veclite or unreachable ollama degrades to a warning, never
+a hard failure.
 
 ## Tool routing
 

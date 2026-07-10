@@ -3,6 +3,7 @@
 /dist/
 coverage.out
 coverage.html
+/cortex
 
 # Cortex local state (case files) — should also be ignored per-workspace by
 # the .agent/.gitignore Cortex writes; listed here for this repo's own dogfooding.

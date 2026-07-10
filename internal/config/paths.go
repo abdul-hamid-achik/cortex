@@ -94,6 +94,43 @@ func CacheHome() string {
 	return filepath.Join(xdgDir("XDG_CACHE_HOME", ".cache"), appName)
 }
 
+// DataHome holds portable, backup-worthy data. The cross-case recall vector
+// index lives here (XDG spec: a generated index is data, not state).
+func DataHome() string {
+	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+		return ExpandPath(v)
+	}
+	if base, ok := baseOverride(); ok {
+		return filepath.Join(base, "data")
+	}
+	return filepath.Join(xdgDir("XDG_DATA_HOME", filepath.Join(".local", "share")), appName)
+}
+
+// defaultRecallDB is the built-in veclite DB path for cross-case recall.
+func defaultRecallDB() string {
+	return filepath.Join(DataHome(), "cases.veclite")
+}
+
+// RecallConfig configures cross-case disproof recall (SPEC §15.4). Defaults
+// are sensible for a local ollama + veclite setup; every field is overridable.
+type RecallConfig struct {
+	Enabled    bool
+	DBPath     string
+	EmbedModel string
+	EmbedURL   string
+}
+
+// DefaultRecall is the built-in recall config: a central veclite DB, the
+// nomic-embed-text model, ollama at localhost:11434, enabled.
+func DefaultRecall() RecallConfig {
+	return RecallConfig{
+		Enabled:    true,
+		DBPath:     defaultRecallDB(),
+		EmbedModel: "nomic-embed-text",
+		EmbedURL:   "http://localhost:11434/api/embeddings",
+	}
+}
+
 // XDGConfigDir is where ConfigDir resolves once no legacy ~/.cortex (and no
 // $CORTEX_HOME) applies — i.e. the migration target for config.yaml. Unlike
 // ConfigDir it never honors baseOverride's legacy detection, so `cortex

@@ -16,6 +16,14 @@ type fileConfig struct {
 	Budget         *budgetFile `yaml:"budget"`
 	RedactLiterals []string    `yaml:"redact_literals"`
 	CasesDir       string      `yaml:"cases_dir"`
+	Recall         *recallFile `yaml:"recall"`
+}
+
+type recallFile struct {
+	Enabled    *bool   `yaml:"enabled"`
+	DBPath     *string `yaml:"db_path"`
+	EmbedModel *string `yaml:"embed_model"`
+	EmbedURL   *string `yaml:"embed_url"`
 }
 
 type budgetFile struct {
@@ -74,6 +82,12 @@ func applyFile(cfg *Config, fc fileConfig) {
 		setInt(&cfg.Budget.MaxCandidateFilesReturned, b.MaxCandidateFilesReturned)
 		setInt(&cfg.Budget.MaxAutoRetriesPerTool, b.MaxAutoRetriesPerTool)
 	}
+	if rc := fc.Recall; rc != nil {
+		setBool(&cfg.Recall.Enabled, rc.Enabled)
+		setStr(&cfg.Recall.DBPath, rc.DBPath)
+		setStr(&cfg.Recall.EmbedModel, rc.EmbedModel)
+		setStr(&cfg.Recall.EmbedURL, rc.EmbedURL)
+	}
 	if len(fc.RedactLiterals) > 0 {
 		cfg.RedactLiterals = append(cfg.RedactLiterals, fc.RedactLiterals...)
 	}
@@ -101,6 +115,10 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("CORTEX_CASES_DIR"); v != "" {
 		cfg.CasesDir = resolveCasesDir(cfg.Workspace, v)
 	}
+	envBool("CORTEX_RECALL_ENABLED", &cfg.Recall.Enabled)
+	envStr("CORTEX_RECALL_DB", &cfg.Recall.DBPath)
+	envStr("CORTEX_RECALL_EMBED_MODEL", &cfg.Recall.EmbedModel)
+	envStr("CORTEX_RECALL_EMBED_URL", &cfg.Recall.EmbedURL)
 }
 
 func resolveCasesDir(workspace, dir string) string {
@@ -121,6 +139,35 @@ func envInt(key string, dst *int) {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			*dst = n
+		}
+	}
+}
+
+func setBool(dst *bool, src *bool) {
+	if src != nil {
+		*dst = *src
+	}
+}
+
+func setStr(dst *string, src *string) {
+	if src != nil {
+		*dst = *src
+	}
+}
+
+func envStr(key string, dst *string) {
+	if v := os.Getenv(key); v != "" {
+		*dst = v
+	}
+}
+
+func envBool(key string, dst *bool) {
+	if v := os.Getenv(key); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			*dst = true
+		case "0", "false", "no", "off":
+			*dst = false
 		}
 	}
 }

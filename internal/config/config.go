@@ -35,6 +35,10 @@ type Config struct {
 	// RedactLiterals are extra exact strings to always mask (e.g. known secret
 	// names surfaced by tvault). Never populate this with secret values.
 	RedactLiterals []string
+	// Recall configures cross-case disproof recall (SPEC §15.4 — the fourth
+	// memory layer). Defaults: a central veclite DB, the nomic-embed-text model,
+	// ollama at localhost:11434, enabled.
+	Recall RecallConfig
 	// sources records which config files were applied (increasing precedence).
 	sources []string
 }
@@ -58,6 +62,7 @@ func For(workspace string) Config {
 		Workspace: ws,
 		CasesDir:  DefaultCasesDir(ws),
 		Budget:    domain.DefaultBudget(),
+		Recall:    DefaultRecall(),
 	}
 	load(&cfg)
 	return cfg

@@ -103,9 +103,22 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// orientation instead of being re-derived. Scoped by the cortex+repo:<name>
 	// tags the persist phase writes (never a bare repo name — "cortex" the
 	// product must not match every project also named cortex).
-	steps = append([]step{{tool: "vecgrep", op: "memory_recall", input: map[string]any{
-		"query": in.Question, "tags": memoryTags(c), "limit": candLimit,
-	}}}, steps...)
+	steps = append([]step{
+		{tool: "vecgrep", op: "memory_recall", input: map[string]any{
+			"query": in.Question, "tags": memoryTags(c), "limit": candLimit,
+		}},
+		// Cross-case disproof recall (SPEC §15.4): prior rejected/challenged
+		// hypotheses and definitive receipts, scoped to this repo. A second
+		// unscoped step adds the cross-repo tier. Both are model_inference/low
+		// orientation — candidatesFrom skips model_inference, so they never
+		// become codemap candidates.
+		{tool: "veclite", op: "case_recall", input: map[string]any{
+			"query": in.Question, "repo": c.Workspace.Repository, "limit": candLimit,
+		}},
+		{tool: "veclite", op: "case_recall", input: map[string]any{
+			"query": in.Question, "repo": "", "limit": candLimit,
+		}},
+	}, steps...)
 	if in.Video != "" {
 		steps = append([]step{{tool: "vidtrace", op: "investigate", input: map[string]any{
 			"query": in.Question, "bundle": videoBundle(in.Video), "stash": videoStash(in.Video),

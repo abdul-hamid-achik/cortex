@@ -55,19 +55,19 @@ cortex/
 │   │   ├── verify.go         #   Verify (review + behavioral specs + scope drift → receipts)
 │   │   ├── persist.go        #   Remember (durable memory + summary.md + completion invariant)
 │   │   ├── resolve.go        #   Resolve (confirm/challenge/reject a hypothesis; SPEC §9.3)
+│   │   ├── recall.go         #   Cross-case disproof recall: index hooks + recall (SPEC §15.4)
 │   │   ├── status.go         #   Status / AbortTask / ReadEvidence / ListTasks
 │   │   └── scope.go          #   scope-drift detection vs the declared boundary
 │   ├── adapters/             # one file per tool; flat package sharing exec/redact plumbing
 │   │   ├── adapter.go        #   Adapter interface, Request/Result/Fact, Capability/Status
 │   │   ├── exec.go           #   runner (fakeable), timeout, redaction, ErrToolMissing
 │   │   ├── registry.go       #   Registry + concurrent Health probe
-│   │   ├── git.go            #   workspace identity + changed-files (fully concrete)
-│   │   ├── codemap.go vecgrep.go fcheap.go cairntrace.go glyphrun.go vidtrace.go tvault.go
+│   │   ├── codemap.go vecgrep.go fcheap.go cairntrace.go glyphrun.go vidtrace.go tvault.go veclite.go
 │   │   └── util.go           #   pluralize / decodeJSON / clip helpers
 │   ├── store/
 │   │   ├── casefs/           #   JSON/JSONL case-file persistence ($XDG_STATE_HOME/cortex/sessions/<repo>/<id>/)
 │   │   └── redact/           #   secret-shape redaction (last-line filter before model output)
-│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (17 tools)
+│   ├── mcp/server.go         # stdio MCP server — THIN pass-through to internal/kernel (18 tools)
 │   ├── tui/board.go          # Charm v2 bubbletea studio — live cross-workspace board + loop stepper
 │   ├── config/               # XDG path resolution (paths.go) + cortex.yaml loader (budget/redact/cases_dir) + CORTEX_* env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_)
