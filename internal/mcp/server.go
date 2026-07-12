@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,45 +24,73 @@ import (
 
 const instructions = `Cortex is an evidence-guided agent kernel. It gives non-trivial engineering
 work a durable case file, disciplined tool routing, bounded changes, and verification tied to
-user-visible behavior. Use the six cognitive actions instead of coordinating raw tools by hand:
+user-visible behavior. Follow the actions returned in each JSON result; they are executable
+continuations, while the inputs field lists values you must still supply.
 
-1. cortex_start_task — open a case for a goal; orients on git identity + tool health.
-2. cortex_investigate — route a question through discovery (vecgrep) then structure (codemap);
-   returns evidence IDs. Treat search output as candidates, NOT proof.
-3. cortex_plan — before editing, state a testable hypothesis WITH a disproof path, a change
-   boundary (files/symbols you expect to touch), and a verification plan. Plans without a
-   disproof path are rejected.
-4. cortex_verify — after editing, run the required verifiers (codemap review + browser/terminal
-   specs), detect scope drift, and get a receipt per claim. A claim with no verifier is recorded
-   not_run — never treated as passed.
-5. cortex_remember — persist the outcome + uncertainty. A task cannot complete without a
-   verification receipt or an explicit statement that verification was not possible.
-6. cortex_status — phase, unresolved hypotheses, scope drift, missing verification, tool health.
+1. cortex_open_task — preferred entry point: retry-safe resume-or-start for a goal. Supply an
+   idempotencyKey when a lost response may be retried. Use cortex_start_task only when you
+   deliberately want a fresh case.
+2. cortex_investigate — route a question through discovery then structure and retain evidence
+   IDs. Treat search output as candidates, NOT proof.
+3. cortex_plan — before editing, state hypotheses WITH disproof paths, uncertainty, a change
+   boundary for change tasks, and required verification. Invalid plans are rejected.
+4. cortex_begin_change — for a planned change, name a stable actor, claim the bounded lease,
+   then edit only within the declared boundary. Same-actor retries are safe.
+5. cortex_verify — after editing, pass the lease actor and prefer typed claimSpecs with explicit
+   surfaces and exact contracts. Cortex runs relevant verifiers, detects scope drift, and records
+   receipts; a claim with no verifier is not_run, never passed. Repository-configured commands run
+   only when the trusted launcher set CORTEX_APPROVE_COMMANDS=1; otherwise they are blocked.
+6. cortex_remember — persist the outcome. Normal completion requires the canonical assessment to
+   be verified; verificationNotPossible explicitly preserves partial/unverified work, while
+   acceptFailed explicitly preserves a failed outcome.
 
-As evidence accumulates, use cortex_resolve to mark a hypothesis confirmed/challenged/rejected —
-history is kept; a rejected hypothesis records WHY, so contradicting evidence never silently
-overwrites a prior explanation.
-
-Also: cortex_list_tasks (workspace task index), cortex_abort_task (stop without deleting
-evidence), and cortex_read_evidence (full record by ID). Never request or expose secret
-values — Cortex checks capability only.`
+Use cortex_status for current state; cortex_resolve for hypothesis outcomes; cortex_note for
+provenance-bearing human/agent context; cortex_request_decision and cortex_answer_decision for a
+resumable human pause; cortex_handoff for a bounded transfer packet; cortex_read_evidence and
+cortex_read_artifact for progressively deeper evidence; and cortex_abort_task to stop without
+deleting evidence. The all profile additionally exposes cross-repository operator views and
+archive controls. Never request or expose secret values — Cortex checks capability only.`
 
 // Server wraps the go-sdk MCP server. Kernels are built per-call so one server
 // process can serve tasks in any workspace the tools name.
 type Server struct {
 	defaultWorkspace string
+	profile          Profile
 	srv              *sdkmcp.Server
 }
 
+// Profile controls tool exposure without changing the shared kernel. Agent
+// mode keeps lifecycle/evidence tools and hides cross-repo administration;
+// all preserves the historical full surface for operators and compatibility.
+type Profile string
+
+const (
+	ProfileAgent Profile = "agent"
+	ProfileAll   Profile = "all"
+)
+
 // NewServer builds an MCP server defaulting to the given workspace directory.
 func NewServer(defaultWorkspace string) *Server {
-	s := &Server{defaultWorkspace: defaultWorkspace}
+	s, _ := NewServerWithProfile(defaultWorkspace, string(ProfileAll))
+	return s
+}
+
+// NewServerWithProfile builds a server with a validated exposure profile.
+func NewServerWithProfile(defaultWorkspace, rawProfile string) (*Server, error) {
+	profile := Profile(strings.ToLower(strings.TrimSpace(rawProfile)))
+	if profile == "" {
+		profile = ProfileAgent
+	}
+	if profile != ProfileAgent && profile != ProfileAll {
+		return nil, fmt.Errorf("profile must be agent or all")
+	}
+	s := &Server{defaultWorkspace: defaultWorkspace, profile: profile}
 	s.srv = sdkmcp.NewServer(
 		&sdkmcp.Implementation{Name: "cortex", Version: version.Version},
 		&sdkmcp.ServerOptions{Instructions: instructions},
 	)
 	s.register()
-	return s
+	return s, nil
 }
 
 // Run serves over stdio until the context is cancelled.
@@ -91,6 +121,24 @@ type startInput struct {
 	Risk      string   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
 }
 
+type openTaskInput struct {
+	Goal           string   `json:"goal" jsonschema:"the engineering goal to resume or start"`
+	Workspace      string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	Mode           string   `json:"mode,omitempty" jsonschema:"change | investigate | review (default change)"`
+	Surfaces       []string `json:"surfaces,omitempty" jsonschema:"user-visible surfaces: code, browser, terminal, artifact, secret"`
+	Risk           string   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
+	Actor          string   `json:"actor,omitempty" jsonschema:"stable non-secret person or agent identifier"`
+	ParentTaskID   string   `json:"parentTaskId,omitempty" jsonschema:"parent case when this task was delegated"`
+	IdempotencyKey string   `json:"idempotencyKey,omitempty" jsonschema:"stable retry key; exact matches return the existing task even after completion"`
+}
+
+type beginChangeInput struct {
+	TaskID    string `json:"taskId" jsonschema:"the planned change task"`
+	Actor     string `json:"actor" jsonschema:"stable non-secret agent/person taking change ownership"`
+	TTL       string `json:"ttl,omitempty" jsonschema:"bounded lease duration such as 15m or 1h (default 15m)"`
+	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+}
+
 type investigateInput struct {
 	TaskID    string   `json:"taskId" jsonschema:"the task to investigate under"`
 	Question  string   `json:"question" jsonschema:"the question to route through discovery + structural tools"`
@@ -119,16 +167,27 @@ type planInput struct {
 	Workspace        string            `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
+type verificationClaimArg struct {
+	ID        string `json:"id,omitempty" jsonschema:"stable claim id; Cortex derives one when omitted"`
+	Statement string `json:"statement" jsonschema:"the exact user-visible assertion to prove"`
+	Surface   string `json:"surface" jsonschema:"code | browser | terminal | artifact | secret"`
+	Verifier  string `json:"verifier,omitempty" jsonschema:"exact verifier; defaults from surface (code may use command:<configured-name>)"`
+	Contract  string `json:"contract" jsonschema:"required exact spec path, configured check, or capability selector this claim must bind to"`
+}
+
 type verifyInput struct {
-	TaskID           string   `json:"taskId" jsonschema:"the task to verify"`
-	Claims           []string `json:"claims,omitempty" jsonschema:"the user-facing claims to prove"`
-	ChangedFiles     []string `json:"changedFiles,omitempty" jsonschema:"changed files; derived from git when omitted"`
-	BrowserSpec      string   `json:"browserSpec,omitempty" jsonschema:"cairntrace spec path to prove browser claims"`
-	TerminalSpec     string   `json:"terminalSpec,omitempty" jsonschema:"glyphrun spec path to prove terminal claims"`
-	ArtifactRef      string   `json:"artifactRef,omitempty" jsonschema:"fcheap stash ID or fcheap:// URI to prove an artifact claim"`
-	SecretProject    string   `json:"secretProject,omitempty" jsonschema:"tvault project whose value-free availability proves secret capability"`
-	DisableAutoSpecs bool     `json:"disableAutoSpecs,omitempty" jsonschema:"skip auto-selection of covering browser/terminal specs"`
-	Workspace        string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	TaskID           string                 `json:"taskId" jsonschema:"the task to verify"`
+	Actor            string                 `json:"actor,omitempty" jsonschema:"active change-lease owner when the task is leased"`
+	Claims           []string               `json:"claims,omitempty" jsonschema:"legacy free-text claims; prefer claimSpecs so verifier routing is explicit"`
+	ClaimSpecs       []verificationClaimArg `json:"claimSpecs,omitempty" jsonschema:"typed claims bound to an explicit surface and required exact contract; verifier may default from surface"`
+	ChangedFiles     []string               `json:"changedFiles,omitempty" jsonschema:"changed files; derived from git when omitted"`
+	BrowserSpec      string                 `json:"browserSpec,omitempty" jsonschema:"cairntrace spec path to prove browser claims"`
+	TerminalSpec     string                 `json:"terminalSpec,omitempty" jsonschema:"glyphrun spec path to prove terminal claims"`
+	ArtifactRef      string                 `json:"artifactRef,omitempty" jsonschema:"fcheap stash ID or fcheap:// URI to prove an artifact claim"`
+	SecretProject    string                 `json:"secretProject,omitempty" jsonschema:"tvault project whose value-free availability proves secret capability"`
+	DisableAutoSpecs bool                   `json:"disableAutoSpecs,omitempty" jsonschema:"skip auto-selection of covering browser/terminal specs"`
+	NoOpAcknowledged bool                   `json:"noOpAcknowledged,omitempty" jsonschema:"explicitly acknowledge that this change task intentionally produced no diff"`
+	Workspace        string                 `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
 type rememberInput struct {
@@ -136,8 +195,8 @@ type rememberInput struct {
 	Outcome                 string   `json:"outcome" jsonschema:"a concise, provenance-rich outcome summary"`
 	Importance              float64  `json:"importance,omitempty" jsonschema:"0..1 importance for durable memory (default 0.5)"`
 	Tags                    []string `json:"tags,omitempty" jsonschema:"tags for recall"`
-	VerificationNotPossible bool     `json:"verificationNotPossible,omitempty" jsonschema:"set true to record explicitly that no verifier could run"`
-	AcceptFailed            bool     `json:"acceptFailed,omitempty" jsonschema:"set true to complete with only failed verification receipts (no pass); otherwise failed-only tasks are rejected"`
+	VerificationNotPossible bool     `json:"verificationNotPossible,omitempty" jsonschema:"explicitly acknowledge a partial or unverified assessment when adequate verification could not be completed"`
+	AcceptFailed            bool     `json:"acceptFailed,omitempty" jsonschema:"explicitly acknowledge and preserve a canonical failed verification assessment"`
 	Workspace               string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -151,7 +210,8 @@ type sessionsInput struct {
 }
 
 type timelineInput struct {
-	TaskID string `json:"taskId" jsonschema:"the task/session whose activity feed to return"`
+	TaskID    string `json:"taskId" jsonschema:"the task/session whose activity feed to return"`
+	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory fallback for repo-local/custom case stores"`
 }
 
 type metricsInput struct {
@@ -186,6 +246,46 @@ type resolveInput struct {
 	Workspace    string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
+type observationInput struct {
+	TaskID     string `json:"taskId" jsonschema:"the active task to attach this observation to"`
+	Claim      string `json:"claim" jsonschema:"the redacted observation, constraint, decision context, or handoff fact"`
+	Category   string `json:"category,omitempty" jsonschema:"observation | decision | constraint | handoff (default observation)"`
+	Origin     string `json:"origin,omitempty" jsonschema:"human | agent | reviewer (default human)"`
+	Actor      string `json:"actor,omitempty" jsonschema:"person or agent that supplied the observation"`
+	URI        string `json:"uri,omitempty" jsonschema:"non-secret provenance URI"`
+	Confidence string `json:"confidence,omitempty" jsonschema:"low | medium; prose observations can never be high-confidence proof"`
+	Sensitive  bool   `json:"sensitive,omitempty" jsonschema:"mark this observation as sensitive even if automatic detection does not"`
+	Workspace  string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+}
+
+type decisionOptionArg struct {
+	ID          string `json:"id" jsonschema:"stable non-secret option id"`
+	Label       string `json:"label" jsonschema:"short human-readable choice"`
+	Consequence string `json:"consequence" jsonschema:"trade-off or consequence of choosing this option"`
+}
+
+type requestDecisionInput struct {
+	TaskID    string              `json:"taskId" jsonschema:"the active task to pause"`
+	Question  string              `json:"question" jsonschema:"one bounded question a human must answer"`
+	Options   []decisionOptionArg `json:"options" jsonschema:"at least two options with explicit consequences"`
+	Requester string              `json:"requester" jsonschema:"agent or person requesting the decision"`
+	Workspace string              `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+}
+
+type answerDecisionInput struct {
+	TaskID     string `json:"taskId" jsonschema:"the paused task"`
+	DecisionID string `json:"decisionId,omitempty" jsonschema:"pending decision id; omit only when resume=true after crash recovery"`
+	Answer     string `json:"answer,omitempty" jsonschema:"selected option id"`
+	Responder  string `json:"responder,omitempty" jsonschema:"human or actor selecting the option"`
+	Resume     bool   `json:"resume,omitempty" jsonschema:"recover an already-answered decision whose case did not resume after a crash"`
+	Workspace  string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+}
+
+type handoffInput struct {
+	TaskID    string `json:"taskId" jsonschema:"the task/session to export as a bounded transfer packet"`
+	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory fallback for repo-local/custom case stores"`
+}
+
 type abortInput struct {
 	TaskID    string `json:"taskId" jsonschema:"the task to abort"`
 	Reason    string `json:"reason" jsonschema:"why the task is being stopped (required)"`
@@ -199,9 +299,12 @@ type readEvidenceInput struct {
 }
 
 type readArtifactInput struct {
-	TaskID    string `json:"taskId" jsonschema:"the task the artifact belongs to"`
-	Ref       string `json:"ref" jsonschema:"an evidence rawRef or artifact reference (case://…/raw/… or fcheap://…)"`
-	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	TaskID      string `json:"taskId" jsonschema:"the exact task that owns or references the artifact"`
+	Ref         string `json:"ref" jsonschema:"a task-owned case://…/raw/… ref or task-referenced fcheap://stash/… ref"`
+	Path        string `json:"path,omitempty" jsonschema:"safe relative file path inside an fcheap stash; defaults to bounded file discovery"`
+	MaxBytes    int    `json:"maxBytes,omitempty" jsonschema:"maximum source bytes to return; defaults to 32768 and is hard-capped at 131072"`
+	AllowBinary bool   `json:"allowBinary,omitempty" jsonschema:"explicitly allow bounded binary content as base64; false rejects binary"`
+	Workspace   string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
 type recallCasesInput struct {
@@ -217,6 +320,10 @@ func (s *Server) register() {
 		Description: "Create a case file for a non-trivial engineering task and perform lightweight orientation (git identity + tool health). Returns the task ID and the recommended next action.",
 	}, s.handleStart)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_open_task",
+		Description: "Idempotently resume matching work or start it once. An idempotencyKey survives response loss; otherwise the newest active case with the same normalized goal, mode, workspace, and branch is resumed.",
+	}, s.handleOpen)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_investigate",
 		Description: "Route a question through discovery (vecgrep) then structure (codemap), record the returned evidence with provenance, and return a bounded summary. Search output is recorded as candidates, not proof.",
 	}, s.handleInvestigate)
@@ -225,60 +332,82 @@ func (s *Server) register() {
 		Description: "The planning gate. Store hypotheses (each REQUIRES a disproof path), a change boundary (files/symbols), and a verification plan. Rejects plans with no disproof path or (for change tasks) no boundary. Not a code generator.",
 	}, s.handlePlan)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_begin_change",
+		Description: "After planning and before editing, atomically claim a bounded change lease and enter changing. Competing actors are rejected; the same owner may safely retry.",
+	}, s.handleBeginChange)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_verify",
-		Description: "Run the verification policy after editing: structural diff review (codemap), any provided browser/terminal specs, and scope-drift detection. Returns a receipt per claim; a claim with no relevant verifier is recorded not_run, never passed.",
+		Description: "Run verification after editing, passing actor when a change lease is active. Prefer typed claimSpecs with an explicit surface and exact contract (verifier may default from surface). Repository-configured commands require trusted-launcher CORTEX_APPROVE_COMMANDS=1 or produce blocked receipts. Runs relevant checks and scope-drift detection; an unverified claim is never passed.",
 	}, s.handleVerify)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_remember",
-		Description: "Persist a concise outcome to durable memory and complete the task. Requires a *passing* verification receipt, or verificationNotPossible / acceptFailed when no pass exists.",
+		Description: "Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome.",
 	}, s.handleRemember)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_status",
 		Description: "Report a task's phase, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health.",
 	}, s.handleStatus)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_list_tasks",
-		Description: "List all tasks in the workspace (newest first): id, goal, phase, repository, createdAt.",
-	}, s.handleListTasks)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_sessions",
-		Description: "List Cortex sessions across EVERY repository (the central XDG audit view), newest first: id, goal, phase, mode, repository, slug, verified/required verification counts, active flag, timestamps. Workspace-independent — use it to see everything you have open or left unfinished anywhere. Filter with repo (substring) and active (in-flight only).",
-	}, s.handleSessions)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_timeline",
-		Description: "Return a session's chronological activity feed — phase transitions, evidence, audited tool calls, and verification receipts merged and time-sorted. The audit trail of how the case actually unfolded. Workspace-independent; located by task ID.",
-	}, s.handleTimeline)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_metrics",
-		Description: "Observability metrics (SPEC §18): outcomes and the evidence trail, not tool-call volume. With taskId — that task's tool calls, calls-before-first-evidence, verification coverage, time-in-phase, and each tool's contribution. Without taskId — workspace aggregate (completion/verified rates, mean tools & time to complete).",
-	}, s.handleMetrics)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_overview",
-		Description: "Cross-repository rollup of EVERY Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
-	}, s.handleOverview)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_archive",
-		Description: "Archive a terminal (complete/abandoned/blocked) session — MOVE it out of the active tree to the archive (reversible via cortex_unarchive; nothing is deleted). Refuses in-flight sessions. Workspace-independent; located by task ID.",
-	}, s.handleArchive)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_unarchive",
-		Description: "Restore an archived session back into the active tree. Workspace-independent; located by task ID.",
-	}, s.handleUnarchive)
+	if s.profile == ProfileAll {
+		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+			Name:        "cortex_list_tasks",
+			Description: "List all tasks in the workspace (newest first): id, goal, phase, repository, createdAt.",
+		}, s.handleListTasks)
+		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+			Name:        "cortex_sessions",
+			Description: "List Cortex sessions across EVERY repository (the central XDG audit view), newest first: id, goal, phase, mode, repository, slug, verified/required verification counts, active flag, timestamps. Workspace-independent — use it to see everything you have open or left unfinished anywhere. Filter with repo (substring) and active (in-flight only).",
+		}, s.handleSessions)
+		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+			Name:        "cortex_timeline",
+			Description: "Return a session's chronological activity feed — phase transitions, evidence, audited tool calls, and verification receipts merged and time-sorted. Located centrally by task ID; workspace is a fallback for repo-local/custom stores.",
+		}, s.handleTimeline)
+		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+			Name:        "cortex_metrics",
+			Description: "Observability metrics (SPEC §18): outcomes and the evidence trail, not tool-call volume. With taskId — that task's tool calls, calls-before-first-evidence, verification coverage, time-in-phase, and each tool's contribution. Without taskId — workspace aggregate (completion/verified rates, mean tools & time to complete).",
+		}, s.handleMetrics)
+		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+			Name:        "cortex_overview",
+			Description: "Cross-repository rollup of EVERY Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
+		}, s.handleOverview)
+		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+			Name:        "cortex_archive",
+			Description: "Archive a terminal (complete/abandoned/blocked) session — MOVE it out of the active tree to the archive (reversible via cortex_unarchive; nothing is deleted). Refuses in-flight sessions. Workspace-independent; located by task ID.",
+		}, s.handleArchive)
+		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+			Name:        "cortex_unarchive",
+			Description: "Restore an archived session back into the active tree. Workspace-independent; located by task ID.",
+		}, s.handleUnarchive)
+	}
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_resolve",
 		Description: "Update a hypothesis's status as evidence accumulates (confirmed/challenged/rejected). History is retained and the resolution is appended to the evidence ledger — this is how contradicting evidence is handled without silently overwriting a prior explanation.",
 	}, s.handleResolve)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_note",
+		Description: "Record redacted human, reviewer, or agent context as provenance-bearing human_report evidence. Notes can inform reasoning but can never satisfy verification by themselves.",
+	}, s.handleObservation)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_request_decision",
+		Description: "Pause an active case on one bounded human question with at least two explicit options and consequences. The case remains active in needs_human_decision and cannot advance until answered.",
+	}, s.handleRequestDecision)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_answer_decision",
+		Description: "Record a human-selected option and resume the exact phase that was paused. Set resume=true only to recover an answer persisted just before a process crash.",
+	}, s.handleAnswerDecision)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "cortex_handoff",
+		Description: "Return a bounded transfer packet with coordination metadata, current plan, hypotheses, recent evidence, current verifier/named-claim receipts, decisions, and executable actions. Workspace is a repo-local/custom-store fallback; raw output is excluded.",
+	}, s.handleHandoff)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_abort_task",
 		Description: "Stop the active task without deleting its evidence. Requires a reason.",
 	}, s.handleAbort)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_read_evidence",
-		Description: "Return a full evidence record by ID (raw detail is kept out of investigate/verify results to protect the context window). The record's rawRef points to the raw tool output — fetch it with cortex_read_artifact.",
+		Description: "Return a full evidence record by ID. When its rawRef contains /raw/, fetch that bounded detail with cortex_read_artifact; self-pointing human/decision evidence has no separate raw output.",
 	}, s.handleReadEvidence)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_read_artifact",
-		Description: "Resolve an evidence rawRef (case://…/raw/…) to the raw tool output that backed it, or an fcheap:// stash reference to retrieval guidance. Use when a compact fact isn't enough and you need the underlying detail.",
+		Description: "Return a bounded, redacted preview of a task-owned case rawRef or a fcheap stash already referenced by that task. path must be safe and relative; discovery is capped at 512 entries and 100 files. Binary is refused unless allowBinary is true.",
 	}, s.handleReadArtifact)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "cortex_recall_cases",
@@ -297,6 +426,18 @@ func (s *Server) handleStart(ctx context.Context, _ *sdkmcp.CallToolRequest, in 
 		Goal: in.Goal, Mode: domain.Mode(in.Mode),
 		Surfaces: toSurfaces(in.Surfaces), Risk: in.Risk,
 	})
+	return result(env, err)
+}
+
+func (s *Server) handleOpen(ctx context.Context, _ *sdkmcp.CallToolRequest, in openTaskInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	env, err := k.OpenTask(ctx, kernel.OpenInput{StartInput: kernel.StartInput{
+		Goal: in.Goal, Mode: domain.Mode(in.Mode), Surfaces: toSurfaces(in.Surfaces), Risk: in.Risk,
+		Actor: in.Actor, ParentTaskID: in.ParentTaskID, IdempotencyKey: in.IdempotencyKey,
+	}})
 	return result(env, err)
 }
 
@@ -330,16 +471,41 @@ func (s *Server) handlePlan(_ context.Context, _ *sdkmcp.CallToolRequest, in pla
 	return result(env, err)
 }
 
+func (s *Server) handleBeginChange(_ context.Context, _ *sdkmcp.CallToolRequest, in beginChangeInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	var ttl time.Duration
+	if in.TTL != "" {
+		ttl, err = time.ParseDuration(in.TTL)
+		if err != nil {
+			return result(nil, fmt.Errorf("invalid change lease ttl: %w", err))
+		}
+	}
+	env, err := k.BeginChange(kernel.BeginChangeInput{TaskID: in.TaskID, Actor: in.Actor, TTL: ttl})
+	return result(env, err)
+}
+
 func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in verifyInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
 		return result(nil, err)
 	}
+	claimSpecs := make([]domain.VerificationClaim, 0, len(in.ClaimSpecs))
+	for _, claim := range in.ClaimSpecs {
+		claimSpecs = append(claimSpecs, domain.VerificationClaim{
+			ID: claim.ID, Statement: claim.Statement, Surface: domain.Surface(claim.Surface),
+			Verifier: claim.Verifier, Contract: claim.Contract, Required: true,
+		})
+	}
 	env, err := k.Verify(ctx, kernel.VerifyInput{
-		TaskID: in.TaskID, Claims: in.Claims, ChangedFiles: in.ChangedFiles,
+		TaskID: in.TaskID, Actor: in.Actor, Claims: in.Claims, ChangedFiles: in.ChangedFiles,
+		ClaimSpecs:  claimSpecs,
 		BrowserSpec: in.BrowserSpec, TerminalSpec: in.TerminalSpec,
 		ArtifactRef: in.ArtifactRef, SecretProject: in.SecretProject,
 		DisableAutoSpecs: in.DisableAutoSpecs,
+		NoOpAcknowledged: in.NoOpAcknowledged,
 	})
 	return result(env, err)
 }
@@ -376,8 +542,8 @@ func (s *Server) handleSessions(_ context.Context, _ *sdkmcp.CallToolRequest, in
 }
 
 func (s *Server) handleTimeline(_ context.Context, _ *sdkmcp.CallToolRequest, in timelineInput) (*sdkmcp.CallToolResult, any, error) {
-	// Workspace-independent: the session is located by task ID across the tree.
-	entries, err := kernel.Timeline(in.TaskID)
+	// Central sessions are located by task ID; workspace covers local overrides.
+	entries, err := kernel.TimelineIn(in.Workspace, in.TaskID)
 	return result(entries, err)
 }
 
@@ -446,6 +612,53 @@ func (s *Server) handleResolve(_ context.Context, _ *sdkmcp.CallToolRequest, in 
 	return result(env, err)
 }
 
+func (s *Server) handleObservation(_ context.Context, _ *sdkmcp.CallToolRequest, in observationInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	env, err := k.RecordObservation(kernel.ObservationInput{
+		TaskID: in.TaskID, Claim: in.Claim, Category: in.Category, Origin: in.Origin,
+		Actor: in.Actor, URI: in.URI, Confidence: in.Confidence, Sensitive: in.Sensitive,
+	})
+	return result(env, err)
+}
+
+func (s *Server) handleRequestDecision(_ context.Context, _ *sdkmcp.CallToolRequest, in requestDecisionInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	options := make([]domain.DecisionOption, 0, len(in.Options))
+	for _, option := range in.Options {
+		options = append(options, domain.DecisionOption{ID: option.ID, Label: option.Label, Consequence: option.Consequence})
+	}
+	env, err := k.RequestDecision(kernel.RequestDecisionInput{
+		TaskID: in.TaskID, Question: in.Question, Options: options, Requester: in.Requester,
+	})
+	return result(env, err)
+}
+
+func (s *Server) handleAnswerDecision(_ context.Context, _ *sdkmcp.CallToolRequest, in answerDecisionInput) (*sdkmcp.CallToolResult, any, error) {
+	k, err := s.kernelFor(in.Workspace)
+	if err != nil {
+		return result(nil, err)
+	}
+	if in.Resume {
+		env, err := k.ResumeDecision(in.TaskID)
+		return result(env, err)
+	}
+	env, err := k.AnswerDecision(kernel.AnswerDecisionInput{
+		TaskID: in.TaskID, DecisionID: in.DecisionID, Answer: in.Answer, Responder: in.Responder,
+	})
+	return result(env, err)
+}
+
+func (s *Server) handleHandoff(_ context.Context, _ *sdkmcp.CallToolRequest, in handoffInput) (*sdkmcp.CallToolResult, any, error) {
+	handoff, err := kernel.BuildHandoffIn(in.Workspace, in.TaskID, time.Now())
+	return result(handoff, err)
+}
+
 func (s *Server) handleAbort(_ context.Context, _ *sdkmcp.CallToolRequest, in abortInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
@@ -475,16 +688,16 @@ func (s *Server) handleRecallCases(ctx context.Context, _ *sdkmcp.CallToolReques
 	env, err := k.RecallCasesEnvelope(ctx, in.Query, in.Repo, in.Limit)
 	return result(env, err)
 }
-func (s *Server) handleReadArtifact(_ context.Context, _ *sdkmcp.CallToolRequest, in readArtifactInput) (*sdkmcp.CallToolResult, any, error) {
+func (s *Server) handleReadArtifact(ctx context.Context, _ *sdkmcp.CallToolRequest, in readArtifactInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
 		return result(nil, err)
 	}
-	content, err := k.ReadArtifact(in.TaskID, in.Ref)
+	preview, err := k.PreviewArtifactWithOptions(ctx, in.TaskID, in.Ref, in.Path, in.MaxBytes, in.AllowBinary)
 	if err != nil {
 		return result(nil, err)
 	}
-	return result(map[string]string{"ref": in.Ref, "content": content}, nil)
+	return result(preview, nil)
 }
 
 // ---- helpers ----
@@ -498,7 +711,8 @@ func toSurfaces(ss []string) []domain.Surface {
 }
 
 func result(v any, err error) (*sdkmcp.CallToolResult, any, error) {
-	if err != nil {
+	structured, ok, nonzero := envelopeResultState(v)
+	if err != nil && (!structured || !nonzero) {
 		return errResult(err.Error()), nil, nil
 	}
 	var buf bytes.Buffer
@@ -510,7 +724,42 @@ func result(v any, err error) (*sdkmcp.CallToolResult, any, error) {
 	}
 	return &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(bytes.TrimRight(buf.Bytes(), "\n"))}},
+		IsError: err != nil || (structured && !ok),
 	}, v, nil
+}
+
+// envelopeResultState recognizes the shared lifecycle envelope, including
+// reports that embed it. Kernel rule rejections are valid tool responses with
+// useful recovery context, but MCP still needs IsError=true so clients that do
+// not inspect the nested `ok` field cannot mistake a rejected mutation for a
+// success. nonzero lets result preserve a populated envelope alongside a Go
+// error while retaining the concise plain-text fallback for failures that have
+// no structured value at all (for example kernel construction errors).
+func envelopeResultState(v any) (structured, ok, nonzero bool) {
+	switch value := v.(type) {
+	case domain.Envelope:
+		return true, value.OK, envelopeNonzero(value)
+	case *domain.Envelope:
+		if value == nil {
+			return true, false, false
+		}
+		return true, value.OK, envelopeNonzero(*value)
+	case kernel.StatusReport:
+		return true, value.OK, envelopeNonzero(value.Envelope)
+	case *kernel.StatusReport:
+		if value == nil {
+			return true, false, false
+		}
+		return true, value.OK, envelopeNonzero(value.Envelope)
+	default:
+		return false, false, false
+	}
+}
+
+func envelopeNonzero(value domain.Envelope) bool {
+	return value.OK || value.TaskID != "" || value.Phase != "" || value.Summary != "" || value.Error != "" ||
+		len(value.Facts) > 0 || len(value.Hypotheses) > 0 || len(value.Warnings) > 0 ||
+		len(value.NextActions) > 0 || len(value.Actions) > 0 || len(value.Artifacts) > 0
 }
 
 func errResult(msg string) *sdkmcp.CallToolResult {

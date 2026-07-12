@@ -18,6 +18,7 @@ func TestCanTransition_Illegal(t *testing.T) {
 		{PhaseInvestigating, PhaseChanging}, // must plan before changing
 		{PhaseComplete, PhaseChanging},      // terminal is terminal
 		{PhaseNew, PhaseVerifying},
+		{Phase("corrupt"), PhaseNeedsHumanDecision}, // a wait cannot legitimize an unknown phase
 	}
 	for _, tc := range illegal {
 		if CanTransition(tc[0], tc[1]) {
@@ -51,14 +52,31 @@ func TestBlockedReachableFromAnyNonTerminal(t *testing.T) {
 }
 
 func TestPhaseIsTerminal(t *testing.T) {
-	terminal := []Phase{PhaseComplete, PhaseBlocked, PhaseAbandoned, PhaseNeedsHumanDecision}
+	terminal := []Phase{PhaseComplete, PhaseBlocked, PhaseAbandoned}
 	for _, p := range terminal {
 		if !p.IsTerminal() {
 			t.Errorf("%s should be terminal", p)
 		}
 	}
+	if PhaseNeedsHumanDecision.IsTerminal() {
+		t.Error("needs_human_decision is a resumable wait, not a terminal phase")
+	}
 	if PhaseInvestigating.IsTerminal() {
 		t.Error("investigating is not terminal")
+	}
+}
+
+func TestHumanDecisionWaitCanResumeActivePhase(t *testing.T) {
+	for _, phase := range []Phase{PhaseInvestigating, PhasePlanned, PhaseChanging, PhaseVerifying, PhasePersisting} {
+		if !CanTransition(phase, PhaseNeedsHumanDecision) {
+			t.Errorf("%s should be able to pause for a decision", phase)
+		}
+		if !CanTransition(PhaseNeedsHumanDecision, phase) {
+			t.Errorf("decision wait should structurally allow resume to %s", phase)
+		}
+	}
+	if CanTransition(PhaseNeedsHumanDecision, PhaseComplete) {
+		t.Error("decision wait must not jump directly to complete")
 	}
 }
 
@@ -81,5 +99,25 @@ func TestCaseFileHasSurface(t *testing.T) {
 	}
 	if c.HasSurface(SurfaceTerminal) {
 		t.Error("did not expect terminal surface")
+	}
+}
+
+func TestModeAndSurfaceValidation(t *testing.T) {
+	for _, mode := range []Mode{ModeChange, ModeInvestigate, ModeReview} {
+		if !mode.Valid() {
+			t.Errorf("known mode %q should be valid", mode)
+		}
+	}
+	if Mode("mutate").Valid() || Mode("").Valid() {
+		t.Error("unknown/empty modes must not be valid domain values")
+	}
+
+	for _, surface := range []Surface{SurfaceCode, SurfaceBrowser, SurfaceTerminal, SurfaceArtifact, SurfaceSecret} {
+		if !surface.Valid() {
+			t.Errorf("known surface %q should be valid", surface)
+		}
+	}
+	if Surface("desktop").Valid() || Surface("").Valid() {
+		t.Error("unknown/empty surfaces must not be valid domain values")
 	}
 }

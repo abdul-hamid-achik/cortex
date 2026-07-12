@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/config"
@@ -388,7 +389,7 @@ func TestVerifyPassCountIgnoresClaimText(t *testing.T) {
 	// A browser claim (surface=browser) whose text contains "passed", with NO
 	// browser spec supplied → not_run, must not be counted.
 	res, _ := k.Verify(context.Background(), VerifyInput{TaskID: id,
-		Claims: []string{"the login page passed the token to the handler"}})
+		Claims: []string{"the login page passed the token to the handler"}, NoOpAcknowledged: true})
 	if !strings.Contains(res.Summary, "0/1 claims verified") {
 		t.Errorf("a not_run claim mentioning 'passed' must not be counted; summary=%q", res.Summary)
 	}
@@ -420,6 +421,9 @@ func TestVerifyStashesFailedRun(t *testing.T) {
 	id := env.TaskID
 	_, _ = k.Plan(PlanInput{TaskID: id, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
 		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}}, Uncertainty: "u"})
+	if err := os.WriteFile(filepath.Join(ws, "src", "callback.go"), []byte("package src\nfunc HandleCallback(){ _ = 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id, TerminalSpec: "flows/x.yml",
 		Claims: []string{"the terminal ends in the right state"}})
 
@@ -966,7 +970,7 @@ func TestRawPersistenceAndRetrieval(t *testing.T) {
 func TestReadArtifactEdgeCases(t *testing.T) {
 	k := newTestKernel(t, testRepo(t))
 	if _, err := k.ReadArtifact("task_x", "fcheap://stash/rb_1"); err == nil {
-		t.Error("fcheap ref should return retrieval guidance, not content")
+		t.Error("fcheap preview without a matching task/preview adapter should error")
 	}
 	if _, err := k.ReadArtifact("task_x", "case://task_x/evidence/ev_1"); err == nil {
 		t.Error("a self-referencing evidence ref has no stored raw")
@@ -1012,17 +1016,42 @@ func TestVerifyRiskEscalation(t *testing.T) {
 	}
 }
 
-func TestVerifyNoDiffWarning(t *testing.T) {
-	// SPEC §6.2: a change task with no diff warns before verifying.
+func TestVerifyNoDiffRequiresAcknowledgement(t *testing.T) {
+	// SPEC §6.2: a change task cannot enter verifying without a change record or
+	// an explicit acknowledgement that the task intentionally made no change.
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Risk: "low"})
 	id := env.TaskID
 	_, _ = k.Plan(PlanInput{TaskID: id, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
 		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}}, Uncertainty: "u"})
-	// No edits → no changed files.
+	// No edits → no changed files. A caller hint cannot invent a Git diff and
+	// bypass the explicit no-op acknowledgement.
+	hinted, _ := k.Verify(context.Background(), VerifyInput{
+		TaskID: id, ChangedFiles: []string{"src/callback.go"},
+	})
+	if hinted.OK || !strings.Contains(hinted.Error, "no diff/change record detected") {
+		t.Fatalf("caller hint invented a diff: ok=%v error=%q", hinted.OK, hinted.Error)
+	}
+	c, _ := k.Store().Load(id)
+	if c.Status != domain.PhasePlanned {
+		t.Fatalf("rejected hinted no-diff verify must preserve planned phase, got %s", c.Status)
+	}
+
 	res, _ := k.Verify(context.Background(), VerifyInput{TaskID: id})
-	if !hasWarning(res.Warnings, "no diff/change record detected") {
-		t.Errorf("expected a §6.2 no-diff warning; warnings=%v", res.Warnings)
+	if res.OK || !strings.Contains(res.Error, "no diff/change record detected") {
+		t.Fatalf("verify without a diff should be rejected, got ok=%v error=%q", res.OK, res.Error)
+	}
+	c, _ = k.Store().Load(id)
+	if c.Status != domain.PhasePlanned {
+		t.Fatalf("rejected no-diff verify must preserve planned phase, got %s", c.Status)
+	}
+
+	ack, _ := k.Verify(context.Background(), VerifyInput{TaskID: id, NoOpAcknowledged: true})
+	if !ack.OK || ack.Phase != domain.PhaseVerifying {
+		t.Fatalf("explicit no-op acknowledgement should permit verify, got ok=%v phase=%s error=%q", ack.OK, ack.Phase, ack.Error)
+	}
+	if !hasWarning(ack.Warnings, "intentional no-op explicitly acknowledged") {
+		t.Errorf("acknowledged no-op should remain visible; warnings=%v", ack.Warnings)
 	}
 }
 
@@ -1156,12 +1185,108 @@ func TestCompletionRejectsFailedOnly(t *testing.T) {
 	if res.OK {
 		t.Error("completion with only failed receipts should be rejected without accept_failed")
 	}
+	wrongAck, _ := k.Remember(context.Background(), RememberInput{
+		TaskID: id, Outcome: "misclassify the failure", VerificationNotPossible: true,
+	})
+	if wrongAck.OK {
+		t.Error("verification_not_possible must not override an actual failed verifier; accept_failed is required")
+	}
 	ok, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "record the failure", AcceptFailed: true})
 	if !ok.OK {
 		t.Errorf("accept_failed should allow completion: %s", ok.Error)
 	}
 	if !hasWarning(ok.Warnings, "FAILED verification") {
 		t.Errorf("expected FAILED verification warning; warnings=%v", ok.Warnings)
+	}
+}
+
+func TestMixedPassAndFailedNamedClaimIsNeverVerified(t *testing.T) {
+	ws := testRepo(t)
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "review ok",
+			Facts: []adapters.Fact{{Kind: "code_graph", Claim: "diff reviewed", Confidence: "high"}}}}
+	glyph := &fakeAdapter{name: "glyphrun", caps: []adapters.Capability{adapters.CapabilityTerminal},
+		result: adapters.Result{Status: adapters.StatusAuthoritative, Verdict: adapters.VerdictFailed,
+			Summary: "terminal flow failed", Facts: []adapters.Fact{{Kind: "terminal_run", Claim: "flow failed", Confidence: "high"}}}}
+	k := newTestKernel(t, ws, codemap, glyph)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "fix cli", Surfaces: []domain.Surface{domain.SurfaceCode, domain.SurfaceTerminal}})
+	id := env.TaskID
+	_, _ = k.Plan(PlanInput{TaskID: id, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "run cli flow"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}}, Uncertainty: "u"})
+	if err := os.WriteFile(filepath.Join(ws, "src", "callback.go"), []byte("package src\nfunc HandleCallback(){ _ = 4 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id, TerminalSpec: "specs/cli.yml",
+		Claims: []string{"the diff is sound", "the cli works"}})
+	receipts, _ := k.Store().Verifications(id)
+	purposes := map[domain.VerificationPurpose]bool{}
+	for _, receipt := range receipts {
+		purposes[receipt.Purpose] = true
+	}
+	if !purposes[domain.VerificationPurposeVerifierRun] || !purposes[domain.VerificationPurposeNamedClaim] {
+		t.Fatalf("verify must persist both verifier-run and named-claim receipt purposes: %+v", receipts)
+	}
+
+	blocked, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "mixed result"})
+	if blocked.OK {
+		t.Fatal("one passing claim must not allow completion while another current named claim failed")
+	}
+	completed, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "record mixed result", AcceptFailed: true})
+	if !completed.OK || !hasWarning(completed.Warnings, "FAILED verification") {
+		t.Fatalf("accept_failed should complete with a failed warning: ok=%v warnings=%v", completed.OK, completed.Warnings)
+	}
+	status, _ := k.Status(context.Background(), id, "standard")
+	if status.VerificationOutcome != VerificationFailed {
+		t.Fatalf("status must use the same failed assessment: %+v", status)
+	}
+
+	metrics, err := k.TaskMetrics(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Verified || metrics.VerificationOutcome != VerificationFailed {
+		t.Fatalf("mixed pass+fail metrics must be failed, not verified: %+v", metrics)
+	}
+	sessions, err := AllSessions(SessionFilter{})
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("load session summary: sessions=%+v err=%v", sessions, err)
+	}
+	if sessions[0].VerificationOutcome != VerificationFailed || sessions[0].Verified != 0 {
+		t.Fatalf("session summary must not count a mixed pass+fail case as verified: %+v", sessions[0])
+	}
+	overview, err := BuildOverview(24*time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Verified != 0 {
+		t.Fatalf("overview counted a failed mixed-outcome completion as verified: %+v", overview)
+	}
+}
+
+func TestPassingVerifierAndNotRunNamedClaimNeedsAcknowledgement(t *testing.T) {
+	ws := testRepo(t)
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "review ok"}}
+	k := newTestKernel(t, ws, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "fix redirect", Surfaces: []domain.Surface{domain.SurfaceCode}})
+	id := env.TaskID
+	_, _ = k.Plan(PlanInput{TaskID: id, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}}, Uncertainty: "u"})
+	if err := os.WriteFile(filepath.Join(ws, "src", "callback.go"), []byte("package src\nfunc HandleCallback(){ _ = 5 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id,
+		Claims: []string{"the diff is sound", "the login page redirects to checkout"}})
+
+	blocked, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "partial result"})
+	if blocked.OK {
+		t.Fatal("a not_run named claim must require explicit incomplete-verification acknowledgement")
+	}
+	completed, _ := k.Remember(context.Background(), RememberInput{
+		TaskID: id, Outcome: "record partial result", VerificationNotPossible: true,
+	})
+	if !completed.OK || !hasWarning(completed.Warnings, "INCOMPLETE verification") {
+		t.Fatalf("explicit acknowledgement should complete a partial assessment: ok=%v warnings=%v", completed.OK, completed.Warnings)
 	}
 }
 
@@ -1275,7 +1400,7 @@ func TestLegacyReceiptWithoutDigestIsNotSilentlyInvalidated(t *testing.T) {
 	}
 }
 
-func TestCompletionWarnsOnMissingRequiredVerifier(t *testing.T) {
+func TestCompletionRequiresAcknowledgementForMissingRequiredVerifier(t *testing.T) {
 	// Regression: a task can pass one required verifier (code) yet leave another
 	// required one (browser) never run, and it used to complete as if fully
 	// verified with NO warning. Completion must surface the unmet requirement
@@ -1295,9 +1420,15 @@ func TestCompletionWarnsOnMissingRequiredVerifier(t *testing.T) {
 	}
 	// Verify a code claim only — the browser required verifier never runs.
 	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id, Claims: []string{"the diff is sound"}})
-	rem, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "done"})
+	blocked, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "done"})
+	if blocked.OK {
+		t.Fatal("a passing code verifier must not silently complete while the required browser verifier is missing")
+	}
+	rem, _ := k.Remember(context.Background(), RememberInput{
+		TaskID: id, Outcome: "done", VerificationNotPossible: true,
+	})
 	if rem.Phase != domain.PhaseComplete {
-		t.Fatalf("task should still complete (warning, not block), got %s (%s)", rem.Phase, rem.Error)
+		t.Fatalf("explicit incomplete-verification acknowledgement should complete, got %s (%s)", rem.Phase, rem.Error)
 	}
 	if !hasWarning(rem.Warnings, "INCOMPLETE verification") {
 		t.Errorf("completing with an unmet required verifier must warn; warnings=%v", rem.Warnings)
@@ -1447,10 +1578,17 @@ func TestClaimSurfaceRouting(t *testing.T) {
 }
 
 func TestNormalizeRisk(t *testing.T) {
-	cases := map[string]string{"HIGH": "high", " Low ": "low", "medium": "medium", "": "medium", "bogus": "medium", "MeDiUm": "medium"}
+	cases := map[string]struct {
+		want string
+		ok   bool
+	}{
+		"HIGH": {"high", true}, " Low ": {"low", true}, "medium": {"medium", true},
+		"": {"medium", true}, "bogus": {"", false}, "MeDiUm": {"medium", true},
+	}
 	for in, want := range cases {
-		if got := normalizeRisk(in); got != want {
-			t.Errorf("normalizeRisk(%q) = %q, want %q", in, got, want)
+		got, ok := normalizeRisk(in)
+		if got != want.want || ok != want.ok {
+			t.Errorf("normalizeRisk(%q) = (%q, %t), want (%q, %t)", in, got, ok, want.want, want.ok)
 		}
 	}
 	// A high-risk task started with a non-canonical value still triggers §13.3.

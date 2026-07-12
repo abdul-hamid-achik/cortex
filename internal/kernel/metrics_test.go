@@ -66,3 +66,26 @@ func TestTaskMetricsIncludesPhaseDurations(t *testing.T) {
 		t.Errorf("expected new + orienting phases recorded, got %v", seen)
 	}
 }
+
+func TestTaskMetricsDetectsMemoryReuseFromProvenance(t *testing.T) {
+	ws := testRepo(t)
+	k := newTestKernel(t, ws)
+	env, err := k.StartTask(context.Background(), StartInput{Goal: "measure recalled evidence"})
+	if err != nil || !env.OK {
+		t.Fatalf("start: %+v %v", env, err)
+	}
+	if err := k.Store().AppendEvidence(env.TaskID, domain.Evidence{
+		ID: "ev_recalled", Timestamp: time.Now().UTC(), Kind: domain.KindModelInference,
+		Source: domain.Source{Tool: "veclite"}, Claim: "a related resolved case contradicted this hypothesis",
+		Confidence: domain.ConfidenceLow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := k.TaskMetrics(env.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.MemoryReused {
+		t.Fatalf("veclite provenance was not counted as memory reuse: %+v", m)
+	}
+}

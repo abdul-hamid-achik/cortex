@@ -83,6 +83,47 @@ cases_dir: custom/cases
 	}
 }
 
+func TestCommandVerifierConfig(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	yaml := `verifiers:
+  unit:
+    argv: [go, test, ./...]
+    kind: unit_test
+    surface: code
+    timeout: 90s
+`
+	if err := os.WriteFile(filepath.Join(dir, "cortex.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := For(dir)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid verifier config: %v", err)
+	}
+	v := cfg.Verifiers["unit"]
+	if strings.Join(v.Argv, " ") != "go test ./..." || v.Kind != "unit_test" || v.Surface != "code" || v.Timeout.String() != "1m30s" {
+		t.Fatalf("verifier config = %+v", v)
+	}
+}
+
+func TestInvalidCommandVerifierConfigFailsClosed(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	yaml := `verifiers:
+  browser-ish:
+    argv: [go, test, ./...]
+    kind: unit_test
+    surface: browser
+    timeout: nonsense
+`
+	if err := os.WriteFile(filepath.Join(dir, "cortex.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := For(dir).Validate(); err == nil {
+		t.Fatal("invalid verifier configuration must be rejected")
+	}
+}
+
 func TestEnvOverridesFile(t *testing.T) {
 	isolate(t)
 	dir := t.TempDir()
@@ -132,6 +173,28 @@ func TestRecallDefaultsAndEnv(t *testing.T) {
 	}
 	if cfg.Recall.EmbedModel != "bge-small" {
 		t.Errorf("CORTEX_RECALL_EMBED_MODEL should override, got %s", cfg.Recall.EmbedModel)
+	}
+}
+
+func TestConfigValidateRejectsBudgetsThatDisableSafetyBounds(t *testing.T) {
+	cfg := For(t.TempDir())
+	cfg.Budget.MaxParallelCalls = 0
+	cfg.Budget.MaxInvestigationRounds = -1
+	cfg.Budget.MaxAutoRetriesPerTool = -1
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("invalid safety budgets were accepted")
+	}
+	for _, want := range []string{"max_parallel_calls", "max_investigation_rounds", "max_auto_retries_per_tool"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("validation error omits %s: %v", want, err)
+		}
+	}
+
+	cfg = For(t.TempDir())
+	cfg.Budget.MaxAutoRetriesPerTool = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("zero retries should remain a supported opt-out: %v", err)
 	}
 }
 
@@ -215,7 +278,7 @@ func TestExpandPathSafe(t *testing.T) {
 	}
 }
 
-func TestMalformedFileIgnored(t *testing.T) {
+func TestMalformedFileFallsBackButFailsValidation(t *testing.T) {
 	isolate(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "cortex.yaml"), []byte("budget: [this is not valid"), 0o644); err != nil {
@@ -224,5 +287,19 @@ func TestMalformedFileIgnored(t *testing.T) {
 	cfg := For(dir) // must not panic; falls back to defaults
 	if cfg.Budget.MaxParallelCalls != 3 {
 		t.Errorf("malformed config should fall back to defaults, got %d", cfg.Budget.MaxParallelCalls)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("malformed config must fail closed when building a kernel")
+	}
+}
+
+func TestUnknownConfigFieldFailsValidation(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cortex.yaml"), []byte("verifer: typo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := For(dir).Validate(); err == nil {
+		t.Fatal("unknown config field must not be silently ignored")
 	}
 }

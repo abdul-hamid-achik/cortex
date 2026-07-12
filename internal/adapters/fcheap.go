@@ -2,7 +2,12 @@ package adapters
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -144,8 +149,8 @@ func (f *Fcheap) connect(ctx context.Context, dir, stash, codebase, query string
 
 func (f *Fcheap) verify(ctx context.Context, dir, stash string) (Result, error) {
 	stash = strings.TrimPrefix(stash, "fcheap://stash/")
-	if stash == "" {
-		return Result{Tool: "fcheap", Operation: "verify", Status: StatusError, Summary: "artifact verification needs a stash ID or fcheap:// URI"}, nil
+	if err := ValidateArtifactID(stash); err != nil {
+		return Result{Tool: "fcheap", Operation: "verify", Status: StatusError, Summary: "invalid artifact stash id: " + err.Error()}, nil
 	}
 	stdout, stderr, code, err := f.exec(ctx, dir, "info", stash, "--json")
 	if err != nil {
@@ -166,6 +171,14 @@ func (f *Fcheap) verify(ctx context.Context, dir, stash string) (Result, error) 
 	if out.ID == "" {
 		return Result{Tool: "fcheap", Operation: "verify", Status: StatusPartial,
 			Summary: "fcheap returned no stash identity", Raw: stdout}, nil
+	}
+	if err := ValidateArtifactID(out.ID); err != nil {
+		return Result{Tool: "fcheap", Operation: "verify", Status: StatusPartial,
+			Summary: "fcheap returned an invalid stash identity", Raw: stdout}, nil
+	}
+	if out.ID != stash {
+		return Result{Tool: "fcheap", Operation: "verify", Status: StatusPartial,
+			Summary: "fcheap returned a different stash identity", Raw: stdout}, nil
 	}
 	claim := fmt.Sprintf("artifact stash %s exists and its manifest is readable (%s)", out.ID, pluralize(len(out.Files), "file"))
 	return Result{Tool: "fcheap", Operation: "verify", Status: StatusAuthoritative,
@@ -245,5 +258,243 @@ func (f *Fcheap) Save(ctx context.Context, dir, path string, tags []string, tool
 	if derr := decodeJSON(stdout, &out); derr != nil {
 		return "", derr
 	}
+	if err := ValidateArtifactID(out.ID); err != nil {
+		return "", fmt.Errorf("fcheap returned invalid stash id: %w", err)
+	}
 	return out.ID, nil
+}
+
+// PreviewFile is one regular file in a restored stash manifest.
+type PreviewFile struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// ArtifactPreview is a bounded, redacted view of durable evidence. Binary
+// content is returned as base64 only after explicit caller opt-in. Files are
+// restored only into a fresh temp directory removed before this method returns.
+type ArtifactPreview struct {
+	StashID   string        `json:"stashId"`
+	Files     []PreviewFile `json:"files"`
+	Selected  string        `json:"selected,omitempty"`
+	Content   string        `json:"content,omitempty"`
+	Encoding  string        `json:"encoding,omitempty"` // text | base64
+	Truncated bool          `json:"truncated,omitempty"`
+}
+
+// Preview preserves the original adapter API and refuses binary content. New
+// callers that intentionally need bounded base64 should use PreviewWithOptions.
+func (f *Fcheap) Preview(ctx context.Context, dir, stash, selector string, maxBytes int) (ArtifactPreview, error) {
+	return f.PreviewWithOptions(ctx, dir, stash, selector, maxBytes, false)
+}
+
+// PreviewWithOptions restores a stash into an isolated temp directory and
+// returns at most maxBytes from one safe relative path. With an explicit path,
+// only that path and its ancestors are inspected. With no path, discovery is
+// rejected as soon as either the walk-entry or regular-file cap is exceeded.
+func (f *Fcheap) PreviewWithOptions(ctx context.Context, dir, stash, selector string, maxBytes int, allowBinary bool) (ArtifactPreview, error) {
+	stashID, err := artifactStashID(stash)
+	if err != nil {
+		return ArtifactPreview{}, err
+	}
+	if err := ValidateArtifactPath(selector); err != nil {
+		return ArtifactPreview{}, err
+	}
+	if !binExists(f.bin) {
+		return ArtifactPreview{}, ErrToolMissing
+	}
+	if maxBytes <= 0 {
+		maxBytes = 32 << 10
+	}
+	if maxBytes > 128<<10 {
+		maxBytes = 128 << 10
+	}
+	tmp, err := os.MkdirTemp("", "cortex-artifact-*")
+	if err != nil {
+		return ArtifactPreview{}, err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	_, stderr, code, err := f.execOnce(ctx, dir, "restore", stashID, "--to", tmp, "--json")
+	if err != nil {
+		return ArtifactPreview{}, err
+	}
+	if code != 0 {
+		return ArtifactPreview{}, fmt.Errorf("fcheap restore exited %d: %s", code, clip(firstLine(stderr), 120))
+	}
+
+	preview := ArtifactPreview{StashID: stashID}
+	selected := selector
+	if selected != "" {
+		fileInfo, infoErr := safeRestoredArtifactFile(tmp, selected)
+		if infoErr != nil {
+			return preview, infoErr
+		}
+		preview.Files = []PreviewFile{{Path: selected, Size: fileInfo.Size()}}
+	} else {
+		preview.Files, err = listRestoredArtifactFiles(tmp)
+		if err != nil {
+			return ArtifactPreview{}, err
+		}
+		if len(preview.Files) == 0 {
+			return preview, nil
+		}
+		selected = preview.Files[0].Path
+	}
+	full, _, err := safeRestoredArtifactPath(tmp, selected)
+	if err != nil {
+		return preview, err
+	}
+	file, err := os.Open(full)
+	if err != nil {
+		return preview, err
+	}
+	defer func() { _ = file.Close() }()
+	// Read one byte past the larger of the output limit and a small binary sniff
+	// window. Memory remains bounded even when the restored file is enormous.
+	readLimit := maxBytes + 1
+	const binarySniffBytes = 8 << 10
+	if readLimit < binarySniffBytes+1 {
+		readLimit = binarySniffBytes + 1
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(readLimit)))
+	if err != nil {
+		return preview, err
+	}
+	binary := ArtifactContentIsBinary(data)
+	if binary && !allowBinary {
+		return preview, fmt.Errorf("artifact file %q is binary; retry with explicit binary permission", selected)
+	}
+	if len(data) > maxBytes {
+		data = data[:maxBytes]
+		preview.Truncated = true
+	}
+	preview.Selected = selected
+	if !binary {
+		preview.Encoding = "text"
+		preview.Content = f.redact.String(string(data))
+	} else {
+		preview.Encoding = "base64"
+		preview.Content = base64.StdEncoding.EncodeToString(data)
+	}
+	return preview, nil
+}
+
+func artifactStashID(stash string) (string, error) {
+	if strings.TrimSpace(stash) != stash {
+		return "", fmt.Errorf("artifact stash reference must not have surrounding whitespace")
+	}
+	id := strings.TrimPrefix(stash, "fcheap://stash/")
+	if err := ValidateArtifactID(id); err != nil {
+		return "", fmt.Errorf("invalid artifact stash id: %w", err)
+	}
+	return id, nil
+}
+
+// listRestoredArtifactFiles uses incremental directory reads rather than
+// filepath.WalkDir, whose per-directory ReadDir call can allocate an unbounded
+// entry slice before a callback gets a chance to enforce a cap.
+func listRestoredArtifactFiles(root string) ([]PreviewFile, error) {
+	dirs := []string{root}
+	files := make([]PreviewFile, 0, MaxArtifactPreviewFiles)
+	walked := 0
+	for len(dirs) > 0 {
+		dir := dirs[0]
+		dirs = dirs[1:]
+		handle, err := os.Open(dir)
+		if err != nil {
+			return nil, err
+		}
+		for {
+			entries, readErr := handle.ReadDir(32)
+			for _, entry := range entries {
+				walked++
+				if walked > MaxArtifactPreviewWalkEntries {
+					_ = handle.Close()
+					return nil, fmt.Errorf("artifact listing exceeds %d walked entries", MaxArtifactPreviewWalkEntries)
+				}
+				full := filepath.Join(dir, entry.Name())
+				rel, relErr := filepath.Rel(root, full)
+				if relErr != nil {
+					_ = handle.Close()
+					return nil, relErr
+				}
+				rel = filepath.ToSlash(rel)
+				if err := ValidateArtifactPath(rel); err != nil {
+					_ = handle.Close()
+					return nil, fmt.Errorf("unsafe restored artifact path %q: %w", rel, err)
+				}
+				if entry.Type()&os.ModeSymlink != 0 {
+					_ = handle.Close()
+					return nil, fmt.Errorf("artifact stash contains symlink %q", rel)
+				}
+				if entry.IsDir() {
+					dirs = append(dirs, full)
+					continue
+				}
+				info, infoErr := entry.Info()
+				if infoErr != nil {
+					_ = handle.Close()
+					return nil, infoErr
+				}
+				if !info.Mode().IsRegular() {
+					_ = handle.Close()
+					return nil, fmt.Errorf("artifact stash contains non-regular file %q", rel)
+				}
+				if len(files) >= MaxArtifactPreviewFiles {
+					_ = handle.Close()
+					return nil, fmt.Errorf("artifact listing exceeds %d regular files", MaxArtifactPreviewFiles)
+				}
+				files = append(files, PreviewFile{Path: rel, Size: info.Size()})
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				_ = handle.Close()
+				return nil, readErr
+			}
+		}
+		if err := handle.Close(); err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
+}
+
+func safeRestoredArtifactFile(root, relative string) (os.FileInfo, error) {
+	_, info, err := safeRestoredArtifactPath(root, relative)
+	return info, err
+}
+
+func safeRestoredArtifactPath(root, relative string) (string, os.FileInfo, error) {
+	if err := ValidateArtifactPath(relative); err != nil {
+		return "", nil, err
+	}
+	current := root
+	parts := strings.Split(relative, "/")
+	for i, part := range parts {
+		current = filepath.Join(current, filepath.FromSlash(part))
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", nil, fmt.Errorf("artifact file %q not found in stash", relative)
+			}
+			return "", nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", nil, fmt.Errorf("artifact path traverses symlink %q", strings.Join(parts[:i+1], "/"))
+		}
+		if i < len(parts)-1 {
+			if !info.IsDir() {
+				return "", nil, fmt.Errorf("artifact path component %q is not a directory", strings.Join(parts[:i+1], "/"))
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			return "", nil, fmt.Errorf("artifact path %q is not a regular file", relative)
+		}
+		return current, info, nil
+	}
+	return "", nil, fmt.Errorf("artifact path is empty")
 }

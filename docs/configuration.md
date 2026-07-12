@@ -13,7 +13,9 @@ Lowest to highest — later wins:
 4. Project `cortex.yml` / `cortex.yaml`
 5. `CORTEX_*` environment variables
 
-Run `cortex config` to see the resolved values and exactly which files were applied:
+Run `cortex config` to see the resolved workspace/storage paths, budget, recall policy, safe
+verifier metadata, redaction count, and exactly which files were applied. Verifier names, kinds,
+surfaces, and timeouts are shown; executable `argv` is deliberately omitted:
 
 ```bash
 cortex config          # styled view
@@ -41,6 +43,20 @@ recall:
   embed_model: nomic-embed-text     # ollama embedding model
   embed_url: http://localhost:11434/api/embeddings  # ollama embeddings endpoint
 
+# Trusted, read-only code verifiers. Callers choose a NAME; they cannot supply
+# or append executable text through the CLI/MCP request.
+verifiers:
+  unit:
+    argv: ["go", "test", "./..."]
+    kind: unit_test                  # unit_test | build | lint
+    surface: code                    # v0.1 accepts code only
+    timeout: 2m
+  lint:
+    argv: ["golangci-lint", "run"]
+    kind: lint
+    surface: code
+    timeout: 3m
+
 # Extra exact strings the redactor always masks (e.g. known secret NAMES).
 # Never put secret VALUES here.
 redact_literals:
@@ -53,6 +69,40 @@ redact_literals:
 #   cases_dir: ~/somewhere/my-project   # absolute / ~ → anywhere
 # cases_dir: .cortex/cases
 ```
+
+## Safe command verifiers
+
+Configured verifiers fill the gap between structural/behavioral tools and repository-specific
+tests, builds, or lint checks. They are deliberately configuration-only:
+
+- `argv` is an exact argument array. Cortex invokes the executable directly and never evaluates a
+  shell string or metacharacters.
+- A CLI/MCP caller may choose only the configured name, never replace or append arguments.
+- Configuring argv does **not** authorize it. Repository commands are arbitrary local code and stay
+  blocked unless the trusted process launching Cortex sets `CORTEX_APPROVE_COMMANDS=1` (truthy
+  values `true`, `yes`, and `on` also work). A repository cannot grant itself this permission.
+- Names contain letters, digits, `-`, or `_`; `kind` is `unit_test`, `build`, or `lint`; v0.1
+  requires the `code` surface and a positive timeout.
+- Defaults for omitted fields are `unit_test`, `code`, and two minutes.
+- Invalid verifier policy fails Cortex startup closed instead of silently weakening verification.
+- Invalid safety budgets fail closed too: parallel calls, investigation rounds, raw bytes,
+  evidence items, and candidate files must be positive; auto-retries may be zero but not negative.
+
+Every configured verifier is added to the default plan. You may also name one explicitly:
+
+```bash
+cortex plan $TID \
+  --hypothesis "the fix is local :: run the unit verifier" \
+  --file internal/auth/callback.go \
+  --verify command:unit \
+  --uncertainty "browser coverage is still separate"
+```
+
+At verify time an approved Cortex process runs only the stored argv and writes a `command:unit`
+verifier receipt. Without launcher approval it records a `blocked` receipt instead of executing.
+Bind a typed claim to the exact check with MCP `verifier: "command:unit", contract: "unit"`, or with
+the matching CLI `--claim-verifier command:unit --claim-contract unit` flags. Command verifiers can
+prove code checks; they cannot satisfy browser, terminal, artifact, or secret claims.
 
 ## Where sessions live (XDG)
 
@@ -100,9 +150,12 @@ Env vars have the highest precedence, handy for CI or a one-off run:
 | `CORTEX_MAX_EVIDENCE_ITEMS` | `budget.max_evidence_items_returned` |
 | `CORTEX_MAX_CANDIDATE_FILES` | `budget.max_candidate_files_returned` |
 | `CORTEX_MAX_AUTO_RETRIES` | `budget.max_auto_retries_per_tool` |
+| `CORTEX_APPROVE_COMMANDS` | trusted-launcher approval for repository-configured verifier argv; unset denies execution |
 | `CORTEX_REDACT_LITERALS` | comma-separated redact literals |
 | `CORTEX_CASES_DIR` | the case-file directory (default: the central XDG sessions dir) |
 | `CORTEX_HOME` | collapse config + state + cache into one dir (default: the split XDG dirs, or a legacy `~/.cortex`) |
 | `CORTEX_CONFIG_DIR` / `CORTEX_STATE_DIR` / `CORTEX_CACHE_DIR` | override one XDG directory individually |
 
-A malformed config file is ignored (Cortex falls back to defaults) rather than failing to start.
+A file that cannot be parsed, contains an unknown field, or declares invalid policy is retained as
+a configuration problem. Kernel construction and `cortex config` then fail closed with the source
+path and validation error instead of silently falling back to weaker defaults.

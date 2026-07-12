@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -72,6 +73,23 @@ func TestPlanValidate(t *testing.T) {
 	if err := badHyp.Validate(); err == nil {
 		t.Error("plan with a disproof-less hypothesis should be invalid")
 	}
+	symbolOnly := good
+	symbolOnly.ChangeBoundary = ChangeBoundary{Symbols: []string{"HandleCallback"}}
+	if err := symbolOnly.Validate(); err == nil {
+		t.Error("symbol-only boundaries must be rejected until symbol drift is implemented")
+	}
+	unknownVerifier := good
+	unknownVerifier.VerificationRequired = []string{"custom_shell_check"}
+	if err := unknownVerifier.Validate(); err == nil {
+		t.Error("unknown verification requirement should be invalid")
+	}
+	knownVerifiers := good
+	knownVerifiers.VerificationRequired = []string{
+		"codemap_review", "cairntrace_flow", "glyphrun_flow", "fcheap_artifact", "tvault_capability",
+	}
+	if err := knownVerifiers.Validate(); err != nil {
+		t.Errorf("known verification requirements rejected: %v", err)
+	}
 }
 
 func TestVerificationRecordValidate(t *testing.T) {
@@ -89,5 +107,48 @@ func TestVerificationRecordValidate(t *testing.T) {
 	}
 	if (VerificationRecord{Status: VerifyNotRun}).Proven() {
 		t.Error("not_run must never report proven")
+	}
+	if err := (VerificationRecord{Claim: "c", Status: VerifyPassed, Purpose: "other"}).Validate(); err == nil {
+		t.Error("unknown verification purpose should be invalid")
+	}
+}
+
+func TestVerificationClaimValidate(t *testing.T) {
+	for _, claim := range []VerificationClaim{
+		{Statement: "callback compiles", Surface: SurfaceCode, Verifier: "codemap"},
+		{Statement: "unit suite passes", Surface: SurfaceCode, Verifier: "command:unit"},
+		{Statement: "redirect works", Surface: SurfaceBrowser, Verifier: "cairntrace"},
+	} {
+		if err := claim.Validate(); err != nil {
+			t.Errorf("valid claim rejected (%+v): %v", claim, err)
+		}
+	}
+	for _, claim := range []VerificationClaim{
+		{Statement: "", Surface: SurfaceCode},
+		{Statement: "x", Surface: "mobile"},
+		{Statement: "login parser compiles", Surface: SurfaceCode, Verifier: "cairntrace"},
+		{Statement: "redirect works", Surface: SurfaceBrowser, Verifier: "command:unit"},
+	} {
+		if err := claim.Validate(); err == nil {
+			t.Errorf("invalid claim accepted: %+v", claim)
+		}
+	}
+}
+
+func TestVerificationPurposeLegacyCompatibility(t *testing.T) {
+	var verifier VerificationRecord
+	if err := json.Unmarshal([]byte(`{"claim":"structural review of the diff","surface":"code","status":"passed"}`), &verifier); err != nil {
+		t.Fatal(err)
+	}
+	if verifier.EffectivePurpose() != VerificationPurposeVerifierRun {
+		t.Fatalf("legacy structural receipt purpose = %q, want verifier_run", verifier.EffectivePurpose())
+	}
+
+	var claim VerificationRecord
+	if err := json.Unmarshal([]byte(`{"claim":"the redirect returns to checkout","surface":"browser","tool":"cairntrace","status":"not_run"}`), &claim); err != nil {
+		t.Fatal(err)
+	}
+	if claim.EffectivePurpose() != VerificationPurposeNamedClaim {
+		t.Fatalf("legacy named-claim receipt purpose = %q, want named_claim", claim.EffectivePurpose())
 	}
 }

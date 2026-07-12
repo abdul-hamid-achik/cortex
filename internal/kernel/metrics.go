@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -15,26 +16,27 @@ import (
 // measures outcomes and the evidence trail, not merely tool-call volume. It is
 // computed from the case file plus the previously write-only audit log.
 type TaskMetrics struct {
-	TaskID               string             `json:"taskId"`
-	Goal                 string             `json:"goal"`
-	Status               string             `json:"status"`
-	Complete             bool               `json:"complete"`
-	Verified             bool               `json:"verified"` // complete AND every required verifier passed
-	ToolCalls            int                `json:"toolCalls"`
-	ToolErrors           int                `json:"toolErrors"`
-	CallsBeforeEvidence  int                `json:"callsBeforeFirstEvidence"`
-	EvidenceItems        int                `json:"evidenceItems"`
-	InvestigationRounds  int                `json:"investigationRounds"`
-	Hypotheses           int                `json:"hypotheses"`
-	UnresolvedHypotheses int                `json:"unresolvedHypotheses"`
-	Surfaces             []string           `json:"surfaces,omitempty"`
-	VerifiedSurfaces     []string           `json:"verifiedSurfaces,omitempty"`
-	MissingVerification  []string           `json:"missingVerification,omitempty"`
-	ScopeDrifted         bool               `json:"scopeDrifted"`
-	MemoryReused         bool               `json:"memoryReused"`
-	ToolContribution     []ToolContribution `json:"toolContribution,omitempty"`
-	PhaseDurations       []PhaseDuration    `json:"phaseDurations,omitempty"`
-	ElapsedMs            int64              `json:"elapsedMs,omitempty"`
+	TaskID               string              `json:"taskId"`
+	Goal                 string              `json:"goal"`
+	Status               string              `json:"status"`
+	Complete             bool                `json:"complete"`
+	Verified             bool                `json:"verified"` // complete AND canonical assessment is verified
+	VerificationOutcome  VerificationOutcome `json:"verificationOutcome"`
+	ToolCalls            int                 `json:"toolCalls"`
+	ToolErrors           int                 `json:"toolErrors"`
+	CallsBeforeEvidence  int                 `json:"callsBeforeFirstEvidence"`
+	EvidenceItems        int                 `json:"evidenceItems"`
+	InvestigationRounds  int                 `json:"investigationRounds"`
+	Hypotheses           int                 `json:"hypotheses"`
+	UnresolvedHypotheses int                 `json:"unresolvedHypotheses"`
+	Surfaces             []string            `json:"surfaces,omitempty"`
+	VerifiedSurfaces     []string            `json:"verifiedSurfaces,omitempty"`
+	MissingVerification  []string            `json:"missingVerification,omitempty"`
+	ScopeDrifted         bool                `json:"scopeDrifted"`
+	MemoryReused         bool                `json:"memoryReused"`
+	ToolContribution     []ToolContribution  `json:"toolContribution,omitempty"`
+	PhaseDurations       []PhaseDuration     `json:"phaseDurations,omitempty"`
+	ElapsedMs            int64               `json:"elapsedMs,omitempty"`
 }
 
 // PhaseDuration is time spent in one phase of the reasoning loop, derived from
@@ -67,19 +69,18 @@ func (k *Kernel) TaskMetrics(taskID string) (TaskMetrics, error) {
 	hyps, _ := k.store.Hypotheses(taskID)
 	receipts, _ := k.store.Verifications(taskID)
 	currentRev := adapters.Revision{}
-	if k.git != nil {
-		currentRev, _ = k.git.CurrentRevision(context.Background(), k.cfg.Workspace)
-	}
-	freshReceipts := receipts[:0]
-	for _, r := range receipts {
-		if !receiptStale(r, currentRev) {
-			freshReceipts = append(freshReceipts, r)
+	var revisionErr error
+	if !c.Status.IsTerminal() {
+		if k.git != nil {
+			currentRev, revisionErr = k.git.CurrentRevision(context.Background(), k.cfg.Workspace)
+		} else {
+			revisionErr = fmt.Errorf("git adapter unavailable")
 		}
 	}
-	receipts = freshReceipts
+	receipts, _ = verificationReceiptsAtRevision(receipts, currentRev, revisionErr)
 
 	m := TaskMetrics{
-		TaskID: c.ID, Goal: c.Goal, Status: string(c.Status),
+		TaskID: c.ID, Goal: k.red.String(c.Goal), Status: string(c.Status),
 		Complete:            c.Status == domain.PhaseComplete,
 		ToolCalls:           len(cmds),
 		EvidenceItems:       len(evidence),
@@ -135,7 +136,7 @@ func (k *Kernel) TaskMetrics(taskID string) (TaskMetrics, error) {
 			evByTool[tool] = map[string]bool{}
 		}
 		evByTool[tool][ev.ID] = true
-		if strings.HasPrefix(ev.Claim, "prior memory") {
+		if ev.Kind == domain.KindModelInference && (ev.Source.Tool == "veclite" || ev.Source.Tool == "vecgrep") {
 			m.MemoryReused = true
 		}
 		if strings.HasPrefix(ev.Claim, "scope drift") {
@@ -161,17 +162,15 @@ func (k *Kernel) TaskMetrics(taskID string) (TaskMetrics, error) {
 			m.UnresolvedHypotheses++
 		}
 	}
-	for _, r := range receipts {
+	assessment := assessVerification(c.VerificationRequired, receipts)
+	for _, r := range currentVerificationReceipts(receipts) {
 		if r.Proven() {
 			m.VerifiedSurfaces = appendUnique(m.VerifiedSurfaces, string(r.Surface))
 		}
 	}
-	for _, req := range c.VerificationRequired {
-		if !verifierSatisfied(req, receipts) {
-			m.MissingVerification = append(m.MissingVerification, req)
-		}
-	}
-	m.Verified = m.Complete && len(m.MissingVerification) == 0 && anyProven(receipts)
+	m.VerificationOutcome = assessment.Outcome
+	m.MissingVerification = assessment.MissingRequired
+	m.Verified = m.Complete && assessment.Outcome == VerificationVerified
 	m.ToolContribution = sortContributions(perTool)
 
 	events, _ := k.store.PhaseEvents(taskID)
@@ -288,15 +287,6 @@ func (k *Kernel) WorkspaceMetrics() (WorkspaceMetrics, []TaskMetrics, error) {
 		wm.MeanTimeToCompleteMs = float64(elapsedCompleted) / float64(wm.Completed)
 	}
 	return wm, per, nil
-}
-
-func anyProven(receipts []domain.VerificationRecord) bool {
-	for _, r := range receipts {
-		if r.Proven() {
-			return true
-		}
-	}
-	return false
 }
 
 func appendUnique(xs []string, x string) []string {

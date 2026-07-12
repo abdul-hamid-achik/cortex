@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Cortex — evidence-guided agent kernel">
+  <rect width="1200" height="630" fill="#141413"/>
+  <path d="M0 540C280 420 420 610 710 470s350-25 490-145v305H0Z" fill="#1e1e1b"/>
+  <circle cx="974" cy="156" r="116" fill="none" stroke="#393832" stroke-width="28"/>
+  <path d="M1018 85a82 82 0 1 0 0 142" fill="none" stroke="#faf9f5" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="1018" cy="85" r="12" fill="#d97757"/>
+  <circle cx="1018" cy="227" r="12" fill="#788c5d"/>
+  <text x="86" y="200" fill="#d97757" font-family="Outfit, system-ui, sans-serif" font-size="28" font-weight="650" letter-spacing="5">CORTEX</text>
+  <text x="86" y="306" fill="#faf9f5" font-family="Outfit, system-ui, sans-serif" font-size="72" font-weight="650">Agents that keep</text>
+  <text x="86" y="390" fill="#faf9f5" font-family="Outfit, system-ui, sans-serif" font-size="72" font-weight="650">their evidence straight.</text>
+  <text x="90" y="472" fill="#b0aea5" font-family="Outfit, system-ui, sans-serif" font-size="29">Durable state · bounded changes · revision-bound verification</text>
+</svg>

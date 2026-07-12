@@ -12,6 +12,13 @@ import (
 // StatusReport is the detailed view of a task's health (SPEC §10.2 cortex_status).
 type StatusReport struct {
 	domain.Envelope
+	Revision             uint64                  `json:"revision"`
+	Actor                string                  `json:"actor,omitempty"`
+	ParentTaskID         string                  `json:"parentTaskId,omitempty"`
+	ChildTaskIDs         []string                `json:"childTaskIds,omitempty"`
+	PausedFrom           domain.Phase            `json:"pausedFrom,omitempty"`
+	ChangeLease          *domain.ChangeLease     `json:"changeLease,omitempty"`
+	PendingDecision      *domain.Decision        `json:"pendingDecision,omitempty"`
 	Mode                 domain.Mode             `json:"mode"`
 	Risk                 string                  `json:"risk"`
 	Workspace            domain.Workspace        `json:"workspace"`
@@ -19,6 +26,7 @@ type StatusReport struct {
 	UnresolvedHypotheses []domain.HypView        `json:"unresolvedHypotheses,omitempty"`
 	VerificationRequired []string                `json:"verificationRequired,omitempty"`
 	VerificationDone     []string                `json:"verificationDone,omitempty"`
+	VerificationOutcome  VerificationOutcome     `json:"verificationOutcome"`
 	StaleVerification    []string                `json:"staleVerification,omitempty"`
 	MissingVerification  []string                `json:"missingVerification,omitempty"`
 	Scope                *ScopeReport            `json:"scope,omitempty"`
@@ -31,16 +39,28 @@ type StatusReport struct {
 // Status returns the task phase, unresolved hypotheses, scope drift, required
 // verification, and tool health (SPEC §10.2 cortex_status).
 func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusReport, error) {
-	c, err := k.store.Load(taskID)
+	detail = strings.ToLower(strings.TrimSpace(detail))
+	if detail == "" {
+		detail = "standard"
+	}
+	if detail != "standard" && detail != "full" {
+		return StatusReport{Envelope: errEnvelope(taskID, "status detail must be standard or full")}, nil
+	}
+	snapshot, err := k.store.StatusSnapshot(taskID)
 	if err != nil {
 		return StatusReport{Envelope: errEnvelope(taskID, err.Error())}, nil
 	}
-	evidence, _ := k.store.Evidence(taskID)
-	hyps, _ := k.store.Hypotheses(taskID)
-	receipts, _ := k.store.Verifications(taskID)
+	c := snapshot.Case
+	hyps := snapshot.Hypotheses
+	receipts := snapshot.Verifications
+	decisions := snapshot.Decisions
 	currentRev, revErr := adapters.Revision{}, error(nil)
-	if k.git != nil {
-		currentRev, revErr = k.git.CurrentRevision(ctx, k.cfg.Workspace)
+	if !c.Status.IsTerminal() {
+		if k.git != nil {
+			currentRev, revErr = k.git.CurrentRevision(ctx, k.cfg.Workspace)
+		} else {
+			revErr = fmt.Errorf("git adapter unavailable")
+		}
 	}
 
 	rep := StatusReport{
@@ -49,35 +69,42 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 			Summary: fmt.Sprintf("task %s is %s (%s)", c.ID, c.Status, clipStr(c.Goal, 60)),
 		},
 		Mode: c.Mode, Risk: c.Risk, Workspace: c.Workspace, Surfaces: c.Surfaces,
+		Revision: c.Revision, Actor: c.Actor, ParentTaskID: c.ParentTaskID,
+		ChildTaskIDs: append([]string(nil), c.ChildTaskIDs...), PausedFrom: c.PausedFrom,
+		ChangeLease:          c.ChangeLease,
 		VerificationRequired: c.VerificationRequired,
-		EvidenceCount:        len(evidence),
+		EvidenceCount:        snapshot.EvidenceTotal,
 		InvestigationRounds:  c.InvestigationRounds,
 		InvestigationBudget:  k.cfg.Budget.MaxInvestigationRounds,
 	}
-
+	for i := len(decisions) - 1; i >= 0; i-- {
+		if decisions[i].Status == domain.DecisionPending {
+			decision := decisions[i]
+			rep.PendingDecision = &decision
+			break
+		}
+	}
 	for _, h := range hyps {
 		if h.Status == domain.HypActive || h.Status == domain.HypChallenged {
 			rep.UnresolvedHypotheses = append(rep.UnresolvedHypotheses, domain.ToHypView(h))
 		}
 	}
 
-	// Required vs done verification (SPEC acceptance: status detects missing verification).
-	done := map[string]bool{}
-	for _, r := range receipts {
-		if receiptStale(r, currentRev) {
-			rep.StaleVerification = append(rep.StaleVerification, r.Claim)
-			continue
-		}
+	// Required vs done verification (SPEC acceptance: status detects missing
+	// verification). Only fresh receipts participate in the canonical assessment.
+	freshReceipts, staleReceipts := verificationReceiptsAtRevision(receipts, currentRev, revErr)
+	for _, r := range staleReceipts {
+		rep.StaleVerification = append(rep.StaleVerification, verificationReceiptDisplayID(r))
+	}
+	for _, r := range freshReceipts {
 		if r.Proven() {
 			rep.VerificationDone = append(rep.VerificationDone, r.Claim)
 		}
-		done[string(r.Surface)] = done[string(r.Surface)] || r.Proven()
 	}
-	for _, req := range c.VerificationRequired {
-		if !verifierSatisfiedCurrent(req, receipts, currentRev) {
-			rep.MissingVerification = append(rep.MissingVerification, req)
-		}
-	}
+	assessment := assessVerification(c.VerificationRequired, freshReceipts)
+	rep.VerificationOutcome = assessment.Outcome
+	rep.MissingVerification = assessment.MissingRequired
+	rep.Actions = hydrateDecisionActions(c, structuredNextForCaseAt(c, k.now().UTC(), assessment), decisions)
 
 	// Scope drift for in-flight change tasks.
 	if c.Mode == domain.ModeChange && (c.Status == domain.PhaseChanging || c.Status == domain.PhaseVerifying) && k.git != nil {
@@ -96,46 +123,83 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	if len(rep.MissingVerification) > 0 && c.Status != domain.PhaseComplete {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d required verification(s) still missing", len(rep.MissingVerification)))
 	}
+	if len(assessment.FailedClaims) > 0 {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d current named claim(s) failed", len(assessment.FailedClaims)))
+	} else if len(assessment.NonPassingClaims) > 0 {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d current named claim(s) did not pass", len(assessment.NonPassingClaims)))
+	}
 	if revErr != nil {
 		rep.Warnings = append(rep.Warnings, "could not check verification freshness: "+revErr.Error())
 	}
-	if len(rep.StaleVerification) > 0 {
+	if len(rep.StaleVerification) > 0 && assessment.Outcome != VerificationVerified {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d verification receipt(s) are stale because HEAD or the dirty diff changed", len(rep.StaleVerification)))
 		rep.NextActions = append([]string{"cortex verify — rerun verifiers for the current revision/diff"}, nextForPhase(c.Status)...)
+		k.redactStatusReport(&rep)
 		return rep, nil
 	}
 	rep.NextActions = nextForPhase(c.Status)
+	if c.Status == domain.PhaseVerifying && assessment.Outcome == VerificationVerified {
+		rep.NextActions = []string{"cortex remember — preserve the verified outcome"}
+	}
+	k.redactStatusReport(&rep)
 	return rep, nil
 }
 
-// verifierSatisfied reports whether a required verifier label has a passing
-// receipt. The match is loose: a required "cairntrace_flow" is satisfied by a
-// passed browser-surface receipt.
-func verifierSatisfied(required string, receipts []domain.VerificationRecord) bool {
-	return verifierSatisfiedCurrent(required, receipts, adapters.Revision{})
-}
-
-func verifierSatisfiedCurrent(required string, receipts []domain.VerificationRecord, current adapters.Revision) bool {
-	surf := requiredSurface(required)
-	for _, r := range receipts {
-		if receiptStale(r, current) || !r.Proven() {
-			continue
-		}
-		if r.Surface == surf || string(r.Surface) == required || r.Tool == required {
-			return true
-		}
+func (k *Kernel) redactStatusReport(rep *StatusReport) {
+	rep.Summary = k.red.String(rep.Summary)
+	rep.Actor = k.red.String(rep.Actor)
+	rep.Workspace.Root = k.red.String(rep.Workspace.Root)
+	rep.Workspace.Repository = k.red.String(rep.Workspace.Repository)
+	rep.Workspace.Branch = k.red.String(rep.Workspace.Branch)
+	rep.Workspace.BaseRef = k.red.String(rep.Workspace.BaseRef)
+	for i := range rep.UnresolvedHypotheses {
+		rep.UnresolvedHypotheses[i].Statement = k.red.String(rep.UnresolvedHypotheses[i].Statement)
 	}
-	return false
+	rep.VerificationDone = k.redactStrings(rep.VerificationDone)
+	rep.StaleVerification = k.redactStrings(rep.StaleVerification)
+	rep.MissingVerification = k.redactStrings(rep.MissingVerification)
+	redactDecision(k.red, rep.PendingDecision)
+	rep.Warnings = k.redactStrings(rep.Warnings)
+	rep.NextActions = k.redactStrings(rep.NextActions)
+	rep.Actions = k.redactStructuredActions(rep.Actions)
+	for i := range rep.ToolHealth {
+		rep.ToolHealth[i].Detail = k.red.String(rep.ToolHealth[i].Detail)
+	}
 }
 
 // receiptStale is backward-compatible: legacy receipts without a dirty digest
 // retain their historical semantics. New receipts are stale when either HEAD
 // or the exact dirty tree differs from the state verified.
 func receiptStale(r domain.VerificationRecord, current adapters.Revision) bool {
+	// An explicitly unbound receipt is the authoritative result of its latest
+	// verifier batch. It must stay current enough to mask older proof; treating
+	// it as stale could resurrect an earlier passing batch after a mid-run edit.
+	if r.Binding == domain.VerificationUnbound {
+		return false
+	}
 	if r.DirtyDigest == "" || current.Commit == "" {
 		return false
 	}
 	return r.Revision != current.Commit || r.DirtyDigest != current.DirtyDigest
+}
+
+// verificationReceiptsAtRevision is the single freshness projection used by
+// status, completion, metrics, show/Studio, and handoff. When freshness cannot
+// be checked, definitive receipts remain in their latest batch but become
+// explicitly unbound so an older pass cannot be reported as current.
+func verificationReceiptsAtRevision(receipts []domain.VerificationRecord, current adapters.Revision, revisionErr error) (fresh, stale []domain.VerificationRecord) {
+	fresh = make([]domain.VerificationRecord, 0, len(receipts))
+	for _, receipt := range receipts {
+		if revisionErr != nil && receipt.Definitive() {
+			receipt.Binding = domain.VerificationUnbound
+		}
+		if receiptStale(receipt, current) {
+			stale = append(stale, receipt)
+			continue
+		}
+		fresh = append(fresh, receipt)
+	}
+	return fresh, stale
 }
 
 func requiredSurface(required string) domain.Surface {
@@ -158,7 +222,7 @@ func nextForPhase(p domain.Phase) []string {
 	case domain.PhaseInvestigating:
 		return []string{"cortex investigate", "cortex plan"}
 	case domain.PhasePlanned:
-		return []string{"make edits within the boundary", "cortex verify"}
+		return []string{"cortex begin-change — claim bounded change ownership", "make edits within the boundary", "cortex verify"}
 	case domain.PhaseChanging:
 		return []string{"cortex verify"}
 	case domain.PhaseVerifying:
@@ -175,9 +239,11 @@ func nextForPhase(p domain.Phase) []string {
 // AbortTask stops the active task without deleting evidence (SPEC §10.2
 // cortex_abort_task). A reason is required.
 func (k *Kernel) AbortTask(taskID, reason string) (domain.Envelope, error) {
+	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return errEnvelope(taskID, "abort requires a reason"), nil
 	}
+	reason = k.red.String(reason)
 	c, err := k.store.Load(taskID)
 	if err != nil {
 		return errEnvelope(taskID, err.Error()), nil
@@ -186,6 +252,11 @@ func (k *Kernel) AbortTask(taskID, reason string) (domain.Envelope, error) {
 		return errEnvelope(taskID, fmt.Sprintf("task is already in terminal phase %q", c.Status)), nil
 	}
 	from := c.Status
+	if c.ChangeLease != nil && c.ChangeLease.Active(k.now().UTC()) {
+		if err := c.ChangeLease.Release(c.ChangeLease.Actor, k.now().UTC()); err != nil {
+			return errEnvelope(c.ID, "cannot release change lease: "+err.Error()), nil
+		}
+	}
 	c.Status = domain.PhaseAbandoned
 	c.BlockedReason = reason
 	if err := k.store.Save(c); err != nil {
@@ -193,31 +264,29 @@ func (k *Kernel) AbortTask(taskID, reason string) (domain.Envelope, error) {
 	}
 	k.recordPhase(c.ID, from, domain.PhaseAbandoned) // abort bypasses transition()
 	return domain.Envelope{OK: true, TaskID: c.ID, Phase: c.Status,
-		Summary: "task aborted: " + reason, RawAvailable: true}, nil
+		Summary: "task aborted: " + reason, RawAvailable: false}, nil
 }
 
 // ReadEvidence returns a full evidence record (SPEC §10.4 raw retrieval).
 func (k *Kernel) ReadEvidence(taskID, evidenceID string) (domain.Evidence, error) {
-	return k.store.GetEvidence(taskID, evidenceID)
-}
-
-// ReadArtifact resolves an artifact/raw reference to its content (SPEC §10.4
-// cortex_read_artifact). It handles case://<taskID>/raw/<id> refs stored by
-// Cortex. For fcheap:// references it returns guidance rather than the bytes —
-// fetching a stash is fcheap's job (use `fcheap restore <id>`).
-func (k *Kernel) ReadArtifact(taskID, ref string) (string, error) {
-	switch {
-	case strings.HasPrefix(ref, "fcheap://"):
-		id := strings.TrimPrefix(ref, "fcheap://stash/")
-		return "", fmt.Errorf("stashed artifact — retrieve it with `fcheap restore %s`", id)
-	case strings.Contains(ref, "/raw/"):
-		rawID := ref[strings.LastIndex(ref, "/raw/")+len("/raw/"):]
-		return k.store.ReadRaw(taskID, rawID)
-	case strings.Contains(ref, "/evidence/"):
-		return "", fmt.Errorf("this evidence has no stored raw output (the reference self-points)")
-	default:
-		return "", fmt.Errorf("unrecognized artifact reference %q", ref)
+	evidence, err := k.store.GetEvidence(taskID, evidenceID)
+	if err != nil {
+		return domain.Evidence{}, err
 	}
+	sensitive := evidence.Sensitivity == domain.SensitivitySensitive || k.red.Detected(evidence.Claim) ||
+		k.red.Detected(evidence.Source.URI) || k.red.Detected(evidence.Source.Actor)
+	evidence.Claim = k.red.String(evidence.Claim)
+	evidence.Source.URI = k.red.String(evidence.Source.URI)
+	evidence.Source.Actor = k.red.String(evidence.Source.Actor)
+	if evidence.Location != nil {
+		sensitive = sensitive || k.red.Detected(evidence.Location.File) || k.red.Detected(evidence.Location.Symbol)
+		evidence.Location.File = k.red.String(evidence.Location.File)
+		evidence.Location.Symbol = k.red.String(evidence.Location.Symbol)
+	}
+	if sensitive {
+		evidence.Sensitivity = domain.SensitivitySensitive
+	}
+	return evidence, nil
 }
 
 // ListTasks returns a compact index of all tasks in the store, newest first.
@@ -238,7 +307,10 @@ func (k *Kernel) ListTasks() ([]TaskSummary, error) {
 		if c.Workspace.Root != k.cfg.Workspace {
 			continue
 		}
-		out = append(out, TaskSummary{ID: c.ID, Goal: c.Goal, Phase: c.Status, Repository: c.Workspace.Repository, CreatedAt: c.CreatedAt.Format("2006-01-02 15:04")})
+		out = append(out, TaskSummary{
+			ID: c.ID, Goal: k.red.String(c.Goal), Phase: c.Status,
+			Repository: k.red.String(c.Workspace.Repository), CreatedAt: c.CreatedAt.Format("2006-01-02 15:04"),
+		})
 	}
 	return out, nil
 }

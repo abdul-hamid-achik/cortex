@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,10 @@ import (
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/abdul-hamid-achik/cortex/internal/config"
+	"github.com/abdul-hamid-achik/cortex/internal/domain"
+	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 )
 
 // testRepo makes a temp git repo the MCP tools can operate on.
@@ -41,11 +46,18 @@ func testRepo(t *testing.T) string {
 // connect starts the server over an in-memory transport and returns a client
 // session plus the workspace all calls should target.
 func connect(t *testing.T) (*sdkmcp.ClientSession, string) {
+	return connectProfile(t, ProfileAll)
+}
+
+func connectProfile(t *testing.T, profile Profile) (*sdkmcp.ClientSession, string) {
 	t.Helper()
 	ws := testRepo(t)
 	ctx := context.Background()
 	clientT, serverT := sdkmcp.NewInMemoryTransports()
-	srv := NewServer(ws)
+	srv, err := NewServerWithProfile(ws, string(profile))
+	if err != nil {
+		t.Fatal(err)
+	}
 	go func() { _ = srv.serve(ctx, serverT) }()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test", Version: "0"}, nil)
 	cs, err := client.Connect(ctx, clientT, nil)
@@ -80,6 +92,62 @@ func callEnvelope(t *testing.T, cs *sdkmcp.ClientSession, name string, args map[
 	return env
 }
 
+func TestResultMarksAndPreservesStructuredEnvelopeErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		v    any
+		err  error
+	}{
+		{
+			name: "kernel rule rejection",
+			v: domain.Envelope{
+				OK: false, TaskID: "task_rejected", Phase: domain.PhaseChanging,
+				Summary: "lease actor is required", Error: "lease actor is required",
+			},
+		},
+		{
+			name: "structured envelope plus go error",
+			v: domain.Envelope{
+				OK: false, TaskID: "task_conflict", Summary: "case changed concurrently",
+				Error: "case changed concurrently",
+			},
+			err: errors.New("case revision conflict"),
+		},
+		{
+			name: "embedded status rejection",
+			v: kernel.StatusReport{Envelope: domain.Envelope{
+				OK: false, TaskID: "task_missing", Summary: "not found", Error: "not found",
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, structured, callErr := result(tt.v, tt.err)
+			if callErr != nil {
+				t.Fatal(callErr)
+			}
+			if !res.IsError {
+				t.Fatalf("structured rejection was reported as success: %+v", res)
+			}
+			if structured == nil {
+				t.Fatal("structured rejection was discarded")
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal([]byte(textOf(res)), &decoded); err != nil {
+				t.Fatalf("structured rejection is not JSON: %v (%s)", err, textOf(res))
+			}
+			if decoded["ok"] != false || decoded["taskId"] == "" {
+				t.Fatalf("structured rejection lost envelope fields: %v", decoded)
+			}
+		})
+	}
+
+	plain, structured, err := result(nil, errors.New("kernel construction failed"))
+	if err != nil || !plain.IsError || structured != nil || !strings.HasPrefix(textOf(plain), "Error: ") {
+		t.Fatalf("unstructured errors should retain the plain fallback: result=%+v structured=%v err=%v", plain, structured, err)
+	}
+}
+
 func TestMCPToolsList(t *testing.T) {
 	cs, _ := connect(t)
 	res, err := cs.ListTools(context.Background(), nil)
@@ -91,18 +159,170 @@ func TestMCPToolsList(t *testing.T) {
 		got[tool.Name] = true
 	}
 	for _, want := range []string{
-		"cortex_start_task", "cortex_investigate", "cortex_plan", "cortex_verify",
+		"cortex_start_task", "cortex_open_task", "cortex_investigate", "cortex_plan", "cortex_begin_change", "cortex_verify",
 		"cortex_remember", "cortex_status", "cortex_list_tasks", "cortex_sessions",
 		"cortex_timeline", "cortex_metrics", "cortex_overview", "cortex_archive",
 		"cortex_unarchive", "cortex_resolve", "cortex_abort_task", "cortex_read_evidence",
 		"cortex_read_artifact", "cortex_recall_cases",
+		"cortex_note", "cortex_request_decision", "cortex_answer_decision", "cortex_handoff",
 	} {
 		if !got[want] {
 			t.Errorf("missing MCP tool %q", want)
 		}
 	}
-	if len(res.Tools) != 18 {
-		t.Errorf("expected 18 tools, got %d", len(res.Tools))
+	if len(res.Tools) != 24 {
+		t.Errorf("expected 24 tools, got %d", len(res.Tools))
+	}
+}
+
+func TestMCPAgentProfileHidesOperatorTools(t *testing.T) {
+	cs, _ := connectProfile(t, ProfileAgent)
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, tool := range res.Tools {
+		got[tool.Name] = true
+	}
+	for _, want := range []string{"cortex_start_task", "cortex_open_task", "cortex_begin_change", "cortex_verify", "cortex_resolve", "cortex_read_evidence", "cortex_note", "cortex_request_decision", "cortex_answer_decision", "cortex_handoff"} {
+		if !got[want] {
+			t.Errorf("agent profile is missing %q", want)
+		}
+	}
+	for _, hidden := range []string{"cortex_sessions", "cortex_metrics", "cortex_archive"} {
+		if got[hidden] {
+			t.Errorf("agent profile should hide %q", hidden)
+		}
+	}
+}
+
+func TestMCPOpenAndBeginChangeAreRetrySafe(t *testing.T) {
+	cs, ws := connect(t)
+	args := map[string]any{
+		"goal": "idempotent repair", "workspace": ws, "actor": "agent-a", "idempotencyKey": "mcp-run-1",
+	}
+	first := callEnvelope(t, cs, "cortex_open_task", args)
+	retry := callEnvelope(t, cs, "cortex_open_task", args)
+	if first["taskId"] == "" || retry["taskId"] != first["taskId"] {
+		t.Fatalf("open was not idempotent: first=%v retry=%v", first, retry)
+	}
+	taskID, _ := first["taskId"].(string)
+	plan := callEnvelope(t, cs, "cortex_plan", map[string]any{
+		"taskId": taskID, "workspace": ws, "uncertainty": "coverage may differ",
+		"files":      []any{"callback.go"},
+		"hypotheses": []any{map[string]any{"statement": "callback needs a change", "disproveBy": "review the diff"}},
+	})
+	if plan["ok"] != true {
+		t.Fatalf("plan = %v", plan)
+	}
+	begun := callEnvelope(t, cs, "cortex_begin_change", map[string]any{
+		"taskId": taskID, "workspace": ws, "actor": "agent-a", "ttl": "2m",
+	})
+	if begun["ok"] != true || begun["phase"] != "changing" {
+		t.Fatalf("begin = %v", begun)
+	}
+	retried := callEnvelope(t, cs, "cortex_begin_change", map[string]any{
+		"taskId": taskID, "workspace": ws, "actor": "agent-a", "ttl": "2m",
+	})
+	if retried["ok"] != true || retried["taskId"] != taskID {
+		t.Fatalf("begin retry = %v", retried)
+	}
+}
+
+func TestMCPDecisionPauseAnswerAndHandoff(t *testing.T) {
+	cs, ws := connect(t)
+	start := callEnvelope(t, cs, "cortex_start_task", map[string]any{
+		"goal": "choose migration strategy", "workspace": ws,
+	})
+	taskID, _ := start["taskId"].(string)
+	paused := callEnvelope(t, cs, "cortex_request_decision", map[string]any{
+		"taskId": taskID, "workspace": ws, "question": "Which migration should we use?", "requester": "agent-a",
+		"options": []any{
+			map[string]any{"id": "safe", "label": "Safe migration", "consequence": "Takes longer"},
+			map[string]any{"id": "fast", "label": "Fast migration", "consequence": "Higher rollback risk"},
+		},
+	})
+	if paused["ok"] != true || paused["phase"] != "needs_human_decision" {
+		t.Fatalf("pause = %v", paused)
+	}
+	artifacts, _ := paused["artifacts"].([]any)
+	if len(artifacts) != 1 {
+		t.Fatalf("decision artifact missing: %v", paused)
+	}
+	decision, _ := artifacts[0].(map[string]any)
+	decisionID, _ := decision["id"].(string)
+	answered := callEnvelope(t, cs, "cortex_answer_decision", map[string]any{
+		"taskId": taskID, "workspace": ws, "decisionId": decisionID, "answer": "safe", "responder": "human-a",
+	})
+	if answered["ok"] != true || answered["phase"] != "investigating" {
+		t.Fatalf("answer = %v", answered)
+	}
+	handoff := callEnvelope(t, cs, "cortex_handoff", map[string]any{"taskId": taskID})
+	if handoff["taskId"] != taskID || handoff["phase"] != "investigating" {
+		t.Fatalf("handoff = %v", handoff)
+	}
+}
+
+func TestMCPWorkspaceViewsFindRepoLocalCases(t *testing.T) {
+	workspace := testRepo(t)
+	if err := os.WriteFile(filepath.Join(workspace, "cortex.yaml"), []byte("cases_dir: .cortex/cases\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	k, err := kernel.New(config.For(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := k.StartTask(context.Background(), kernel.StartInput{Goal: "portable MCP case", Actor: "agent-a"})
+	if err != nil || !started.OK {
+		t.Fatalf("start repo-local case: %+v (%v)", started, err)
+	}
+
+	ctx := context.Background()
+	clientTransport, serverTransport := sdkmcp.NewInMemoryTransports()
+	server, err := NewServerWithProfile(t.TempDir(), string(ProfileAll))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.serve(ctx, serverTransport) }()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "workspace-view-test", Version: "0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	handoff := callEnvelope(t, session, "cortex_handoff", map[string]any{
+		"taskId": started.TaskID, "workspace": workspace,
+	})
+	if handoff["taskId"] != started.TaskID {
+		t.Fatalf("workspace-aware handoff = %v", handoff)
+	}
+	actions, _ := handoff["actions"].([]any)
+	if len(actions) == 0 {
+		t.Fatalf("handoff omitted actions: %v", handoff)
+	}
+	action, _ := actions[0].(map[string]any)
+	arguments, _ := action["arguments"].(map[string]any)
+	if arguments["workspace"] != workspace {
+		t.Fatalf("handoff action is not portable: %v", action)
+	}
+
+	timelineResult, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
+		Name: "cortex_timeline", Arguments: map[string]any{"taskId": started.TaskID, "workspace": workspace},
+	})
+	if err != nil || timelineResult.IsError {
+		t.Fatalf("workspace-aware timeline: %v (%s)", err, textOf(timelineResult))
+	}
+	var timeline []kernel.TimelineEntry
+	if err := json.Unmarshal([]byte(textOf(timelineResult)), &timeline); err != nil || len(timeline) == 0 {
+		t.Fatalf("timeline = %+v (%v; %s)", timeline, err, textOf(timelineResult))
+	}
+}
+
+func TestMCPInvalidProfileRejected(t *testing.T) {
+	if _, err := NewServerWithProfile(t.TempDir(), "everything"); err == nil {
+		t.Fatal("invalid MCP profile must be rejected")
 	}
 }
 
@@ -176,5 +396,27 @@ func TestMCPInvestigateUnknownTask(t *testing.T) {
 	})
 	if env["ok"] == true {
 		t.Error("investigating an unknown task should not report ok:true")
+	}
+}
+
+func TestMCPReadArtifactReturnsBoundedPreview(t *testing.T) {
+	cs, ws := connect(t)
+	start := callEnvelope(t, cs, "cortex_start_task", map[string]any{
+		"goal": "preview raw evidence", "workspace": ws,
+	})
+	taskID, _ := start["taskId"].(string)
+	k, err := kernel.New(config.For(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Store().WriteRaw(taskID, "raw_mcp", "abcdefghij"); err != nil {
+		t.Fatal(err)
+	}
+	preview := callEnvelope(t, cs, "cortex_read_artifact", map[string]any{
+		"taskId": taskID, "workspace": ws,
+		"ref": "case://" + taskID + "/raw/raw_mcp", "maxBytes": 3,
+	})
+	if preview["content"] != "abc" || preview["truncated"] != true || preview["maxBytes"] != float64(3) {
+		t.Fatalf("MCP read-artifact did not return bounded preview metadata: %+v", preview)
 	}
 }

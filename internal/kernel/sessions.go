@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,32 +9,40 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/config"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
+	"github.com/abdul-hamid-achik/cortex/internal/store/redact"
 )
 
 // SessionSummary is one session in the global, cross-workspace index — enough to
 // audit at a glance (SPEC §8.1, §18.1) without opening the case file.
 type SessionSummary struct {
-	ID         string       `json:"id"`
-	Goal       string       `json:"goal"`
-	Phase      domain.Phase `json:"phase"`
-	Mode       domain.Mode  `json:"mode"`
-	Repository string       `json:"repository,omitempty"`
-	Workspace  string       `json:"workspace,omitempty"`
-	Slug       string       `json:"slug"`
-	CreatedAt  time.Time    `json:"createdAt"`
-	UpdatedAt  time.Time    `json:"updatedAt"`
-	Verified   int          `json:"verified"` // proven verification receipts
-	Required   int          `json:"required"` // verifiers the plan requires
-	Active     bool         `json:"active"`   // phase is non-terminal (in-flight)
+	ID                  string              `json:"id"`
+	Goal                string              `json:"goal"`
+	Phase               domain.Phase        `json:"phase"`
+	Mode                domain.Mode         `json:"mode"`
+	Repository          string              `json:"repository,omitempty"`
+	Workspace           string              `json:"workspace,omitempty"`
+	Slug                string              `json:"slug"`
+	CreatedAt           time.Time           `json:"createdAt"`
+	UpdatedAt           time.Time           `json:"updatedAt"`
+	Verified            int                 `json:"verified"` // required verifiers satisfied without a named-claim failure
+	Required            int                 `json:"required"` // verifiers the plan requires
+	VerificationOutcome VerificationOutcome `json:"verificationOutcome"`
+	Active              bool                `json:"active"` // phase is non-terminal (in-flight)
 }
 
 // SessionFilter narrows AllSessions. A zero filter returns everything.
 type SessionFilter struct {
 	Repo       string // match against slug or repository (substring); "" = all
 	ActiveOnly bool   // only non-terminal (in-flight) sessions
+}
+
+type revisionLookup struct {
+	revision adapters.Revision
+	err      error
 }
 
 // StaleSince reports whether an in-flight session hasn't advanced within age — a
@@ -67,6 +76,8 @@ func allSessionsIn(root string, filter SessionFilter) ([]SessionSummary, error) 
 		return nil, err
 	}
 	var out []SessionSummary
+	revisions := make(map[string]revisionLookup)
+	git := adapters.NewGit()
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -85,7 +96,7 @@ func allSessionsIn(root string, filter SessionFilter) ([]SessionSummary, error) 
 			if err != nil {
 				continue // stray dir without a case.json — skip, never fabricate
 			}
-			s := summarizeSession(c, slug, store)
+			s := summarizeSession(c, slug, store, git, revisions)
 			if filter.ActiveOnly && !s.Active {
 				continue
 			}
@@ -134,21 +145,31 @@ func LoadSession(slug, taskID string) (SessionDetail, error) {
 	return SessionDetail{Case: c, Evidence: ev, Hyps: hyps, Receipts: recs}, nil
 }
 
-func summarizeSession(c *domain.CaseFile, slug string, store *casefs.Store) SessionSummary {
-	proven := 0
-	if recs, err := store.Verifications(c.ID); err == nil {
-		for _, r := range recs {
-			if r.Proven() {
-				proven++
-			}
+func summarizeSession(c *domain.CaseFile, slug string, store *casefs.Store, git *adapters.Git, revisions map[string]revisionLookup) SessionSummary {
+	receipts, _ := store.Verifications(c.ID)
+	if !c.Status.IsTerminal() {
+		lookup, ok := revisions[c.Workspace.Root]
+		if !ok {
+			lookup.revision, lookup.err = git.CurrentRevision(context.Background(), c.Workspace.Root)
+			revisions[c.Workspace.Root] = lookup
 		}
+		receipts, _ = verificationReceiptsAtRevision(receipts, lookup.revision, lookup.err)
 	}
+	assessment := assessVerification(c.VerificationRequired, receipts)
+	verifiedRequired := len(assessment.SatisfiedRequired)
+	// The compact N/M count must not look green when a current named claim is
+	// non-passing or failed, even if all verifier labels happened to run.
+	if len(assessment.NonPassingClaims) > 0 || len(assessment.FailedClaims) > 0 {
+		verifiedRequired = 0
+	}
+	r := redact.New(config.For(c.Workspace.Root).RedactLiterals...)
 	return SessionSummary{
-		ID: c.ID, Goal: c.Goal, Phase: c.Status, Mode: c.Mode,
-		Repository: c.Workspace.Repository, Workspace: c.Workspace.Root,
-		Slug:      slug,
+		ID: c.ID, Goal: r.String(c.Goal), Phase: c.Status, Mode: c.Mode,
+		Repository: r.String(c.Workspace.Repository), Workspace: r.String(c.Workspace.Root),
+		Slug:      r.String(slug),
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
-		Verified: proven, Required: len(c.VerificationRequired),
-		Active: !c.Status.IsTerminal(),
+		Verified: verifiedRequired, Required: len(c.VerificationRequired),
+		VerificationOutcome: assessment.Outcome,
+		Active:              !c.Status.IsTerminal(),
 	}
 }

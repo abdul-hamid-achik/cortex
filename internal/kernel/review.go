@@ -25,6 +25,29 @@ type ReviewInput struct {
 // verifiers over base…HEAD (structural review + auto-selected behavioral specs),
 // and completes with a verdict whose every claim is backed by a receipt.
 func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, error) {
+	surfaces, err := normalizeSurfaces(in.Surfaces)
+	if err != nil {
+		return errEnvelope("", err.Error()), nil
+	}
+	risk, ok := normalizeRisk(in.Risk)
+	if !ok {
+		return errEnvelope("", fmt.Sprintf("risk must be one of: low, medium, high (got %q)", in.Risk)), nil
+	}
+	if in.PR < 0 {
+		return errEnvelope("", "review pr number cannot be negative"), nil
+	}
+	if textExceeds(strings.TrimSpace(in.Base), maxLocatorBytes) || textExceeds(strings.TrimSpace(in.Head), maxLocatorBytes) {
+		return errEnvelope("", fmt.Sprintf("review refs must be at most %d bytes", maxLocatorBytes)), nil
+	}
+	if len(in.Claims) > 128 {
+		return errEnvelope("", "review accepts at most 128 claims"), nil
+	}
+	for _, claim := range in.Claims {
+		if textExceeds(strings.TrimSpace(claim), maxRecordTextBytes) {
+			return errEnvelope("", fmt.Sprintf("review claim exceeds %d bytes", maxRecordTextBytes)), nil
+		}
+	}
+	in.Surfaces, in.Risk = surfaces, risk
 	if k.git == nil {
 		return errEnvelope("", "review needs a git workspace"), nil
 	}
@@ -46,14 +69,6 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 		return domain.Envelope{OK: true, Summary: fmt.Sprintf("no changes to review between %s and %s", clipStr(base, 12), head)}, nil
 	}
 
-	surfaces := in.Surfaces
-	if len(surfaces) == 0 {
-		surfaces = []domain.Surface{domain.SurfaceCode}
-	}
-	risk := in.Risk
-	if risk == "" {
-		risk = "medium"
-	}
 	goal := fmt.Sprintf("review %s (%s changed)", head, pluralizeGeneric(len(changed), "file", "files"))
 
 	start, err := k.StartTask(ctx, StartInput{Goal: goal, Mode: domain.ModeReview, Surfaces: surfaces, Risk: risk, BaseRef: base})
@@ -90,19 +105,16 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 	// APPROVE can't fire while a declared surface's verifier never ran (SPEC §14.2).
 	c2, _ := k.store.Load(id)
 	receipts, _ := k.store.Verifications(id)
+	assessment := assessVerification(c2.VerificationRequired, receipts)
 	verdict, _ := reviewVerdict(receipts, c2.VerificationRequired)
 	outcome := fmt.Sprintf("REVIEW %s: %s (%s changed, base %s)", verdict, head, pluralizeGeneric(len(changed), "file", "files"), clipStr(base, 12))
-	// verification_not_possible means "no verifier could run" — set it ONLY when
-	// no definitive verdict exists (e.g. codemap unindexed, no covering specs),
-	// NOT merely because the review wasn't fully green. A REQUEST CHANGES verdict
-	// rests on a verifier that ran and FAILED — that IS a real verification, so
-	// claiming it was "not possible" would be dishonest and would also skip the
-	// completion gate's failed-verification warning (review 2026-07-07).
-	notPossible := !hasDefinitiveVerification(receipts)
-	// A REQUEST CHANGES review rests on failed verdicts — accept those so the
-	// case can complete with an honest failed outcome (not "verification not
-	// possible"). Passes complete normally; empty/inconclusive uses notPossible.
-	acceptFailed := hasFailedVerification(receipts) && !hasPassingVerification(receipts)
+	// Partial/unverified reviews need the explicit incomplete-verification
+	// acknowledgement. A REQUEST CHANGES verdict rests on a verifier that ran and
+	// FAILED, so it uses accept_failed instead.
+	notPossible := assessment.Outcome == VerificationPartial || assessment.Outcome == VerificationUnverified
+	// A REQUEST CHANGES review rests on failed verdicts — accept those so the case
+	// can complete with an honest failed outcome. Mixed pass+fail is still failed.
+	acceptFailed := assessment.Outcome == VerificationFailed
 	rem, _ := k.Remember(ctx, RememberInput{
 		TaskID: id, Outcome: outcome, Tags: []string{"review"},
 		VerificationNotPossible: notPossible, AcceptFailed: acceptFailed,
@@ -203,26 +215,11 @@ func reviewClaims(surfaces []domain.Surface) []string {
 // something actually passed → approve; otherwise → needs verification (a required
 // verifier that never ran must never read as approved — SPEC §14.2).
 func reviewVerdict(receipts []domain.VerificationRecord, required []string) (verdict string, fullyVerified bool) {
-	anyFailed, anyPassed := false, false
-	for _, r := range receipts {
-		switch r.Status {
-		case domain.VerifyFailed:
-			anyFailed = true
-		case domain.VerifyPassed:
-			anyPassed = true
-		}
-	}
-	allRequiredMet := true
-	for _, req := range required {
-		if !verifierSatisfied(req, receipts) {
-			allRequiredMet = false
-			break
-		}
-	}
-	switch {
-	case anyFailed:
+	assessment := assessVerification(required, receipts)
+	switch assessment.Outcome {
+	case VerificationFailed:
 		return "REQUEST CHANGES", false
-	case anyPassed && allRequiredMet:
+	case VerificationVerified:
 		return "APPROVE", true
 	default:
 		return "NEEDS VERIFICATION", false

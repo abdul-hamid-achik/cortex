@@ -177,7 +177,9 @@ func loopStepperLine(p domain.Phase) string {
 		}
 	}
 	line := strings.Join(parts, sep)
-	if cur < 0 {
+	if p == domain.PhaseNeedsHumanDecision {
+		line += "  " + paint(styWarn, "⏸ paused · needs human decision")
+	} else if cur < 0 {
 		line += "  " + paint(styErr, "■ "+string(p))
 	}
 	return line

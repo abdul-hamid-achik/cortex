@@ -2,10 +2,12 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
+	"github.com/abdul-hamid-achik/cortex/internal/ids"
+	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
 // ResolveInput parameterizes Resolve (SPEC §9.3 contradiction handling).
@@ -28,11 +30,8 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 	if err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
-	// A completed/abandoned/blocked task is immutable — its summary and durable
-	// memory are already written, so hypotheses/evidence must not diverge from
-	// them post-hoc (mirrors AbortTask's terminal guard).
-	if c.Status.IsTerminal() {
-		return errEnvelope(in.TaskID, fmt.Sprintf("cannot resolve a hypothesis in terminal phase %q", c.Status)), nil
+	if message := resolvePhaseError(c); message != "" {
+		return errEnvelope(in.TaskID, message), nil
 	}
 	status, ok := parseHypStatus(in.Status)
 	if !ok {
@@ -50,23 +49,6 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 	// forced to skip resolve entirely (dogfooding 2026-07-07).
 	autoEvidence := status == domain.HypConfirmed && len(in.Evidence) == 0
 
-	hyps, err := k.store.Hypotheses(in.TaskID)
-	if err != nil {
-		return errEnvelope(in.TaskID, err.Error()), nil
-	}
-	idx := -1
-	for i, h := range hyps {
-		if h.ID == in.HypothesisID {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return errEnvelope(in.TaskID, "no hypothesis "+in.HypothesisID+" in this task"), nil
-	}
-	if hyps[idx].Status == status {
-		return errEnvelope(in.TaskID, fmt.Sprintf("hypothesis %s is already %s", in.HypothesisID, status)), nil
-	}
 	// Cited evidence must exist in this case's ledger — provenance can't reference
 	// phantom records.
 	for _, evID := range in.Evidence {
@@ -75,42 +57,94 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 		}
 	}
 
-	prev := hyps[idx].Status
-	hyps[idx].Status = status
-	// Confirmation raises confidence to high; rejection drops it to low. A
-	// challenge leaves confidence but flags the hypothesis for revision.
-	switch status {
-	case domain.HypConfirmed:
-		hyps[idx].Confidence = domain.ConfidenceHigh
-	case domain.HypRejected:
-		hyps[idx].Confidence = domain.ConfidenceLow
-	}
+	// Mint one stable evidence identity before the CAS loop. If another writer
+	// advances the task, the retry reapplies this bounded resolution to the
+	// latest hypotheses snapshot without duplicating evidence.
+	evidenceID := ids.New("ev")
+	evidenceAt := k.now().UTC()
+	var (
+		hyps     []domain.Hypothesis
+		ev       *domain.Evidence
+		resolved domain.Hypothesis
+	)
+	for attempt := 0; attempt < maxLeaseCASAttempts; attempt++ {
+		if attempt > 0 {
+			c, err = k.store.Load(in.TaskID)
+			if err != nil {
+				return errEnvelope(in.TaskID, err.Error()), nil
+			}
+			if message := resolvePhaseError(c); message != "" {
+				return errEnvelope(in.TaskID, message), nil
+			}
+		}
 
-	// Append the resolution as evidence so the ledger records WHY the status
-	// changed, citing the evidence that drove it (contradiction handling keeps
-	// history, per SPEC §9.3). Stamped before saving hypotheses so an
-	// auto-minted record's own ID can be cited as this confirmation's support.
-	claim := fmt.Sprintf("hypothesis %s %s (was %s): %s", in.HypothesisID, status, prev, in.Reason)
-	if len(in.Evidence) > 0 {
-		claim += " [evidence: " + joinStr(in.Evidence, ", ") + "]"
-	} else if autoEvidence {
-		claim += " [evidence: auto-recorded from this reason; no prior evidence record was cited]"
-	}
-	ev, err := k.stampEvidence(in.TaskID, "human", adapters.Fact{
-		Kind: "human_report", Claim: claim, Confidence: confidenceForResolution(status),
-	})
-	if err != nil {
+		hyps, ev, err = k.store.UpdateHypotheses(c, func(current []domain.Hypothesis) ([]domain.Hypothesis, *domain.Evidence, error) {
+			idx := -1
+			for i := range current {
+				if current[i].ID == in.HypothesisID {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				return nil, nil, resolveRuleError("no hypothesis " + in.HypothesisID + " in this task")
+			}
+			if current[idx].Status == status {
+				return nil, nil, resolveRuleError(fmt.Sprintf("hypothesis %s is already %s", in.HypothesisID, status))
+			}
+
+			prev := current[idx].Status
+			current[idx].Status = status
+			// Confirmation raises confidence to high; rejection drops it to low. A
+			// challenge leaves confidence but flags the hypothesis for revision.
+			switch status {
+			case domain.HypConfirmed:
+				current[idx].Confidence = domain.ConfidenceHigh
+			case domain.HypRejected:
+				current[idx].Confidence = domain.ConfidenceLow
+			}
+
+			claim := fmt.Sprintf("hypothesis %s %s (was %s): %s", in.HypothesisID, status, prev, in.Reason)
+			if len(in.Evidence) > 0 {
+				claim += " [evidence: " + joinStr(in.Evidence, ", ") + "]"
+			} else if autoEvidence {
+				claim += " [evidence: auto-recorded from this reason; no prior evidence record was cited]"
+			}
+			resolutionEvidence := &domain.Evidence{
+				ID:          evidenceID,
+				Timestamp:   evidenceAt,
+				Kind:        domain.KindHumanReport,
+				Source:      domain.Source{Tool: "human"},
+				Claim:       k.red.String(claim),
+				Confidence:  mapConfidence(confidenceForResolution(status)),
+				Sensitivity: sensitivity(k.red.Detected(claim)),
+				RawRef:      fmt.Sprintf("case://%s/evidence/%s", in.TaskID, evidenceID),
+			}
+			if status == domain.HypConfirmed {
+				supporting := in.Evidence
+				if autoEvidence {
+					supporting = []string{evidenceID}
+				}
+				current[idx].Supports = dedupeStr(append(current[idx].Supports, supporting...))
+			}
+			resolved = current[idx]
+			return current, resolutionEvidence, nil
+		})
+		if err == nil {
+			break
+		}
+		if errors.Is(err, casefs.ErrRevisionConflict) {
+			continue
+		}
+		var ruleErr resolveRuleError
+		if errors.As(err, &ruleErr) {
+			return errEnvelope(in.TaskID, ruleErr.Error()), nil
+		}
 		return errEnvelope(in.TaskID, err.Error()), err
 	}
-
-	if status == domain.HypConfirmed {
-		supporting := in.Evidence
-		if autoEvidence {
-			supporting = []string{ev.ID}
-		}
-		hyps[idx].Supports = dedupeStr(append(hyps[idx].Supports, supporting...))
-	}
-	if err := k.store.SaveHypotheses(in.TaskID, hyps); err != nil {
+	if err != nil {
+		// Preserve the store's typed retryable conflict so callers can reload and
+		// retry rather than parsing an opaque "changed concurrently" string.
 		return errEnvelope(in.TaskID, err.Error()), err
 	}
 
@@ -118,14 +152,14 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 	// immediately — rejected/challenged are the gold. Best-effort, decoupled
 	// from this request's lifecycle (a cancelled caller must not drop a save
 	// that already landed), so a background context is correct here.
-	k.indexResolvedHypothesis(context.Background(), c, hyps[idx], in.Reason)
+	k.indexResolvedHypothesis(context.Background(), c, resolved, in.Reason)
 
 	env := domain.Envelope{
 		OK:      true,
 		TaskID:  c.ID,
 		Phase:   c.Status,
-		Summary: claim,
-		Facts:   []domain.FactView{domain.ToFactView(ev)},
+		Summary: ev.Claim,
+		Facts:   []domain.FactView{domain.ToFactView(*ev)},
 	}
 	for _, h := range hyps {
 		env.Hypotheses = append(env.Hypotheses, domain.ToHypView(h))
@@ -133,7 +167,25 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 	if status == domain.HypRejected || status == domain.HypChallenged {
 		env.NextActions = []string{"revise the hypothesis or investigate further before planning a change"}
 	}
+	k.attachStructuredActions(&env, c)
 	return env, nil
+}
+
+type resolveRuleError string
+
+func (e resolveRuleError) Error() string { return string(e) }
+
+func resolvePhaseError(c *domain.CaseFile) string {
+	// A completed/abandoned/blocked task is immutable — its summary and durable
+	// memory are already written, so hypotheses/evidence must not diverge from
+	// them post-hoc (mirrors AbortTask's terminal guard).
+	if c.Status.IsTerminal() {
+		return fmt.Sprintf("cannot resolve a hypothesis in terminal phase %q", c.Status)
+	}
+	if c.Status == domain.PhaseNeedsHumanDecision {
+		return "cannot resolve a hypothesis while waiting for a human decision"
+	}
+	return ""
 }
 
 func parseHypStatus(s string) (domain.HypothesisStatus, bool) {

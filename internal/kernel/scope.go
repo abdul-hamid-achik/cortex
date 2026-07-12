@@ -20,8 +20,9 @@ type ScopeReport struct {
 }
 
 // detectScopeDrift compares the working-tree diff against the case's boundary.
-// A file counts as in-boundary if it matches a declared file path (exact,
-// suffix, or glob-ish prefix), tolerating relative vs absolute differences.
+// A file counts as in-boundary only when it matches the canonical repo-relative
+// path or an explicit one-level/recursive glob. Plan normalizes absolute paths
+// inside the workspace, so suffix matching would only hide same-name drift.
 func (k *Kernel) detectScopeDrift(ctx context.Context, c *domain.CaseFile, changed []string) ScopeReport {
 	if !c.ChangeBoundary.Declared() {
 		return ScopeReport{Scope: "no_boundary", Risk: "unknown", ChangedFiles: changed,
@@ -61,9 +62,6 @@ func (k *Kernel) inBoundary(changed string, boundary []string) bool {
 			return true
 		case strings.HasSuffix(b, "/*") && filepath.Dir(changed) == filepath.Dir(strings.TrimSuffix(b, "*")+"x"):
 			return true
-		case strings.HasSuffix(changed, "/"+b) || strings.HasSuffix(b, "/"+changed):
-			// tolerate relative vs repo-root-relative path forms
-			return true
 		}
 	}
 	return false
@@ -71,4 +69,24 @@ func (k *Kernel) inBoundary(changed string, boundary []string) bool {
 
 func normalizePath(p string) string {
 	return strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(p)), "./")
+}
+
+// mergeChangedFiles makes the repository-derived diff authoritative while
+// retaining caller-provided hints as additive context. A caller can point out an
+// extra generated/external change, but can never omit a Git-observed file to hide
+// scope drift.
+func mergeChangedFiles(gitFiles, hints []string) []string {
+	out := make([]string, 0, len(gitFiles)+len(hints))
+	seen := make(map[string]bool, len(gitFiles)+len(hints))
+	for _, group := range [][]string{gitFiles, hints} {
+		for _, raw := range group {
+			file := normalizePath(raw)
+			if file == "" || seen[file] {
+				continue
+			}
+			seen[file] = true
+			out = append(out, file)
+		}
+	}
+	return out
 }

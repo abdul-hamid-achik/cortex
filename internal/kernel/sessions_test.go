@@ -123,3 +123,74 @@ func TestAllSessionsEmpty(t *testing.T) {
 		t.Errorf("expected no sessions, got %d", len(all))
 	}
 }
+
+func TestAllSessionsFailsClosedWhenActiveVerificationIsStale(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	ws := repoNamed(t, "freshness")
+	codemap := &fakeAdapter{name: "codemap", result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	cfg := config.For(ws)
+	store, err := casefs.New(cfg.CasesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := NewWith(cfg, store, adapters.NewRegistry(adapters.NewGit(), codemap))
+	started, _ := k.StartTask(context.Background(), StartInput{Goal: "keep compact status current", Risk: "low"})
+	_, _ = k.Plan(PlanInput{
+		TaskID: started.TaskID, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "review"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"f.go"}}, Uncertainty: "u",
+	})
+	if err := os.WriteFile(filepath.Join(ws, "f.go"), []byte("package a\nvar A = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	verified, _ := k.Verify(context.Background(), VerifyInput{TaskID: started.TaskID})
+	if !verified.OK {
+		t.Fatalf("verify = %+v", verified)
+	}
+	all, err := AllSessions(SessionFilter{})
+	if err != nil || len(all) != 1 || all[0].VerificationOutcome != VerificationVerified {
+		t.Fatalf("fresh compact session = %+v (%v)", all, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(ws, "f.go"), []byte("package a\nvar A = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	all, err = AllSessions(SessionFilter{})
+	if err != nil || len(all) != 1 {
+		t.Fatalf("stale compact session = %+v (%v)", all, err)
+	}
+	if all[0].VerificationOutcome == VerificationVerified || all[0].Verified != 0 {
+		t.Fatalf("active compact session presented stale proof as current: %+v", all[0])
+	}
+}
+
+func TestAllSessionsKeepsTerminalVerificationHistorical(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	ws := repoNamed(t, "history")
+	codemap := &fakeAdapter{name: "codemap", result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	cfg := config.For(ws)
+	store, err := casefs.New(cfg.CasesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := NewWith(cfg, store, adapters.NewRegistry(adapters.NewGit(), codemap))
+	started, _ := k.StartTask(context.Background(), StartInput{Goal: "preserve compact history", Risk: "low"})
+	_, _ = k.Plan(PlanInput{
+		TaskID: started.TaskID, Hypotheses: []HypothesisInput{{Statement: "h", DisproveBy: "review"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"f.go"}}, Uncertainty: "u",
+	})
+	if err := os.WriteFile(filepath.Join(ws, "f.go"), []byte("package a\nvar A = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: started.TaskID})
+	remembered, _ := k.Remember(context.Background(), RememberInput{TaskID: started.TaskID, Outcome: "done"})
+	if !remembered.OK {
+		t.Fatalf("remember = %+v", remembered)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "f.go"), []byte("package a\nvar A = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	all, err := AllSessions(SessionFilter{})
+	if err != nil || len(all) != 1 || all[0].VerificationOutcome != VerificationVerified {
+		t.Fatalf("terminal history was retroactively invalidated: %+v (%v)", all, err)
+	}
+}

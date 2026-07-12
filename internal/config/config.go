@@ -9,9 +9,12 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
@@ -39,8 +42,92 @@ type Config struct {
 	// memory layer). Defaults: a central veclite DB, the nomic-embed-text model,
 	// ollama at localhost:11434, enabled.
 	Recall RecallConfig
+	// Verifiers are repository-defined, read-only command checks. The command is
+	// an argv array rather than a shell string, so Cortex never evaluates shell
+	// metacharacters supplied through MCP/CLI input. Only checks declared in
+	// cortex.yaml can run.
+	Verifiers map[string]CommandVerifier
 	// sources records which config files were applied (increasing precedence).
 	sources []string
+	// problems records invalid on-disk configuration discovered while layering.
+	// Config.For remains a value-returning API; Kernel.New calls Validate and
+	// refuses to start rather than silently weakening a verification policy.
+	problems []error
+}
+
+// CommandVerifier is one configured test/build/lint command. Surface is kept
+// explicit even though v0.1 accepts only code: a unit test must never silently
+// satisfy a browser or terminal claim.
+type CommandVerifier struct {
+	Argv    []string            `json:"argv"`
+	Kind    domain.EvidenceKind `json:"kind"`
+	Surface domain.Surface      `json:"surface"`
+	Timeout time.Duration       `json:"timeout"`
+}
+
+// Validate rejects malformed configuration. A safety kernel must fail closed:
+// a misspelled verifier kind cannot degrade into a generic code pass.
+func (c Config) Validate() error {
+	problems := append([]error(nil), c.problems...)
+	for _, budget := range []struct {
+		name  string
+		value int
+		zero  bool
+	}{
+		{"max_parallel_calls", c.Budget.MaxParallelCalls, false},
+		{"max_investigation_rounds", c.Budget.MaxInvestigationRounds, false},
+		{"max_raw_output_bytes_per_tool", c.Budget.MaxRawOutputBytesPerTool, false},
+		{"max_evidence_items_returned", c.Budget.MaxEvidenceItemsReturned, false},
+		{"max_candidate_files_returned", c.Budget.MaxCandidateFilesReturned, false},
+		{"max_auto_retries_per_tool", c.Budget.MaxAutoRetriesPerTool, true},
+	} {
+		if budget.value < 0 || (!budget.zero && budget.value == 0) {
+			qualifier := "positive"
+			if budget.zero {
+				qualifier = "non-negative"
+			}
+			problems = append(problems, fmt.Errorf("budget %s must be %s", budget.name, qualifier))
+		}
+	}
+	for name, v := range c.Verifiers {
+		if !validVerifierName(name) {
+			problems = append(problems, fmt.Errorf("command verifier name %q must contain only letters, digits, dash, or underscore", name))
+		}
+		if len(v.Argv) == 0 || strings.TrimSpace(v.Argv[0]) == "" {
+			problems = append(problems, fmt.Errorf("command verifier %q has no executable argv", name))
+		}
+		for _, arg := range v.Argv {
+			if strings.ContainsRune(arg, '\x00') {
+				problems = append(problems, fmt.Errorf("command verifier %q contains a NUL byte", name))
+				break
+			}
+		}
+		switch v.Kind {
+		case domain.KindUnitTest, domain.KindBuild, domain.KindLint:
+		default:
+			problems = append(problems, fmt.Errorf("command verifier %q kind must be unit_test, build, or lint", name))
+		}
+		if v.Surface != domain.SurfaceCode {
+			problems = append(problems, fmt.Errorf("command verifier %q surface must be code", name))
+		}
+		if v.Timeout <= 0 {
+			problems = append(problems, fmt.Errorf("command verifier %q timeout must be positive", name))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func validVerifierName(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // For resolves configuration for a given workspace directory: built-in defaults
@@ -63,6 +150,7 @@ func For(workspace string) Config {
 		CasesDir:  DefaultCasesDir(ws),
 		Budget:    domain.DefaultBudget(),
 		Recall:    DefaultRecall(),
+		Verifiers: map[string]CommandVerifier{},
 	}
 	load(&cfg)
 	return cfg

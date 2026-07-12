@@ -37,64 +37,85 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	if c.Status != domain.PhaseVerifying && c.Status != domain.PhasePersisting {
 		return errEnvelope(in.TaskID, fmt.Sprintf("cannot remember in phase %q; call cortex_verify first, then cortex_remember", c.Status)), nil
 	}
+	in.Outcome = strings.TrimSpace(in.Outcome)
 	if in.Outcome == "" {
 		return errEnvelope(in.TaskID, "remember needs an outcome summary"), nil
 	}
+	if textExceeds(in.Outcome, maxRecordTextBytes) {
+		return errEnvelope(in.TaskID, fmt.Sprintf("remember outcome exceeds %d bytes", maxRecordTextBytes)), nil
+	}
+	if len(in.Tags) > 64 {
+		return errEnvelope(in.TaskID, "remember accepts at most 64 tags"), nil
+	}
+	for _, tag := range in.Tags {
+		if textExceeds(strings.TrimSpace(tag), maxStableIdentifierBytes) {
+			return errEnvelope(in.TaskID, fmt.Sprintf("remember tags must be at most %d bytes", maxStableIdentifierBytes)), nil
+		}
+	}
 
 	receipts, _ := k.store.Verifications(c.ID)
+	var verificationWarnings []string
 	// A receipt tied to an older HEAD/diff proves a prior workspace state, not
 	// the state being completed now. Legacy receipts without dirtyDigest retain
 	// their old semantics for on-disk compatibility.
+	current := adapters.Revision{}
+	var revisionErr error
 	if k.git != nil {
-		if current, revErr := k.git.CurrentRevision(ctx, k.cfg.Workspace); revErr == nil {
-			fresh := receipts[:0]
-			for _, r := range receipts {
-				if !receiptStale(r, current) {
-					fresh = append(fresh, r)
-				}
-			}
-			receipts = fresh
+		current, revisionErr = k.git.CurrentRevision(ctx, k.cfg.Workspace)
+	} else {
+		revisionErr = fmt.Errorf("git adapter unavailable")
+	}
+	receipts, _ = verificationReceiptsAtRevision(receipts, current, revisionErr)
+	if revisionErr != nil {
+		verificationWarnings = append(verificationWarnings, "could not check verification freshness: "+revisionErr.Error())
+	}
+	// One canonical assessment drives completion, status, metrics, overview, and
+	// review. A pass on one surface cannot launder a failed/unrun named claim or a
+	// missing required verifier into a verified result.
+	assessment := assessVerification(c.VerificationRequired, receipts)
+	switch assessment.Outcome {
+	case VerificationVerified:
+		// No acknowledgement is needed.
+	case VerificationFailed:
+		if !in.AcceptFailed {
+			return errEnvelope(c.ID, "cannot complete: verification failed. fix the change and re-run cortex verify, or set accept_failed=true to record the failed outcome explicitly"), nil
+		}
+	case VerificationPartial:
+		if !in.VerificationNotPossible {
+			return errEnvelope(c.ID, "cannot complete: verification is partial (a required verifier or named claim did not pass). run the missing verification, or set verification_not_possible=true to acknowledge the incomplete result explicitly"), nil
+		}
+	case VerificationUnverified:
+		if !in.VerificationNotPossible {
+			return errEnvelope(c.ID, "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed"), nil
 		}
 	}
-	// The completion invariant (SPEC §6.3 #2) requires a REAL verification record
-	// — a verifier that actually ran and produced a DEFINITIVE verdict. Everything
-	// else proves nothing: not_run, blocked, inconclusive, not_applicable.
-	// Among definitive verdicts, only *passed* is enough to complete without an
-	// explicit override. A *failed* verdict means the claim did not hold — the
-	// agent must fix and re-verify, or set accept_failed / verification_not_possible.
-	hasPass := hasPassingVerification(receipts)
-	hasFail := hasFailedVerification(receipts)
-	hasRealVerification := hasPass || hasFail
-	if !hasRealVerification && !in.VerificationNotPossible {
-		return errEnvelope(c.ID, "cannot complete: no definitive verification was performed (only not_run/blocked/inconclusive receipts — e.g. codemap is unindexed or rated the diff high-risk, or a verifier tool is unavailable). run cortex verify with an available, indexed verifier, or set verification_not_possible=true to record explicitly that verification could not be performed"), nil
-	}
-	if hasFail && !hasPass && !in.AcceptFailed && !in.VerificationNotPossible {
-		return errEnvelope(c.ID, "cannot complete: verification failed (no passing receipt). fix the change and re-run cortex verify, or set accept_failed=true to record the failed outcome explicitly, or verification_not_possible=true if no verifier could establish the claim"), nil
-	}
-	// SPEC §6.2 verifying→persisting also requires that each REQUIRED verifier has
-	// passed (or failure is explicitly recorded). A task can pass one verifier yet
-	// leave a required one (e.g. the browser flow) never run — completing as if
-	// fully verified. Surface exactly which required verifications are unmet so the
-	// gap is visible, not silent. verifierSatisfied only counts a PASSED receipt,
-	// so a failed/inconclusive required verifier lands here too.
-	var missingRequired []string
-	for _, req := range c.VerificationRequired {
-		if !verifierSatisfied(req, receipts) {
-			missingRequired = append(missingRequired, req)
+	fullyVerified := assessment.Outcome == VerificationVerified && !in.VerificationNotPossible && !in.AcceptFailed
+	// Completion relinquishes bounded change ownership while retaining the lease
+	// record for audit. Expired/released leases need no mutation.
+	if c.ChangeLease != nil && c.ChangeLease.Active(k.now().UTC()) {
+		if err := c.ChangeLease.Release(c.ChangeLease.Actor, k.now().UTC()); err != nil {
+			return errEnvelope(c.ID, "cannot release change lease: "+err.Error()), nil
 		}
 	}
-	fullyVerified := hasPass && len(missingRequired) == 0 && !in.VerificationNotPossible && !in.AcceptFailed
 
-	// verifying → persisting → complete. Advance the phase before rendering the
-	// summary so it reflects the final state, not the transient one.
+	// verifying → persisting → complete. Advance the in-memory phase before
+	// rendering the summary so it reflects the final state, but append phase
+	// history only after case.json commits; otherwise a failed summary write or
+	// CAS would leave phantom transitions in the audit ledger.
+	type phaseMove struct{ from, to domain.Phase }
+	var moves []phaseMove
 	if c.Status == domain.PhaseVerifying {
+		from := c.Status
 		if err := k.transition(c, domain.PhasePersisting); err != nil {
 			return errEnvelope(c.ID, err.Error()), nil
 		}
+		moves = append(moves, phaseMove{from: from, to: c.Status})
 	}
+	from := c.Status
 	if err := k.transition(c, domain.PhaseComplete); err != nil {
 		return errEnvelope(c.ID, err.Error()), nil
 	}
+	moves = append(moves, phaseMove{from: from, to: c.Status})
 
 	evidence, _ := k.store.Evidence(c.ID)
 	hyps, _ := k.store.Hypotheses(c.ID)
@@ -120,6 +141,9 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	if err := k.store.Save(c); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
+	for _, move := range moves {
+		k.recordPhase(c.ID, move.from, move.to)
+	}
 
 	// Cross-case disproof recall (SPEC §15.4): index all resolved hypotheses
 	// and definitive receipts now that the case is durably complete. The
@@ -127,7 +151,7 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	// reason; this backfills the rest. Best-effort, background-decoupled.
 	k.indexCaseForRecall(context.Background(), c, hyps, receipts)
 
-	var warnings []string
+	warnings := append([]string(nil), verificationWarnings...)
 	// Durable semantic memory via vecgrep (best-effort; SPEC §15.1 semantic recall).
 	if v, ok := k.reg.Get("vecgrep").(*adapters.Vecgrep); ok {
 		tags := memoryTags(c, in.Tags...)
@@ -147,18 +171,20 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		OK:           true,
 		TaskID:       c.ID,
 		Phase:        c.Status,
-		Summary:      fmt.Sprintf("task %s complete: %s", c.ID, clipStr(in.Outcome, 100)),
-		Warnings:     warnings,
+		Summary:      fmt.Sprintf("task %s complete: %s", c.ID, clipStr(k.red.String(in.Outcome), 100)),
+		Warnings:     k.redactStrings(warnings),
 		NextActions:  []string{"summary written to " + summaryPath(k, c.ID)},
-		RawAvailable: true,
+		RawAvailable: false,
 	}
-	switch {
-	case !hasRealVerification:
+	switch assessment.Outcome {
+	case VerificationUnverified:
 		env.Warnings = append(env.Warnings, "completed WITHOUT verification — the outcome is unverified (no verifier ran)")
-	case hasFail && !hasPass:
+	case VerificationFailed:
 		env.Warnings = append(env.Warnings, "completed with FAILED verification — the outcome records a failed verifier run (accept_failed)")
-	case len(missingRequired) > 0:
-		env.Warnings = append(env.Warnings, fmt.Sprintf("completed with INCOMPLETE verification — required verifier(s) not passed: %s. the outcome is only partially verified", strings.Join(missingRequired, ", ")))
+	case VerificationPartial:
+		gaps := append([]string{}, assessment.MissingRequired...)
+		gaps = append(gaps, assessment.NonPassingClaims...)
+		env.Warnings = append(env.Warnings, fmt.Sprintf("completed with INCOMPLETE verification — required verifier(s) or named claim(s) not passed: %s. the outcome is only partially verified", strings.Join(dedupeStr(gaps), ", ")))
 	}
 	// A task that completes with hypotheses still 'active' leaves its hypothesis
 	// list showing nothing resolved even though the outcome settled the question
@@ -173,9 +199,8 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 }
 
 // hasDefinitiveVerification reports whether any receipt carries a definitive
-// verdict (passed or failed) — a verifier actually ran. Used by Review to decide
-// whether "verification was not possible". Completion itself requires a *pass*
-// (or an explicit override); see hasPassingVerification.
+// verdict (passed or failed) — retained for focused helper tests and callers that
+// need that narrower question. Task-level truth uses assessVerification.
 func hasDefinitiveVerification(receipts []domain.VerificationRecord) bool {
 	return hasPassingVerification(receipts) || hasFailedVerification(receipts)
 }
@@ -183,7 +208,7 @@ func hasDefinitiveVerification(receipts []domain.VerificationRecord) bool {
 // hasPassingVerification reports whether any receipt is an affirmative pass.
 func hasPassingVerification(receipts []domain.VerificationRecord) bool {
 	for _, r := range receipts {
-		if r.Status == domain.VerifyPassed {
+		if r.Proven() {
 			return true
 		}
 	}
@@ -193,7 +218,7 @@ func hasPassingVerification(receipts []domain.VerificationRecord) bool {
 // hasFailedVerification reports whether any receipt is an explicit fail.
 func hasFailedVerification(receipts []domain.VerificationRecord) bool {
 	for _, r := range receipts {
-		if r.Status == domain.VerifyFailed {
+		if r.Failed() {
 			return true
 		}
 	}

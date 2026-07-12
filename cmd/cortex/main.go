@@ -4,8 +4,9 @@
 // engineering agents. It sits between an LLM and a set of specialist tools
 // (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault) and enforces a
 // stateful reasoning loop: orient → investigate → plan → change → verify →
-// preserve evidence. Two surfaces over one kernel: a CLI (with --json for
-// agents) and an MCP server (cortex serve). See AGENTS.md for architecture.
+// preserve evidence. Three surfaces share one kernel: a CLI (with --json for
+// agents), an MCP server (cortex serve), and Studio (cortex studio).
+// See AGENTS.md for architecture.
 package main
 
 import (
@@ -33,16 +34,20 @@ tool-using tasks: stable task state, explicit evidence and uncertainty,
 disciplined tool selection, bounded changes, and verification tied to
 user-visible behavior.
 
-Six cognitive actions drive a task:
-  start       open a case and orient (git identity + tool health)
+Core loop actions drive a task:
+  open        retry-safely resume matching work or start and orient a case
   investigate route a question through discovery then structure; record evidence
   plan        state a hypothesis + disproof path + change boundary + verify plan
-  verify      run the required verifiers and detect scope drift
+  begin-change claim bounded change ownership for a stable actor before editing
+  verify      run required verifiers as the lease actor and detect scope drift
   remember    persist the outcome and complete the task
   status      phase, unresolved hypotheses, scope drift, missing verification
 
-Two surfaces over one kernel: this CLI (--json for agents) and an MCP server
-(cortex serve).`,
+Use start only when a deliberately fresh case is required. Agent-facing JSON
+results include structured actions describing the next safe continuation.
+
+Three surfaces share one kernel: this CLI (--json for agents), the MCP server
+(cortex serve), and the cross-workspace Studio board (cortex studio).`,
 	Version:       version.Full(),
 	SilenceUsage:  true,
 	SilenceErrors: false,
@@ -55,8 +60,18 @@ func init() {
 
 // kernelFor builds a kernel for the resolved workspace directory.
 func kernelFor(cmd *cobra.Command) (*kernel.Kernel, error) {
+	return kernel.New(config.For(workspaceArg(cmd)))
+}
+
+// workspaceArg returns the inherited -C/--workspace value for commands and
+// completion callbacks. An empty value intentionally retains config.For's cwd
+// default.
+func workspaceArg(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
 	ws, _ := cmd.Flags().GetString("workspace")
-	return kernel.New(config.For(ws))
+	return ws
 }
 
 // jsonMode reports whether --json was requested.

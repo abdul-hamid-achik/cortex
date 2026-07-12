@@ -26,7 +26,10 @@ func DeleteSession(taskID string, apply bool) (string, error) {
 	if !c.Status.IsTerminal() {
 		return "", fmt.Errorf("refusing to delete an in-flight session (phase %s) — complete, abort, or archive it first", c.Status)
 	}
-	path := store.TaskDir(taskID)
+	path, err := store.TaskDir(taskID)
+	if err != nil {
+		return "", err
+	}
 	if !apply {
 		return path, nil
 	}

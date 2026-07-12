@@ -15,6 +15,7 @@ coverage.html
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+docs/.vercel/
 node_modules/
 
 # OS / editor

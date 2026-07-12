@@ -9,6 +9,7 @@ in one place (repo-local `.cortex/cases` is opt-in via `cases_dir` / `CORTEX_CAS
 ```
 $XDG_STATE_HOME/cortex/sessions/<repo>/task_06FK…/
   case.json          # goal, workspace identity, phase, boundary, required verification
+  decisions.json     # bounded human questions, options/consequences, and answers
   evidence.jsonl     # append-only ledger of claims (provenance + confidence)
   hypotheses.json    # falsifiable explanations + disproof paths
   plan.json          # the planning gate (hypotheses + boundary + verification + uncertainty)
@@ -20,9 +21,11 @@ $XDG_STATE_HOME/cortex/sessions/<repo>/task_06FK…/
   refs/              # artifact references
 ```
 
-Compact facts stay in `evidence.jsonl`; each fact's `rawRef` points at the underlying tool output
-in `raw/`, retrievable on demand with `cortex read-artifact` (or `cortex_read_artifact`) so the
-model-visible envelope stays small without losing detail.
+Compact facts stay in `evidence.jsonl`. Facts with stored tool output use a `/raw/` `rawRef`,
+retrievable on demand with `cortex read-artifact` (or `cortex_read_artifact`) so the model-visible
+envelope stays small without losing detail. The embedded task ID must exactly match the requested
+case; a reference cannot cross case boundaries. Self-pointing `/evidence/` refs are provenance IDs
+and do not claim separate raw output.
 
 The central XDG default lives outside every repo, so the working tree stays clean. When cases are
 opted **repo-local** (`cases_dir`), Cortex writes a `.cortex/.gitignore` (`*`) so its own state
@@ -34,11 +37,15 @@ review.
 ```json
 {
   "schemaVersion": 1,
+  "revision": 7,
   "id": "task_06FK…",
   "createdAt": "2026-07-06T14:00:00Z",
   "goal": "Fix post-login checkout return URL",
   "mode": "change",
   "status": "verifying",
+  "actor": "agent-auth",
+  "parentTaskId": "task_06FJ…",
+  "childTaskIds": ["task_06FL…"],
   "risk": "medium",
   "workspace": {
     "root": "/Users/abdul/projects/liftclub",
@@ -51,9 +58,22 @@ review.
     "files": ["src/auth/callback.ts", "src/auth/return-url.ts"],
     "symbols": ["HandleCallback", "ResolveReturnURL"]
   },
+  "changeLease": {
+    "actor": "agent-auth",
+    "acquiredAt": "2026-07-06T14:10:00Z",
+    "renewedAt": "2026-07-06T14:20:00Z",
+    "expiresAt": "2026-07-06T14:35:00Z"
+  },
   "verificationRequired": ["codemap_review", "cairntrace_flow"]
 }
 ```
+
+`revision` is the optimistic-concurrency version. Each successful snapshot save increments it;
+a stale writer receives a revision conflict and must reload instead of overwriting newer state.
+Actor and parent/child fields are optional coordination metadata. `changeLease` is time-bounded;
+released leases keep a `releasedAt` timestamp for audit and expired/released leases may be replaced.
+While a human decision is pending, `status` is `needs_human_decision` and `pausedFrom` stores the
+exact phase to resume.
 
 ## `evidence.jsonl`
 
@@ -67,9 +87,9 @@ One JSON object per line, appended in order:
   "source": { "tool": "codemap", "uri": "codemap://symbol/HandleCallback" },
   "claim": "HandleCallback redirects to '/' when returnTo is missing",
   "location": { "file": "src/auth/callback.ts", "startLine": 42, "endLine": 61, "symbol": "HandleCallback" },
-  "confidence": 0.93,
+  "confidence": "high",
   "sensitivity": "normal",
-  "rawRef": "case://task_06FK…/evidence/ev_06FK…",
+  "rawRef": "case://task_06FK…/raw/raw_06FK…",
   "derivedFrom": ["ev_06FJ…"]
 }
 ```
@@ -85,12 +105,36 @@ An array of receipts, each naming the exact claim it supports:
 [
   {
     "id": "vr_06FK…",
-    "claim": "After OAuth login from checkout, the browser returns to checkout",
+    "batchId": "vb_06FJ…",
+    "claim": "browser flow specs/cairntrace/checkout_return.yml",
     "surface": "browser",
+    "purpose": "verifier_run",
+    "requirement": "cairntrace_flow",
+    "actor": "agent-auth",
     "tool": "cairntrace",
+    "verifierVersion": "0.8.1",
     "status": "passed",
     "evidence": ["ev_06FK…"],
     "artifact": "fcheap://stash/fc_019",
+    "revision": "74c6e03d…",
+    "dirtyDigest": "sha256:9be0…",
+    "binding": "bound",
+    "timestamp": "2026-07-06T14:27:00Z"
+  },
+  {
+    "id": "vr_06FL…",
+    "batchId": "vb_06FJ…",
+    "claimId": "checkout-return",
+    "claim": "After OAuth login from checkout, the browser returns to checkout",
+    "surface": "browser",
+    "purpose": "named_claim",
+    "contract": "specs/cairntrace/checkout_return.yml",
+    "actor": "agent-auth",
+    "tool": "cairntrace",
+    "status": "passed",
+    "revision": "74c6e03d…",
+    "dirtyDigest": "sha256:9be0…",
+    "binding": "bound",
     "timestamp": "2026-07-06T14:27:00Z"
   }
 ]
@@ -99,14 +143,72 @@ An array of receipts, each naming the exact claim it supports:
 `status` is one of `passed`, `failed`, `inconclusive`, `blocked`, `not_applicable`, `not_run`.
 **`not_run` is never rendered as `passed`** in a summary.
 
+Verifier-run receipts (`purpose: verifier_run`) record what actually executed and the planning
+requirement it addresses. Named-claim receipts (`purpose: named_claim`) map one user-facing claim to
+that run through a required exact `contract`. The commit and dirty digest bind proof to the
+workspace state; a later edit makes it stale. One verify call commits one `batchId`. Its receipts
+are `bound` only when the case, owner, HEAD, and dirty tree remain stable throughout the run;
+otherwise definitive results become inconclusive and that latest unbound batch masks older proof.
+Status, metrics, sessions, review, remember, Show, and
+Studio all interpret current receipts through the same `verified | partial | failed | unverified`
+assessment.
+
+## `decisions.json`
+
+Decisions are durable, bounded pauses rather than chat prompts:
+
+```json
+[
+  {
+    "id": "dec_06FM…",
+    "question": "Which migration should we use?",
+    "options": [
+      {"id": "safe", "label": "Safe migration", "consequence": "More rollout time"},
+      {"id": "fast", "label": "Fast migration", "consequence": "Higher rollback risk"}
+    ],
+    "requester": "agent-auth",
+    "requestedAt": "2026-07-06T14:08:00Z",
+    "status": "pending"
+  }
+]
+```
+
+An answer records the option ID, responder, timestamp, and the evidence ID of the redacted
+`human_report` it creates. A pending decision prevents lifecycle progress but remains non-terminal.
+
+## Bounded artifact previews
+
+Raw blobs remain in `raw/`; fcheap stashes remain external references. `cortex read-artifact` and
+`cortex_read_artifact` return a redacted preview, not an unbounded dump. Raw refs are readable only
+by their owning task; fcheap refs are readable only after that task records the ref in artifact
+evidence or a verification receipt. `path` must be a safe relative path; absolute paths, parent
+traversal, and symlinks are rejected. An empty path discovers files, but walks at most 512 entries
+and returns at most 100 regular files. Previews default to 32 KiB and stop at 128 KiB. Binary is
+refused unless MCP `allowBinary` or CLI `--allow-binary` is explicit; allowed binary is returned as
+bounded, sensitive base64. Results report `encoding`, `sensitive`, `truncated`, `maxBytes`, and
+`bytesReturned`.
+
 ## Storage design
 
-- **Files, not a database** (v0.1). The layout is intentionally readable so a case can be
-  inspected or hand-edited.
-- Snapshot documents (`case.json`, `plan.json`, `hypotheses.json`, `verification.json`) are
+- **Files, not a database** (v0.1). The layout is intentionally readable and inspectable. Do not
+  hand-edit an active snapshot: optimistic revisions and cross-file ledgers are kernel-managed.
+- Snapshot documents (`case.json`, `plan.json`, `hypotheses.json`, `verification.json`,
+  `decisions.json`) are
   rewritten atomically (temp + rename) so a crash mid-write can't corrupt them.
-- Ledgers (`evidence.jsonl`, `commands.jsonl`, `phases.jsonl`) are append-only.
+- A verifier run stages facts, redacted/bounded raw blobs, receipts, and its case revision, then
+  publishes all of them in one recoverable revision-guarded transaction. A lost case/lease race
+  writes none of that attempted proof; its audited command remains visible. Public readers acquire
+  the same lock and recover an interrupted rename sequence before exposing receipts, evidence, or
+  raw content. Behavioral annotations run only after a bound bundle commits.
+- Ledgers (`evidence.jsonl`, `commands.jsonl`, `phases.jsonl`) are append-only. A phase event is
+  appended only after the corresponding `case.json` snapshot commits, so a failed CAS or summary
+  write cannot leave timeline/latency views ahead of durable task state.
 - No secret value is ever written to a case file — the redactor filters tool output first, and
   `commands.jsonl` records capability and result, never secret contents.
+- New directories and files use owner-only permissions (`0700` / `0600` on POSIX). User/model
+  free text and collection counts, individual ledger records, and JSON snapshot reads/writes are
+  bounded. Status counts evidence as a stream, handoff retains only its newest shareable window,
+  and auto-refreshing human views retain bounded recent ledgers plus exact totals in one task-locked
+  snapshot.
 - `commands.jsonl` notes include retry attempt counts/final cause when a read-only tool call was
   retried and still failed (transient spawn/transport errors only; exits are data, never replayed).

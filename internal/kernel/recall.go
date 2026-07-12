@@ -176,7 +176,7 @@ func (k *Kernel) indexCaseForRecall(ctx context.Context, c *domain.CaseFile, hyp
 		}
 	}
 	for _, r := range receipts {
-		if r.Status == domain.VerifyPassed || r.Status == domain.VerifyFailed {
+		if r.Definitive() {
 			if result := k.indexReceiptResult(ctx, c, r, evidence); result.err != nil {
 				k.recordWrite(c.ID, "veclite", "case_index", result.err)
 			}
@@ -319,7 +319,7 @@ func resolvedReasonFromEvidence(hypothesisID string, evidence []domain.Evidence)
 
 func (k *Kernel) indexFieldsDetected(fields ...string) bool {
 	for _, field := range fields {
-		if k.red.Detected(field) {
+		if k.red.Detected(field) || strings.Contains(field, "«redacted»") {
 			return true
 		}
 	}
@@ -373,9 +373,10 @@ func (k *Kernel) recallPriorCases(ctx context.Context, c *domain.CaseFile, query
 				seen[tid] = true
 			}
 			claim := adapters.RecallClaim(h.Payload)
-			if ev, err := k.stampEvidence(c.ID, "veclite", adapters.Fact{
+			stableID := "ev_orientation_recall_" + strings.TrimPrefix(claimID(domain.SurfaceCode, tid+"\x00"+claim), "claim_")
+			if ev, err := k.stampEvidenceOnce(c.ID, stableID, "veclite", adapters.Fact{
 				Kind: "model_inference", Confidence: "low", Claim: claim,
-			}); err == nil {
+			}, c.CreatedAt); err == nil {
 				facts = append(facts, ev)
 			}
 		}

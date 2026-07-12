@@ -31,11 +31,22 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	if err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
+	in.Question = strings.TrimSpace(in.Question)
 	if in.Question == "" {
 		return errEnvelope(in.TaskID, "investigate needs a question"), nil
 	}
 	if c.Status != domain.PhaseInvestigating && c.Status != domain.PhasePlanned {
 		return errEnvelope(in.TaskID, fmt.Sprintf("cannot investigate in phase %q; investigate happens after start", c.Status)), nil
+	}
+	depth, err := normalizeDepth(in.Depth)
+	if err != nil {
+		return errEnvelope(in.TaskID, err.Error()), nil
+	}
+	if len(in.Surfaces) > 0 {
+		in.Surfaces, err = normalizeSurfaces(in.Surfaces)
+		if err != nil {
+			return errEnvelope(in.TaskID, err.Error()), nil
+		}
 	}
 	// A raw recording passed straight to vidtrace fails with an opaque "bundle
 	// validation failed: 0/1 checks passed" — fail fast here with guidance
@@ -52,7 +63,6 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		surfaces = c.Surfaces
 	}
 	route := domain.RouteFor(in.Question, surfaces)
-	depth := normalizeDepth(in.Depth)
 	candLimit := depthCandidateLimit(depth, k.cfg.Budget.MaxCandidateFilesReturned)
 
 	var facts []domain.Evidence
@@ -285,15 +295,21 @@ func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, bud
 	return facts, warnings, degraded, nil
 }
 
-// normalizeDepth maps free-form depth strings to quick | standard | deep.
-func normalizeDepth(d string) string {
+// normalizeDepth validates and canonicalizes quick | standard | deep. Unknown
+// values are rejected rather than silently becoming standard, since that can
+// launch more adapter work than the caller intended.
+func normalizeDepth(d string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(d)) {
-	case "quick", "q":
-		return "quick"
-	case "deep", "full":
-		return "deep"
+	case "":
+		return "standard", nil
+	case "quick":
+		return "quick", nil
+	case "standard":
+		return "standard", nil
+	case "deep":
+		return "deep", nil
 	default:
-		return "standard"
+		return "", fmt.Errorf("investigation depth must be one of: quick, standard, deep (got %q)", d)
 	}
 }
 

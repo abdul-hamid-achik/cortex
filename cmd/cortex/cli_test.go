@@ -11,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/abdul-hamid-achik/cortex/internal/config"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
+	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -125,6 +127,34 @@ func TestCLIStartAndList(t *testing.T) {
 	}
 }
 
+func TestCLIReadArtifactUsesPathAndByteBoundFlags(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+	k, err := kernel.New(config.For(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Store().WriteRaw(id, "raw_cli", "0123456789"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, "--json", "-C", ws, "read-artifact", id,
+		"case://"+id+"/raw/raw_cli", "--max-bytes", "4")
+	if err != nil {
+		t.Fatalf("read-artifact: %v (%s)", err, out)
+	}
+	var preview kernel.ArtifactPreview
+	if err := json.Unmarshal([]byte(out), &preview); err != nil {
+		t.Fatalf("read-artifact output is not JSON: %v (%s)", err, out)
+	}
+	if preview.Content != "0123" || !preview.Truncated || preview.MaxBytes != 4 {
+		t.Fatalf("CLI did not honor --max-bytes: %+v", preview)
+	}
+	if _, err := runCLI(t, "-C", ws, "read-artifact", id,
+		"case://"+id+"/raw/raw_cli", "--path", "nested/file.txt"); err == nil {
+		t.Fatal("--path must be rejected for a single case raw blob")
+	}
+}
+
 func TestCLIPlanGateRejectsNoDisproof(t *testing.T) {
 	ws := cliRepo(t)
 	out, _ := runCLI(t, "-C", ws, "--json", "start", "g")
@@ -210,6 +240,99 @@ func TestBuildHypotheses(t *testing.T) {
 	}
 }
 
+func TestApplyHypothesisSupportsUsesStrictIndexedSyntax(t *testing.T) {
+	hypotheses := []kernel.HypothesisInput{{Statement: "one"}, {Statement: "two"}}
+	if err := applyHypothesisSupports(hypotheses, []string{"1=ev_one, ev_two", "2=ev_three"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(hypotheses[0].Supports, ",") != "ev_one,ev_two" || strings.Join(hypotheses[1].Supports, ",") != "ev_three" {
+		t.Fatalf("supports were mapped to the wrong hypotheses: %+v", hypotheses)
+	}
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{name: "missing separator", flags: []string{"1:ev_one"}, want: "expected hypothesis-index"},
+		{name: "out of range", flags: []string{"3=ev_one"}, want: "index 1..2"},
+		{name: "empty evidence", flags: []string{"1=ev_one,"}, want: "evidence ids must be non-empty"},
+		{name: "duplicate evidence", flags: []string{"1=ev_one", "1=ev_one"}, want: "duplicate --support"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			copyOfHypotheses := []kernel.HypothesisInput{{Statement: "one"}, {Statement: "two"}}
+			if err := applyHypothesisSupports(copyOfHypotheses, tc.flags); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("applyHypothesisSupports(%v) error = %v, want %q", tc.flags, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCLIPlanAttachesPerHypothesisEvidence(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+	k, err := kernel.New(config.For(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := k.Store().Evidence(id)
+	if err != nil || len(evidence) == 0 {
+		t.Fatalf("orientation evidence = %+v (%v)", evidence, err)
+	}
+
+	out, err := runCLI(t, "--json", "-C", ws, "plan", id,
+		"--hypothesis", "callback drops return path", "--disprove", "inspect callback diff",
+		"--support", "1="+evidence[0].ID, "--file", "f.go", "--uncertainty", "browser behavior remains uncertain")
+	if err != nil {
+		t.Fatalf("plan with support: %v (%s)", err, out)
+	}
+	if strings.Contains(out, "has no supporting evidence") {
+		t.Fatalf("supported hypothesis was still reported unsupported: %s", out)
+	}
+	hypotheses, err := k.Store().Hypotheses(id)
+	if err != nil || len(hypotheses) != 1 || len(hypotheses[0].Supports) != 1 || hypotheses[0].Supports[0] != evidence[0].ID {
+		t.Fatalf("durable hypothesis supports = %+v (%v)", hypotheses, err)
+	}
+}
+
+func TestCLIWorkspaceViewsAndCompletionFindRepoLocalCases(t *testing.T) {
+	ws := cliRepo(t)
+	if err := os.WriteFile(filepath.Join(ws, "cortex.yaml"), []byte("cases_dir: .cortex/cases\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := startTask(t, ws)
+
+	for _, command := range []string{"show", "handoff"} {
+		out, err := runCLI(t, "--json", "-C", ws, command, id)
+		if err != nil || !strings.Contains(out, id) {
+			t.Errorf("%s -C did not find repo-local task %s: %v (%s)", command, id, err, out)
+		}
+	}
+	timelineOut, err := runCLI(t, "--json", "-C", ws, "timeline", id)
+	if err != nil || !strings.Contains(timelineOut, `"kind": "phase"`) {
+		t.Errorf("timeline -C did not load repo-local task %s: %v (%s)", id, err, timelineOut)
+	}
+
+	resetFlags(rootCmd)
+	t.Cleanup(func() { resetFlags(rootCmd) })
+	if err := rootCmd.PersistentFlags().Set("workspace", ws); err != nil {
+		t.Fatal(err)
+	}
+	completions, directive := completeTaskIDs(showCmd, nil, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("completion directive = %v", directive)
+	}
+	found := false
+	for _, completion := range completions {
+		if strings.HasPrefix(completion, id+"\t") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("-C completion omitted repo-local task %s: %v", id, completions)
+	}
+}
+
 func startTask(t *testing.T, ws string) string {
 	t.Helper()
 	out, err := runCLI(t, "-C", ws, "--json", "start", "fix redirect")
@@ -275,7 +398,17 @@ func TestCLIResolveAndAbort(t *testing.T) {
 func TestCLIConfigAndStatusDetail(t *testing.T) {
 	ws := cliRepo(t)
 	// cortex.yaml override should show up in config.
-	_ = os.WriteFile(filepath.Join(ws, "cortex.yaml"), []byte("budget:\n  max_investigation_rounds: 9\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(ws, "cortex.yaml"), []byte(`budget:
+  max_investigation_rounds: 9
+recall:
+  enabled: false
+verifiers:
+  unit:
+    argv: ["go", "test", "super-secret-argv"]
+    kind: unit_test
+    surface: code
+    timeout: 45s
+`), 0o644)
 	out, err := runCLI(t, "-C", ws, "--json", "config")
 	if err != nil {
 		t.Fatal(err)
@@ -286,11 +419,55 @@ func TestCLIConfigAndStatusDetail(t *testing.T) {
 	if !strings.Contains(out, "\"sessionsRoot\"") {
 		t.Errorf("config should expose the XDG sessions root, got: %s", out)
 	}
+	if !strings.Contains(out, `"recall"`) || !strings.Contains(out, `"enabled": false`) {
+		t.Errorf("config should expose resolved recall policy, got: %s", out)
+	}
+	if !strings.Contains(out, `"name": "unit"`) || !strings.Contains(out, `"timeout": "45s"`) {
+		t.Errorf("config should expose safe verifier policy, got: %s", out)
+	}
+	if strings.Contains(out, "super-secret-argv") || strings.Contains(out, `"argv"`) {
+		t.Errorf("config must not expose configured executable argv, got: %s", out)
+	}
 	// status --detail full includes tool health.
 	id := startTask(t, ws)
 	sout, _ := runCLI(t, "-C", ws, "--json", "status", id, "--detail", "full")
 	if !strings.Contains(sout, "toolHealth") {
 		t.Errorf("status --detail full should include tool health, got: %s", sout)
+	}
+}
+
+func TestCLIConfigFailsClosedOnMalformedPolicy(t *testing.T) {
+	ws := cliRepo(t)
+	if err := os.WriteFile(filepath.Join(ws, "cortex.yaml"), []byte("budget:\n  max_parallel_calls: 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, "--json", "-C", ws, "config")
+	if err == nil || !strings.Contains(err.Error(), "max_parallel_calls") {
+		t.Fatalf("config should fail closed with the invalid field named, got %v", err)
+	}
+}
+
+func TestParseTimeoutsRejectsMalformedAndDuplicateFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{name: "missing separator", flags: []string{"codemap45s"}, want: "expected tool=duration"},
+		{name: "empty tool", flags: []string{"=45s"}, want: "non-empty tool=duration"},
+		{name: "empty duration", flags: []string{"codemap="}, want: "non-empty tool=duration"},
+		{name: "duplicate", flags: []string{"codemap=30s", " CODEMAP =45s"}, want: "duplicate --timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseTimeouts(tc.flags); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("parseTimeouts(%v) error = %v, want %q", tc.flags, err, tc.want)
+			}
+		})
+	}
+
+	got, err := parseTimeouts([]string{" codemap = 45s", "glyphrun=2m"})
+	if err != nil || got["codemap"] != "45s" || got["glyphrun"] != "2m" || len(got) != 2 {
+		t.Fatalf("valid timeout flags = %v, %v", got, err)
 	}
 }
 
@@ -340,6 +517,44 @@ func TestResolveHypCompletion(t *testing.T) {
 	// First arg still completes task IDs.
 	if first, _ := completeResolveArgs(nil, []string{}, ""); len(first) == 0 {
 		t.Error("resolve first arg should complete task IDs")
+	}
+}
+
+func TestNewTaskCommandsHaveCompletion(t *testing.T) {
+	commands := []*cobra.Command{
+		beginChangeCmd, leaseRenewCmd, leaseReleaseCmd, decisionRequestCmd,
+		decisionAnswerCmd, decisionResumeCmd, handoffCmd, noteCmd,
+	}
+	for _, command := range commands {
+		if command.ValidArgsFunction == nil {
+			t.Errorf("%s should complete task IDs", command.CommandPath())
+		}
+	}
+}
+
+func TestDecisionAnswerCompletionSuggestsPendingDecision(t *testing.T) {
+	ws := cliRepo(t)
+	id := startTask(t, ws)
+	out, err := runCLI(t, "-C", ws, "decision", "request", id,
+		"--question", "Which rollout?", "--requester", "agent",
+		"--option", "safe=Safe|Slower", "--option", "fast=Fast|Riskier")
+	if err != nil {
+		t.Fatalf("request decision: %v (%s)", err, out)
+	}
+
+	completions, directive := completeDecisionAnswerArgs(nil, []string{id}, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("decision completion directive = %v", directive)
+	}
+	if len(completions) != 1 || !strings.HasPrefix(completions[0], "dec_") || !strings.Contains(completions[0], "Which rollout?") {
+		t.Fatalf("decision completion = %v", completions)
+	}
+}
+
+func TestStudioRejectsJSONInsteadOfLaunchingInteractiveUI(t *testing.T) {
+	_, err := runCLI(t, "--json", "studio")
+	if err == nil || !strings.Contains(err.Error(), "does not support --json") {
+		t.Fatalf("studio --json should fail with a non-interactive alternative, got %v", err)
 	}
 }
 

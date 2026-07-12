@@ -19,7 +19,7 @@ verification receipts into one time-sorted feed — an audit trail of how the ca
 actually unfolded. Works from any directory; the session is located by task ID.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		entries, err := kernel.Timeline(args[0])
+		entries, err := kernel.TimelineIn(workspaceArg(cmd), args[0])
 		if err != nil {
 			return err
 		}

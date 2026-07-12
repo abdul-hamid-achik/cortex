@@ -8,29 +8,39 @@ go install github.com/abdul-hamid-achik/cortex/cmd/cortex@latest
 task build   # → ./bin/cortex
 ```
 
-Cortex is a single pure-Go binary. The specialist tools it composes are **optional** — check
+Cortex is a single pure-Go binary, but **Git is required** for repository identity, diffs, scope
+drift, and revision-bound verification. The specialist tools it composes are **optional** — check
 what's available with:
 
 ```bash
-task doctor
+cortex doctor
 ```
+
+If you are developing Cortex from a clone, `task doctor` separately checks the development
+toolchain (Go, Task, Bun, Glyphrun, and lint tooling).
 
 Anything missing simply degrades: the corresponding adapter reports `tool_unavailable` instead of
 fabricating output.
 
-## A full task, start to finish
+## A full task, open to finish
 
 Cortex tracks work as a **case**. Every action advances a phase machine and appends to the case
-file under `.cortex/cases/<taskId>/` (override with `cases_dir` / `CORTEX_CASES_DIR`).
+file under `$XDG_STATE_HOME/cortex/sessions/<repo>/<taskId>/` by default. Set `cases_dir` /
+`CORTEX_CASES_DIR` only when you want repo-local or custom storage; `cortex config` prints the
+resolved path.
 
-### 1. Start — open a case and orient
+### 1. Open — resume safely or start once
 
 ```bash
-cortex start "Fix post-login checkout redirect" --surface code --surface browser
+cortex open "Fix post-login checkout redirect" \
+  --surface code --surface browser \
+  --actor agent-auth --idempotency-key checkout-redirect
 ```
 
-Cortex records git identity (repo, branch, baseline commit) and probes tool health, then lands in
-the `investigating` phase and prints the new `taskId`.
+Cortex returns an existing case for the idempotency key, so retrying after a lost response cannot
+duplicate work. Without a key it resumes the newest active case matching the normalized goal, mode,
+workspace, and branch. Only a real first call records git identity, probes tool health, and creates
+the `taskId`; use `cortex start` when you intentionally want a new case.
 
 ### 2. Investigate — discover, then resolve structure
 
@@ -56,21 +66,39 @@ The planning gate **rejects** any plan whose hypotheses lack a disproof path, an
 that declares no boundary. The `statement :: disproof` shorthand pairs a hypothesis with how it
 could be falsified (or use paired `--hypothesis` / `--disprove` flags).
 
-### 4. …edit, then verify
+### 4. Begin change — claim the writer lease
+
+```bash
+cortex begin-change task_06FK… --actor agent-auth
+```
+
+The task enters `changing` under a 15-minute lease. A same-actor retry is safe; another actor is
+rejected while the lease is active. Renew long work with `cortex lease renew … --actor agent-auth`
+or release it deliberately with `cortex lease release … --actor agent-auth`.
+
+### 5. Edit, then verify an exact claim
 
 Make your edits within the declared boundary, then:
 
 ```bash
 cortex verify task_06FK… \
   --claim "the OAuth callback preserves the return URL" \
+  --claim-surface browser \
+  --claim-verifier cairntrace \
+  --claim-contract specs/cairntrace/checkout_return.yml \
+  --actor agent-auth \
   --browser-spec specs/cairntrace/checkout_return.yml
 ```
 
-Verify runs a structural diff review (codemap), any provided behavioral specs (cairntrace /
-glyphrun), and checks for **scope drift** against the boundary. Each claim gets a receipt; a claim
-with no relevant verifier is recorded `not_run`, never `passed`.
+The surface and contract make the proof obligation exact instead of guessing from the sentence.
+Verify runs the planned checks and detects **scope drift**. Each named claim gets a receipt; a claim
+whose exact verifier/contract did not run is `not_run`, never `passed`. Receipts bind to the current
+HEAD and dirty-tree digest, so later edits make them stale.
 
-### 5. Remember — complete the task
+If the planned change intentionally produces no diff, pass `--no-op`. This acknowledges the no-op
+so verification may proceed; it does not create a pass or make the task verified.
+
+### 6. Remember — complete the task
 
 ```bash
 cortex remember task_06FK… \
@@ -78,18 +106,21 @@ cortex remember task_06FK… \
   --tag auth --tag oauth
 ```
 
-Completion **requires** a *passing* verification receipt. If verification genuinely couldn't run,
-use `--unverified`; if the only receipts are failures, use `--accept-failed`. Cortex never lets an
-unverified or failed outcome masquerade as a clean pass. A `summary.md` is written and a durable
-memory is stored (via vecgrep).
+Completion uses one canonical assessment: `verified`, `partial`, `failed`, or `unverified`.
+Normal completion requires `verified`. If adequate proof could not be completed and the assessment
+is `partial` or `unverified`, use `--unverified`; if it is `failed`, use `--accept-failed`. Cortex preserves the real assessment rather
+than letting an incomplete or failed outcome masquerade as a clean pass.
 
 ## Inspect anytime
 
 ```bash
 cortex status task_06FK… --detail full   # phase, hypotheses, scope drift, missing verification, tool health
+cortex show task_06FK…                   # assessment, pending decision, first structured action
 cortex list                              # all tasks, newest first
 cortex read-evidence task_06FK… ev_06FK… # a full evidence record
+cortex handoff task_06FK…                # bounded transfer packet for another person or agent
+cortex studio                            # live read-only operator view across repos
 ```
 
-Add `--json` to any read command for machine output. Output is styled at a terminal and plain when
-piped.
+Add `--json` to any non-interactive read command for machine output. Output is styled at a terminal
+and plain when piped. Studio is interactive; use `sessions --json` or `show --json` instead.

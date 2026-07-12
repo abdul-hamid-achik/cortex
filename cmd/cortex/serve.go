@@ -17,8 +17,13 @@ var serveCmd = &cobra.Command{
 	Aliases: []string{"mcp"},
 	Short:   "Run the Cortex MCP server over stdio",
 	Long: `Start the Model Context Protocol server. It speaks newline-delimited
-JSON-RPC over stdio and exposes the six cognitive tools (start_task,
-investigate, plan, verify, remember, status) plus abort_task and read_evidence.
+JSON-RPC over stdio. The default agent profile exposes 17 focused lifecycle,
+evidence, decision, and handoff tools. Use --profile all for the 24-tool surface,
+which also includes cross-repository observability and archive administration.
+
+The change workflow is explicit: open_task → investigate → plan → begin_change
+with an actor → verify with the same actor → remember. Tool results include
+structured actions describing the next safe continuation.
 
 Register it with mcphub:
   mcphub add cortex cortex serve
@@ -27,6 +32,7 @@ Register it with mcphub:
 All diagnostic logging goes to stderr so stdout stays pure JSON-RPC.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ws, _ := cmd.Flags().GetString("workspace")
+		profile, _ := cmd.Flags().GetString("profile")
 		if ws == "" {
 			if wd, err := os.Getwd(); err == nil {
 				ws = wd
@@ -34,10 +40,15 @@ All diagnostic logging goes to stderr so stdout stays pure JSON-RPC.`,
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return mcp.NewServer(ws).Run(ctx)
+		server, err := mcp.NewServerWithProfile(ws, profile)
+		if err != nil {
+			return err
+		}
+		return server.Run(ctx)
 	},
 }
 
 func init() {
+	serveCmd.Flags().String("profile", "agent", "MCP tool exposure: agent (17 focused tools) | all (24 including operator tools)")
 	rootCmd.AddCommand(serveCmd)
 }

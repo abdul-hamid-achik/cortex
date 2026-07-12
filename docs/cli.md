@@ -1,7 +1,9 @@
 # CLI
 
-The `cortex` binary is one of two surfaces over the kernel. Every read command supports `--json`
-for machine consumption; output is styled at a TTY and plain when piped.
+The `cortex` binary is one of three surfaces over the kernel: CLI, MCP, and the human-facing
+[Studio](/studio). Every non-interactive read command supports `--json` for machine consumption;
+output is styled at a TTY and plain when piped. Studio is an interactive TUI and rejects `--json`;
+use `sessions --json` or `show --json` instead.
 
 ## Global flags
 
@@ -14,7 +16,8 @@ for machine consumption; output is styled at a TTY and plain when piped.
 
 Install completion with cobra's built-in command, e.g. `cortex completion zsh > "${fpath[1]}/_cortex"`
 (or `bash` / `fish`). Every command that takes a `<taskId>` then **tab-completes task IDs** — with
-the goal shown as the description — reading across every repo, so you never type a base32 ID by hand:
+the goal shown as the description — reading the central cross-repo store plus any repo-local/custom
+case store selected with `-C`, so you never type a base32 ID by hand:
 
 ```bash
 cortex show <TAB>       # → task_06FK… (fix cart total)  task_06FM… (add coupon codes)
@@ -22,9 +25,36 @@ cortex show <TAB>       # → task_06FK… (fix cart total)  task_06FM… (add c
 
 ## Commands
 
+### `cortex open <goal>`
+
+Preferred entry point for agent-driven work. It resumes matching work or starts one case, so a
+retry after a lost response is safe.
+
+```bash
+cortex open "Fix post-login checkout redirect" \
+  --surface code --surface browser \
+  --actor agent-auth --idempotency-key checkout-redirect
+```
+
+An `--idempotency-key` is the strongest identity and returns its existing case even after
+completion. Without one, Cortex resumes the newest active case with the same normalized goal,
+mode, workspace, and current branch. When a new case is created, `--parent` links delegated work
+to a case in the same workspace and both parent and child records are updated. Resuming returns the
+existing metadata unchanged.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--mode` | `change` | `change` \| `investigate` \| `review` |
+| `--risk` | `medium` | `low` \| `medium` \| `high` |
+| `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
+| `--actor` | — | stable, non-secret person/agent identifier |
+| `--parent` | — | parent task ID for same-workspace delegated work |
+| `--idempotency-key` | — | stable, non-secret retry identity |
+
 ### `cortex start <goal>`
 
-Open a case and orient (git identity + tool health). Lands in the `investigating` phase.
+Always create a fresh case and orient it (git identity + tool health). It remains useful for manual
+work that intentionally must not resume an existing case; retrying it can create another case.
 
 ```bash
 cortex start "Fix post-login checkout redirect" --surface code --surface browser --risk medium
@@ -49,6 +79,9 @@ cortex investigate task_06FK… "where is the OAuth return URL handled"
 |---|---|
 | `--surface` (repeatable) | override the routing surfaces |
 | `--depth` | `quick` \| `standard` \| `deep` |
+
+Depth and surface overrides are validated before Cortex invokes an adapter. Unknown values fail
+explicitly instead of silently falling back to a different route or investigation cost.
 
 ### `cortex route [question]`
 
@@ -103,6 +136,7 @@ The planning gate. Rejects plans with no disproof path, and change tasks with no
 ```bash
 cortex plan task_06FK… \
   --hypothesis "returnTo is dropped :: run login-from-checkout browser flow" \
+  --support 1=ev_06FJ… \
   --file src/auth/callback.ts --symbol HandleCallback \
   --uncertainty "unsure whether state signing also strips it"
 ```
@@ -111,11 +145,40 @@ cortex plan task_06FK… \
 |---|---|
 | `--hypothesis` (repeatable) | a statement; supports the `statement :: disproof` shorthand |
 | `--disprove` (repeatable) | disproof for the matching `--hypothesis` (by position) |
+| `--support` (repeatable) | strict one-based `hypothesis-index=evidence-id[,evidence-id...]`; IDs must belong to this task |
 | `--confidence` | band for the hypotheses (default `low`) |
 | `--file` / `--symbol` (repeatable) | the change boundary |
 | `--boundary-reason` | why these are the expected change set |
 | `--verify` (repeatable) | required verifiers (e.g. `codemap_review`, `cairntrace_flow`) |
+| `--timeout` (repeatable) | strict `tool=duration` override; each tool may appear once |
 | `--uncertainty` | explicit statement of what remains uncertain (required) |
+
+Configured verifier names from `cortex.yaml` may be supplied as either `unit` or `command:unit`.
+When `--verify` is omitted, every configured command verifier is included alongside the defaults
+derived from the task's surfaces. Configured argv is still blocked by default: a trusted launcher
+must set `CORTEX_APPROVE_COMMANDS=1`, otherwise verify records an honest `blocked` receipt.
+
+### `cortex begin-change <taskId>`
+
+Claim bounded ownership and enter `changing` before editing:
+
+```bash
+cortex begin-change task_06FK… --actor agent-auth --ttl 15m
+```
+
+The task must be a planned change with a declared boundary. The actor is required; TTL defaults to
+15 minutes and must be between one second and one hour. A same-owner retry is idempotent (an
+explicit TTL also renews the heartbeat). A competing active actor is rejected.
+
+CLI operators can manage a long-lived lease directly:
+
+```bash
+cortex lease renew task_06FK… --actor agent-auth --ttl 30m
+cortex lease release task_06FK… --actor agent-auth
+```
+
+An expired lease cannot be renewed; reacquire with `begin-change`. Completion and abort release an
+active lease while retaining its audit record.
 
 ### `cortex verify <taskId>`
 
@@ -124,15 +187,35 @@ Run the required verifiers, detect scope drift, and write receipts.
 ```bash
 cortex verify task_06FK… \
   --claim "the OAuth callback preserves the return URL" \
+  --claim-surface browser \
+  --claim-verifier cairntrace \
+  --claim-contract specs/cairntrace/checkout_return.yml \
+  --actor agent-auth \
   --browser-spec specs/cairntrace/checkout_return.yml
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--claim` (repeatable) | a user-facing claim to prove |
+| `--claim-surface` (repeatable) | explicit `code`, `browser`, `terminal`, `artifact`, or `secret` surface; repeat once per claim |
+| `--claim-verifier` (repeatable) | optional exact verifier (`codemap`, `cairntrace`, `glyphrun`, `fcheap`, `tvault`, or `command:<name>`); omit entirely or repeat once per claim |
+| `--claim-contract` (repeatable) | required exact spec path/configured check/capability selector for each typed claim; repeat once per claim |
 | `--changed-file` (repeatable) | override changed files (derived from git otherwise) |
 | `--browser-spec` | cairntrace spec path (proves browser claims) |
 | `--terminal-spec` | glyphrun spec path (proves terminal claims) |
+| `--artifact-ref` | fcheap stash ID/URI for an artifact claim |
+| `--secret-project` | tvault project for a value-free capability claim |
+| `--no-auto-specs` | disable automatic selection of covering browser/terminal specs |
+| `--no-op` | acknowledge that a change task intentionally produced no diff; does not create a pass |
+| `--actor` | active change-lease owner, when leased |
+
+Supplying `--claim-surface` opts into typed claims and requires the matching `--claim-contract`.
+Typed routing is exact: a claim is `not_run` unless that exact verifier/contract ran. Legacy
+`--claim` without typed flags remains available but infers the surface heuristically.
+
+Repository-configured checks execute only when the process launching Cortex explicitly sets
+`CORTEX_APPROVE_COMMANDS=1`; `cortex.yaml` cannot authorize its own arbitrary argv. Without approval,
+the requirement remains blocked and the canonical assessment stays non-green.
 
 ### `cortex remember <taskId> <outcome>`
 
@@ -146,13 +229,64 @@ cortex remember task_06FK… "returnTo was dropped; fixed and browser-verified" 
 |---|---|
 | `--importance` | `0..1` importance for durable memory (default `0.5`) |
 | `--tag` (repeatable) | tags for recall |
-| `--unverified` | record explicitly that verification was not possible (required if no definitive receipt exists) |
-| `--accept-failed` | complete despite only *failed* receipts (no pass) — records a failed outcome, not a green one |
+| `--unverified` | explicitly accept a `partial` or `unverified` completion when adequate proof could not be completed |
+| `--accept-failed` | explicitly accept a `failed` completion — records a failed outcome, not a green one |
 
 ### `cortex status <taskId>`
 
 Phase, unresolved hypotheses, scope drift, missing verification, and (with `--detail full`) tool
-health.
+health. JSON includes case `revision`, actor/parent/children, lease, pending decision, structured
+`actions`, and one canonical `verificationOutcome`: `verified`, `partial`, `failed`, or
+`unverified`.
+
+`cortex show` and Studio use one task-locked composite projection. They retain the 200 newest
+evidence, command, and phase ledger records and return exact `evidenceTotal` / `timelineTotal`
+counts plus a truncation warning; use `read-evidence` or `timeline` for older detail.
+
+### Human context, decisions, and handoff
+
+Record provenance-bearing context without pretending it is proof:
+
+```bash
+cortex note task_06FK… "support confirmed this affects only invited users" \
+  --kind constraint --origin human --actor alice --ref ticket://AUTH-42
+```
+
+`--kind` is `observation | decision | constraint | handoff`; `--origin` is
+`human | agent | reviewer`; confidence is only `low | medium`. Notes are redacted
+`human_report` evidence and cannot satisfy verification by themselves.
+
+Pause on one bounded human choice, then resume the exact phase:
+
+```bash
+cortex decision request task_06FK… \
+  --question "Which migration should we use?" --requester agent-auth \
+  --option 'safe=Safe migration|More rollout time' \
+  --option 'fast=Fast migration|Higher rollback risk'
+
+cortex decision answer task_06FK… dec_06FM… --answer safe --responder alice
+cortex decision resume task_06FK… # crash recovery only: answer persisted, phase did not resume
+```
+
+A request requires at least two unique option IDs and an explicit consequence for each. While the
+case is `needs_human_decision`, normal lifecycle work is paused and the case remains active.
+
+Export a bounded transfer packet as Markdown or JSON:
+
+```bash
+cortex handoff task_06FK…                 # Markdown to stdout
+cortex handoff task_06FK… -o handoff.md   # Markdown file
+cortex --json handoff task_06FK…          # structured packet
+```
+
+Handoff JSON is hard-capped at 128 KiB and excludes sensitive evidence/receipt content. Markdown
+files are created owner-readable/writable only (`0600` on POSIX systems).
+
+The packet contains current state, revision, actor/parent/children/lease coordination metadata,
+plan, hypotheses, at most 20 recent evidence facts, the latest verifier runs plus named-claim
+receipts still current for the same revision/diff, decisions, the verification assessment, and
+executable actions. Raw tool output is excluded. Use `-C <workspace>` when the case lives in a
+repo-local or custom `cases_dir`.
 
 ### `cortex review`
 
@@ -232,9 +366,9 @@ cortex rm <taskId> --force    # permanently deletes it (no undo)
 ### `cortex show <taskId>` (`view`)
 
 A full one-screen view of a single session: phase badge, loop stepper, hypotheses, verification
-receipts, time-in-phase (with elapsed), and recent activity. Located by ID **from any directory**,
-so you can inspect a task from another repo without `cd`-ing there (`cortex status` is
-workspace-scoped; `show` is not). `--json` returns the whole view.
+receipts, time-in-phase (with elapsed), and recent activity. Central sessions are located by ID
+**from any directory**. For a repo-local or custom `cases_dir`, pass `-C <workspace>`; you still do
+not need to `cd` there. (`cortex status` remains workspace-scoped.) `--json` returns the whole view.
 
 ### `cortex overview` (`dash`)
 
@@ -244,20 +378,24 @@ time to complete, and a per-repo breakdown. The "how am I using cortex overall" 
 ### `cortex timeline <taskId>` (`activity`)
 
 A session's chronological activity — phase transitions, evidence, audited tool calls, and
-verification receipts — merged and time-sorted. Works from any directory (the session is located by
-ID). This is the reader for a case's audit log.
+verification receipts — merged and time-sorted. Central sessions work from any directory; pass
+`-C <workspace>` for a repo-local or custom case store. This is the reader for a case's audit log.
 
 ### `cortex studio` (`board`, `tui`)
 
 A live, read-only Charm v2 board of every session across every repo: the session list on the left,
 and the selected case's **loop stepper** (`orient→…→preserve`, with a "you are here" marker),
-hypotheses, evidence, and verification on the right. Auto-refreshes.
+canonical verification assessment and gaps, pending decision, first structured next action,
+hypotheses, recent evidence, and recent receipts on the right. Auto-refreshes.
 
 ```bash
 cortex studio               # all sessions, live
 cortex studio --active      # only in-flight
 cortex studio --repo api    # scope to a repo
 ```
+
+Studio is interactive and rejects `--json`. Use `cortex sessions --json` for the board index or
+`cortex show <taskId> --json` for one canonical session projection.
 
 Keys: `↑/↓` navigate · `g/G` jump · `a` active-only · `r` refresh · `q` quit.
 
@@ -269,11 +407,16 @@ Keys: `↑/↓` navigate · `g/G` jump · `a` active-only · `r` refresh · `q` 
 | `cortex metrics [taskId]` | observability: per-task outcome + evidence trail (incl. **time-in-phase**), or the workspace aggregate (SPEC §18) |
 | `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
 | `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
-| `cortex config` | resolved configuration, the **XDG storage layout**, and which `cortex.yaml` files were applied |
+| `cortex config` | resolved workspace/storage paths, budget, recall policy, safe verifier metadata (argv omitted), redaction count, and applied `cortex.yaml` sources |
 | `cortex abort <taskId> <reason>` | stop a task without deleting evidence |
 | `cortex read-evidence <taskId> <evidenceId>` | print a full evidence record (with its `rawRef`) |
-| `cortex read-artifact <taskId> <ref>` | resolve an evidence `rawRef` to the raw tool output |
-| `cortex serve` (`mcp`) | run the MCP server over stdio |
+| `cortex read-artifact <taskId> <ref> [--path file] [--max-bytes N] [--allow-binary]` | preview a task-owned raw ref or task-referenced fcheap ref; path must be safe/relative; discovery ≤512 entries/100 files; binary requires explicit opt-in; 32 KiB default/128 KiB cap |
+| `cortex serve` (`mcp`) | run the MCP server over stdio; compact `agent` profile by default |
+
+`cortex serve --profile agent` exposes 17 lifecycle, collaboration, evidence, and recall tools for
+a model's normal working context. `cortex serve --profile all` exposes 24 tools by adding seven
+cross-repository monitoring/session-administration operations for an operator-oriented MCP client.
+See [MCP server](/mcp#exposure-profiles).
 
 ### `cortex migrate`
 

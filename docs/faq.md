@@ -18,8 +18,8 @@ actually sees, and durable memory.
 
 Because more raw tools without structure is *more ways to get lost*. An unsupervised agent will
 "find" a cause with one search, confidently edit the wrong file, declare success, and leave no
-trail. Cortex replaces "dozens of overlapping tools" with **six cognitive actions** and enforces an
-order between them, so the model spends its intelligence on the problem instead of on bookkeeping it
+trail. Cortex replaces "dozens of overlapping tools" with a compact, state-aware workflow and
+enforces its gates, so the model spends its intelligence on the problem instead of bookkeeping it
 routinely gets wrong. See [Concepts](/concepts) for the full argument.
 
 ### Do I have to install codemap, vecgrep, cairntrace, and the rest?
@@ -38,14 +38,24 @@ task build      # → ./bin/cortex
 task install    # → $GOPATH/bin/cortex
 ```
 
-It's a single pure-Go binary (`CGO_ENABLED=0`), no runtime dependencies.
+It's a single pure-Go Cortex binary (`CGO_ENABLED=0`), but **Git is required** for repository
+identity, diffs, scope drift, and revision-bound verification. The specialist tools are optional.
 
 ### Should I use the CLI or the MCP server?
 
 Both are the same kernel; pick by who's driving:
 
-- **CLI** — for humans and shell scripts. Add `--json` to any read command for machine output.
-- **MCP server** (`cortex serve`) — for agent harnesses. The model calls `cortex_start_task`, `cortex_investigate`, etc. as tools. See [MCP](/mcp).
+- **CLI** — for humans and shell scripts. Add `--json` to non-interactive read commands for machine
+  output; Studio is interactive and directs machines to `sessions --json` / `show --json`.
+- **MCP server** (`cortex serve`) — for agent harnesses. The model calls `cortex_open_task`,
+  `cortex_investigate`, etc. as tools. See [MCP](/mcp).
+
+### What's the difference between `open` and `start`?
+
+`open` is retry-safe and should be the default for agents. An idempotency key returns the same case
+even after completion; without a key, Cortex resumes the newest active case matching normalized
+goal, mode, workspace, and branch. `start` always creates a fresh case, which is useful only when
+duplication is deliberate.
 
 ## Using it day to day
 
@@ -59,10 +69,13 @@ cortex list --json   # machine-readable
 Everything hangs off the `taskId`, so it's worth stashing in a shell variable while you work
 (`TID=task_…`).
 
+If you used `open --idempotency-key …`, repeating the open command is another safe way to recover
+the exact ID.
+
 ### What's a "surface"?
 
 Where a change is *user-visible*: `code`, `browser`, `terminal`, `artifact`, or `secret`. You
-declare surfaces at `start` (`--surface browser`), and they drive verification — a claim about
+declare surfaces at `open`/`start` (`--surface browser`), and they drive verification — a claim about
 browser behavior needs a browser verifier (cairntrace), a terminal claim needs a terminal verifier
 (glyphrun). Surfaces are how Cortex knows *what kind of proof a claim requires.*
 
@@ -70,9 +83,24 @@ browser behavior needs a browser verifier (cairntrace), a terminal claim needs a
 
 This is the heart of Cortex. A claim you make at `verify` gets a **receipt**. If the verifier that
 could prove it never ran (tool missing, no spec provided), the receipt is `not_run` — **never**
-`passed`. Cortex will not round an unchecked claim up to success. A task can't complete without at
-least one **passing** receipt, unless you *explicitly* mark the outcome `--unverified` (no verifier
-could run) or `--accept-failed` (only failed receipts — the claim did not hold).
+`passed`. Cortex will not round an unchecked claim up to success. All views reduce current receipts
+to one assessment: `verified`, `partial`, `failed`, or `unverified`. Only `verified` is a normal
+completion; explicit acknowledgments preserve the other outcomes honestly.
+
+### Why do I need `begin-change` and an actor?
+
+The boundary says *where* work may happen; the lease says *who currently owns it*. `begin-change`
+atomically moves a planned change to `changing` and gives a stable, non-secret actor an expiring
+lease (15 minutes by default). A same-owner retry is safe; another active actor is rejected. Pass
+the same actor to `verify`, renew long work with `cortex lease renew`, and let `remember`/`abort`
+release the lease.
+
+### My task intentionally produced no diff. Is that an error?
+
+By default, yes: a change task with no change record is usually an abandoned edit. If the no-op is
+intentional, pass `cortex verify … --no-op` (MCP: `noOpAcknowledged: true`). This only acknowledges
+the absence of a diff so verification can proceed. It does **not** create a passing receipt or make
+the task verified.
 
 ### What is "scope drift"?
 
@@ -90,12 +118,14 @@ with no boundary is rejected for the same reason: undisciplined edits.
 
 ### Why won't `remember` complete my task?
 
-Completion requires a **passing** verification receipt. Common blockers:
+Completion uses the canonical assessment. Common blockers:
 
 - only `not_run` / `blocked` / `inconclusive` receipts → re-run `verify` with an available, indexed
-  verifier, or use `--unverified` if no verifier could run
-- only `failed` receipts → fix the change and re-verify, or use `--accept-failed` to record the
-  failed outcome explicitly (it will not be labeled as verified)
+  verifier, or use `--unverified` to preserve the explicitly unverified outcome
+- canonical outcome is `failed` → fix the change and re-verify, or use `--accept-failed` to record
+  the failed outcome explicitly (it will not be labeled as verified)
+- some proof passed but a requirement/named claim remains unmet → outcome is `partial`; run the
+  missing exact verifier/contract, or use `--unverified` to explicitly acknowledge incomplete proof
 
 `--unverified` / `--accept-failed` are not shortcuts; they permanently label the outcome so it can
 never masquerade as a clean pass later.
@@ -113,6 +143,14 @@ Yes. Each round is counted against a small budget (you'll see `rounds 2/3` in `s
 it doesn't hard-block you — it *warns*, so aimless searching becomes visible. The nudge is toward
 forming a hypothesis and planning, not toward endless search.
 
+### How do I pause for a human or transfer the task?
+
+Use `cortex decision request` for one bounded choice with at least two options and explicit
+consequences. The task enters the resumable `needs_human_decision` phase; `decision answer` records
+the choice and returns to the exact paused phase. Use `cortex note` for provenance-bearing context
+that should not pause work, and `cortex handoff` for a bounded packet containing the plan,
+hypotheses, current assessment, recent evidence, decisions, and structured next actions.
+
 ### Is there a UI?
 
 Yes — a read-only terminal UI over the case store:
@@ -121,8 +159,10 @@ Yes — a read-only terminal UI over the case store:
 cortex studio     # aliases: cortex board, cortex tui
 ```
 
-It lists the workspace's tasks with their phase and shows the selected case's goal and evidence.
-Navigate with arrow/`j`-`k` keys, quit with `q`.
+It lists sessions from the central store across repositories and shows the selected case's loop,
+canonical verification assessment and gaps, pending decision, first structured action,
+hypotheses, and bounded recent receipts/evidence. Navigate with arrow/`j`-`k` keys, toggle
+active-only with `a`, and quit with `q`. See [Studio](/studio).
 
 ## State, privacy, and secrets
 
@@ -170,11 +210,21 @@ patterns you want masked, not the secrets themselves.
 
 A `cortex.yaml` at the repo root (or `.config/cortex.yaml`, or `$CORTEX_HOME/config.yaml`), plus
 `CORTEX_*` env overrides. Precedence, low → high: defaults → global → project `.config` → project
-root → env. See [Configuration](/configuration). Check what resolved with:
+root → env. See [Configuration](/configuration). Check the resolved paths, budget, and source
+files with:
 
 ```bash
 cortex config
 ```
+
+### Can Cortex run my repository's tests or lint command?
+
+Yes, but only when an exact argv array is configured in `cortex.yaml` under `verifiers:` **and** the
+trusted launcher sets `CORTEX_APPROVE_COMMANDS=1`. Repository config cannot approve itself. Callers
+name the configured check (`command:unit`); they cannot supply shell text or append arguments.
+Without approval Cortex records `blocked`. Allowed kinds are `unit_test`, `build`, and `lint`, all
+on the code surface. See
+[Configuration](/configuration#safe-command-verifiers).
 
 ### Which agent harnesses does Cortex work with?
 
@@ -222,9 +272,17 @@ machine output.
 
 ### How do I start over on a task?
 
-Tasks are append-only by design (that's the audit trail). To abandon one without deleting its
-evidence: `cortex abort <taskId>`. To wipe local state entirely, remove the workspace's `.cortex/`
-directory — but note you'll lose the reconstructable history of every task in it.
+Tasks are append-oriented by design because the history is the audit trail. Choose the operation
+that matches your intent:
+
+- `cortex abort <taskId> "<reason>"` stops in-flight work without deleting evidence.
+- `cortex archive <taskId>` moves a terminal session out of active views and is reversible with
+  `cortex unarchive <taskId>`.
+- `cortex rm <taskId>` is a dry run that shows what would be deleted; add `--force` only when you
+  intend to permanently remove that terminal session.
+
+Do not assume state lives in the workspace's `.cortex/` directory: the default is the central XDG
+store. Run `cortex config` to see the exact session and archive paths.
 
 ### Still stuck?
 

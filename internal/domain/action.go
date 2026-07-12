@@ -19,6 +19,11 @@ const (
 	// ActionSecretedExecution runs with injected secrets (authenticated
 	// integration). Requires a secrets capability and redaction (SPEC §16.3).
 	ActionSecretedExecution ActionClass = "secreted_execution"
+	// ActionConfiguredExecution runs repository-configured argv. Even a command
+	// described as a test or lint check is arbitrary local code and may access
+	// the network or mutate files, so it requires an explicit trusted-harness
+	// approval rather than inheriting read-only verifier status.
+	ActionConfiguredExecution ActionClass = "configured_execution"
 )
 
 // Mutating reports whether the class changes state (anything but read-only).
@@ -35,6 +40,8 @@ func ClassifyOp(tool, op string) ActionClass {
 		return ActionExternalMutation
 	}
 	switch tool {
+	case "command":
+		return ActionConfiguredExecution
 	case "fcheap":
 		if op == "save" {
 			return ActionLocalMutation

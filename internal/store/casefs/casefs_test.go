@@ -1,14 +1,79 @@
 package casefs
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
+
+func TestAppendVerificationAcrossStoreInstances(t *testing.T) {
+	root := t.TempDir()
+	s1, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &domain.CaseFile{ID: "task_concurrent", Goal: "g", Status: domain.PhaseInvestigating}
+	if err := s1.Create(c); err != nil {
+		t.Fatal(err)
+	}
+	const perStore = 25
+	var wg sync.WaitGroup
+	for i := 0; i < perStore*2; i++ {
+		store := s1
+		if i%2 == 1 {
+			store = s2
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := store.AppendVerification(c.ID, domain.VerificationRecord{
+				ID: fmt.Sprintf("vr_%d", i), Claim: fmt.Sprintf("claim %d", i),
+				Surface: domain.SurfaceCode, Status: domain.VerifyPassed, Timestamp: time.Now().UTC(),
+			}); err != nil {
+				t.Errorf("append %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	recs, err := s1.Verifications(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != perStore*2 {
+		t.Fatalf("lost concurrent receipts: got %d want %d", len(recs), perStore*2)
+	}
+}
+
+func TestAppendLedgerRecordRejectsUnboundedPayload(t *testing.T) {
+	s := newStore(t)
+	c := sampleCase()
+	if err := s.Create(c); err != nil {
+		t.Fatal(err)
+	}
+	err := s.AppendEvidence(c.ID, domain.Evidence{
+		ID: "ev_huge", Timestamp: time.Now().UTC(), Kind: domain.KindHumanReport,
+		Source: domain.Source{Origin: "human"}, Claim: strings.Repeat("x", maxLedgerRecordBytes+1),
+		Confidence: domain.ConfidenceMedium,
+	})
+	if err == nil || !strings.Contains(err.Error(), "record exceeds") {
+		t.Fatalf("oversized ledger record error = %v", err)
+	}
+	items, readErr := s.Evidence(c.ID)
+	if readErr != nil || len(items) != 0 {
+		t.Fatalf("rejected ledger record was written: items=%d err=%v", len(items), readErr)
+	}
+}
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
@@ -191,27 +256,38 @@ func TestRawIDIsSanitized(t *testing.T) {
 	}
 }
 
-func TestTaskIDPathTraversalContained(t *testing.T) {
-	// Regression: a malicious taskID must not escape the cases root.
+func TestTaskIDRejectsTraversalAndSanitizationAliases(t *testing.T) {
+	// Regression: cleaning an invalid ID is not sufficient. task/alias used to
+	// resolve to the same directory as task_alias, crossing task ownership.
 	root := filepath.Join(t.TempDir(), "cases")
 	s, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mal := range []string{"../../../etc", "..", "a/../../b", "/absolute/evil"} {
-		d := s.dir(mal)
-		rel, err := filepath.Rel(root, d)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			t.Errorf("taskID %q escaped the cases root: dir=%q rel=%q", mal, d, rel)
+	actual := sampleCase()
+	actual.ID = "task_alias"
+	if err := s.Create(actual); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{
+		"../../../etc", "..", "a/../../b", "/absolute/evil",
+		"task/alias", "task.alias", "task_alias/..", "coord_not_a_task",
+	} {
+		if _, err := s.Load(invalid); !errors.Is(err, ErrInvalidTaskID) {
+			t.Errorf("Load(%q) error = %v, want ErrInvalidTaskID", invalid, err)
+		}
+		if _, err := s.TaskDir(invalid); !errors.Is(err, ErrInvalidTaskID) {
+			t.Errorf("TaskDir(%q) error = %v, want ErrInvalidTaskID", invalid, err)
+		}
+		if err := s.RemoveTask(invalid); !errors.Is(err, ErrInvalidTaskID) {
+			t.Errorf("RemoveTask(%q) error = %v, want ErrInvalidTaskID", invalid, err)
 		}
 	}
-	// A legitimate minted ID is unchanged.
-	if got := s.dir("task_06FKABC123"); got != filepath.Join(root, "task_06FKABC123") {
-		t.Errorf("legit id should be unchanged, got %q", got)
+	if _, err := s.Load(actual.ID); err != nil {
+		t.Fatalf("invalid alias affected canonical task: %v", err)
 	}
-	// A traversal id simply won't resolve to a real case.
-	if _, err := s.Load("../../../etc"); err == nil {
-		t.Error("loading a traversal taskID should not succeed")
+	if got, err := s.TaskDir("task_06FKABC123"); err != nil || got != filepath.Join(root, "task_06FKABC123") {
+		t.Errorf("legit id should be unchanged, got %q err=%v", got, err)
 	}
 }
 

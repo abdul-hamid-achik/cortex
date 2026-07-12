@@ -296,15 +296,16 @@ Cortex does not increase a model's base intelligence. It reduces the number of f
 
 ### 5.1 It reduces choice overload
 
-Instead of selecting from dozens of raw tools, the model selects among a few cognitive actions:
+Instead of selecting from dozens of raw tools, the model follows a small task workflow:
 
 ```text
-start task
+open or deliberately start a task
 investigate
 plan
+begin change
 verify
 remember
-status
+inspect / decide / hand off when needed
 ```
 
 The kernel then translates the action into specialized calls.
@@ -359,7 +360,10 @@ persisting
 complete
 
 Terminal alternatives:
-blocked | abandoned | needs_human_decision
+blocked | abandoned
+
+Resumable pause:
+needs_human_decision → the exact active phase stored in pausedFrom
 ```
 
 ### 6.2 Transition rules
@@ -369,22 +373,33 @@ blocked | abandoned | needs_human_decision
 | `new` | `orienting` | a goal and workspace/repository reference exist |
 | `orienting` | `investigating` | repository identity and tool health are known or explicitly unavailable |
 | `investigating` | `planned` | at least one hypothesis and a verification plan exist |
-| `planned` | `changing` | change boundary is declared; mutation permission is present |
-| `changing` | `verifying` | diff/change record exists |
+| `planned` | `changing` | change boundary is declared; the standard path is `begin-change`, which atomically leases ownership to an actor |
+| `changing` | `verifying` | diff/change record exists, or an intentional no-op is explicitly acknowledged |
 | `verifying` | `persisting` | required verification has passed or failure is explicitly recorded |
 | `persisting` | `complete` | summary, evidence references, and uncertainty are saved |
-| any | `blocked` | a required dependency, permission, secret, or human decision is missing |
+| any non-terminal | `needs_human_decision` | one bounded question with at least two consequential options is persisted; `pausedFrom` records the exact resume target |
+| `needs_human_decision` | `pausedFrom` | the selected option and responder are persisted as evidence; crash recovery may finish this transition after an already-written answer |
+| any | `blocked` | a required dependency, permission, or secret is missing and the case cannot safely continue |
+
+For backward compatibility, `verify` may still advance an unleased legacy task from `planned` to
+`changing` and then `verifying`. New agent workflows SHALL call `begin-change` explicitly so actor
+ownership is visible and competing writers are rejected.
 
 ### 6.3 Invariants
 
 Cortex SHALL preserve these invariants:
 
 1. A task cannot be `planned` without a hypothesis and disproof path.
-2. A task cannot be considered `complete` without a verification record or an explicit statement that verification was not possible.
+2. Normal completion requires the canonical assessment to be `verified`; a partial/unverified/failed completion requires an explicit, durable acknowledgment and must retain that non-green assessment.
 3. Every evidence record must have an origin and timestamp.
 4. No secret value may enter an evidence record.
 5. A verification pass must name the exact claim it supports.
 6. A code mutation outside the declared boundary must trigger a scope-drift warning.
+7. A typed claim bound to a contract cannot pass unless that exact verifier/contract ran.
+8. A no-op acknowledgment permits verification of an intentional no-diff task but is not proof.
+9. Every task view SHALL derive `verified | partial | failed | unverified` from the same current receipts.
+10. Case snapshot writes use optimistic revisions; a stale writer cannot overwrite a newer snapshot.
+11. At most one unexpired, unreleased change lease may own a case, and verification of a leased case must name its actor.
 
 ---
 
@@ -454,9 +469,11 @@ $XDG_STATE_HOME/cortex/            # ~/.local/state/cortex by default
         hypotheses.json
         plan.json
         verification.json
+        decisions.json
         commands.jsonl
         phases.jsonl
         summary.md
+        raw/
         refs/
           artifacts.json
           annotations.json
@@ -479,11 +496,16 @@ Long-term archives may be copied or stashed through `fcheap`.
 ```json
 {
   "schemaVersion": 1,
+  "revision": 7,
   "id": "task_01J9Q5Y8B0M6D2",
   "createdAt": "2026-07-06T14:00:00Z",
   "goal": "Fix post-login checkout return URL",
   "mode": "change",
   "status": "verifying",
+  "actor": "agent-auth",
+  "parentTaskId": "task_01J9Q4",
+  "childTaskIds": ["task_01J9QC"],
+  "idempotencyKey": "checkout-redirect",
   "workspace": {
     "root": "/Users/abdul/projects/liftclub",
     "repository": "liftclub",
@@ -500,13 +522,24 @@ Long-term archives may be copied or stashed through `fcheap`.
     "symbols": ["HandleCallback", "ResolveReturnURL"],
     "reason": "Return URL state is produced and consumed here."
   },
+  "changeLease": {
+    "actor": "agent-auth",
+    "acquiredAt": "2026-07-06T14:10:00Z",
+    "renewedAt": "2026-07-06T14:20:00Z",
+    "expiresAt": "2026-07-06T14:35:00Z"
+  },
   "verificationRequired": [
     "codemap_review",
-    "targeted_tests",
-    "cairntrace_checkout_return"
+    "command:unit",
+    "cairntrace_flow"
   ]
 }
 ```
+
+`revision` is a compare-and-swap version incremented on every successful case snapshot update.
+Actor, idempotency, parent/child, and lease fields are optional coordination metadata; older cases
+without them remain valid. While a decision is pending, `status` is `needs_human_decision` and
+`pausedFrom` stores the active phase that must be restored.
 
 ### 8.3 Evidence record
 
@@ -527,9 +560,9 @@ Long-term archives may be copied or stashed through `fcheap`.
     "endLine": 61,
     "symbol": "HandleCallback"
   },
-  "confidence": 0.93,
+  "confidence": "high",
   "sensitivity": "normal",
-  "rawRef": "case://task_01J9Q5Y8B0M6D2/evidence/ev_01J9Q6"
+  "rawRef": "case://task_01J9Q5Y8B0M6D2/raw/raw_01J9Q6"
 }
 ```
 
@@ -540,7 +573,7 @@ Long-term archives may be copied or stashed through `fcheap`.
   "id": "hyp_01J9Q7",
   "statement": "OAuth state does not retain returnTo, so HandleCallback applies its '/' fallback.",
   "supports": ["ev_01J9Q6", "ev_01J9Q8"],
-  "confidence": 0.74,
+  "confidence": "medium",
   "disproveBy": {
     "kind": "behavioral_run",
     "tool": "cairntrace",
@@ -555,15 +588,42 @@ Long-term archives may be copied or stashed through `fcheap`.
 ```json
 {
   "id": "vr_01J9QA",
+  "batchId": "vb_01J9Q9",
+  "claimId": "checkout-return",
   "claim": "After OAuth login initiated from checkout, the browser returns to checkout.",
   "surface": "browser",
+  "purpose": "named_claim",
+  "contract": "specs/checkout-return.yml",
+  "actor": "agent-auth",
   "tool": "cairntrace",
   "status": "passed",
-  "evidence": ["ev_01J9QB"],
-  "artifact": "fcheap://stash/fc_019",
+  "revision": "74c6e03d…",
+  "dirtyDigest": "sha256:9be0…",
+  "binding": "bound",
   "timestamp": "2026-07-06T14:27:00Z"
 }
 ```
+
+Verifier-run receipts use `purpose: "verifier_run"`, name the planning `requirement`, and carry
+direct evidence/artifact/version fields. Named-claim receipts use `purpose: "named_claim"` and map
+one stable `claimId` to the verifier and required exact `contract`. Both bind to the verified HEAD
+and dirty-tree digest so later edits make the proof stale. Every new `verify` call writes one
+identified receipt batch atomically. A batch is `bound` only when the case revision, change owner,
+HEAD, and dirty-tree digest stay stable from verifier start through commit. Otherwise definitive
+pass/fail results are downgraded to inconclusive and the latest unbound batch masks older proof.
+Facts and bounded raw blobs produced by that call SHALL be staged with the receipts and verifying
+case revision; a failed case/lease CAS publishes none of them. Audit commands retain the actor
+captured when each invocation began. Public evidence/receipt/raw readers SHALL recover interrupted
+bundle transactions under the task lock before returning data. Code annotations derived from a
+behavioral run SHALL execute only after the bundle commits with `binding: "bound"`.
+
+#### Decision record
+
+`decisions.json` is a snapshot list. Each request contains a stable ID, one question, requester,
+timestamp, and at least two unique `{id, label, consequence}` options. An answered record adds the
+selected option ID, responder, answer timestamp, and the `human_report` evidence ID created from the
+choice. Decision text is redacted and may be marked sensitive; it can inform reasoning but cannot
+satisfy verification by itself.
 
 ### 8.6 Confidence policy
 
@@ -631,13 +691,17 @@ This preserves the actual investigation path and lets later tools learn from fai
 
 ### 10.1 Principles
 
-The Cortex MCP server SHALL expose a small public surface. It should be easier for a model to understand six strong tools than forty overlapping wrappers.
+The Cortex MCP server SHALL expose a small, profiled public surface. The default `agent` profile
+contains 17 lifecycle, collaboration, evidence, artifact-preview, and recall tools. The `all`
+profile contains 24 tools by adding exactly seven cross-repository operator operations:
+`list_tasks`, `sessions`, `timeline`, `metrics`, `overview`, `archive`, and `unarchive`.
 
 ### 10.2 Public tools
 
 #### `cortex_start_task`
 
-Creates a case file and performs lightweight orientation.
+Deliberately creates a fresh case file and performs lightweight orientation. Retry-sensitive
+agents SHOULD use `cortex_open_task` instead.
 
 ```json
 {
@@ -651,6 +715,26 @@ Creates a case file and performs lightweight orientation.
 
 Returns task ID, workspace identity, detected capability health, and recommended next action.
 
+#### `cortex_open_task`
+
+Idempotently resumes matching work or starts it once. `idempotencyKey` is the strongest identity
+and returns its case even after completion. Without a key, Cortex resumes the newest active case
+with the same normalized goal, mode, workspace, and current branch. On creation, optional `actor`
+and `parentTaskId` record coordination and same-workspace delegation; a resume returns existing
+metadata unchanged.
+
+```json
+{
+  "goal": "Fix post-login checkout redirect",
+  "workspace": "/Users/abdul/projects/liftclub",
+  "mode": "change",
+  "surfaces": ["code", "browser"],
+  "actor": "agent-auth",
+  "parentTaskId": "task_01J9Q4",
+  "idempotencyKey": "checkout-redirect"
+}
+```
+
 #### `cortex_investigate`
 
 Routes a question through the appropriate discovery and structural tools, records returned evidence, and returns a bounded investigation summary.
@@ -659,10 +743,7 @@ Routes a question through the appropriate discovery and structural tools, record
 {
   "taskId": "task_01J9Q5Y8B0M6D2",
   "question": "Where is the return URL written and consumed during OAuth login?",
-  "scope": {
-    "files": ["src/auth/**"],
-    "surfaces": ["code"]
-  },
+  "surfaces": ["code"],
   "depth": "standard"
 }
 ```
@@ -681,15 +762,29 @@ Stores hypotheses, change boundary, and verification plan. This is a planning ga
       "disproveBy": "Run login-from-checkout browser contract"
     }
   ],
-  "changeBoundary": {
-    "files": ["src/auth/callback.ts", "src/auth/return-url.ts"],
-    "symbols": ["HandleCallback", "ResolveReturnURL"]
-  },
+  "files": ["src/auth/callback.ts", "src/auth/return-url.ts"],
+  "symbols": ["HandleCallback", "ResolveReturnURL"],
+  "boundaryReason": "Return URL state is produced and consumed here.",
   "verification": [
-    "codemap structural review",
-    "auth callback unit test",
-    "cairntrace browser flow"
-  ]
+    "codemap_review",
+    "command:unit",
+    "cairntrace_flow"
+  ],
+  "uncertainty": "State signing may also strip returnTo"
+}
+```
+
+#### `cortex_begin_change`
+
+Atomically acquires an expiring lease and enters `changing`. `actor` is required; `ttl` defaults to
+15 minutes and accepts one second through one hour. A same-owner retry is idempotent and an
+explicit TTL renews its heartbeat. A different active owner is rejected.
+
+```json
+{
+  "taskId": "task_01J9Q5Y8B0M6D2",
+  "actor": "agent-auth",
+  "ttl": "15m"
 }
 ```
 
@@ -700,17 +795,31 @@ Runs the required verification policy and returns whether the named claims are s
 ```json
 {
   "taskId": "task_01J9Q5Y8B0M6D2",
-  "claims": [
-    "The OAuth callback preserves return URL.",
-    "Users who login from checkout return to checkout."
+  "actor": "agent-auth",
+  "claimSpecs": [
+    {
+      "id": "checkout-return",
+      "statement": "Users who login from checkout return to checkout.",
+      "surface": "browser",
+      "verifier": "cairntrace",
+      "contract": "specs/checkout-return.yml"
+    },
+    {
+      "statement": "Repository unit tests pass.",
+      "surface": "code",
+      "verifier": "command:unit",
+      "contract": "unit"
+    }
   ],
-  "changedFiles": [
-    "src/auth/callback.ts",
-    "src/auth/return-url.ts"
-  ],
-  "surface": "mixed"
+  "browserSpec": "specs/checkout-return.yml"
 }
 ```
+
+`claimSpecs` is preferred over legacy free-text `claims`. Each typed claim has an explicit surface
+and required exact spec/check/capability contract; the verifier may default from the surface. A
+typed claim is `not_run` unless that exact run occurred. Code claims may use only a
+`command:<name>` declared in repository configuration. `noOpAcknowledged` permits an intentional
+no-diff change to enter verification but creates no pass.
 
 #### `cortex_remember`
 
@@ -736,13 +845,33 @@ Returns task phase, unresolved hypotheses, scope drift, required verification, a
 }
 ```
 
-#### `cortex_abort_task`
+Status includes case revision, actor/linkage/lease, pending decision, structured continuation
+actions, stale and missing verification, and the canonical
+`verified | partial | failed | unverified` outcome.
 
-Stops the active task without deleting evidence. Requires a reason.
+#### Collaboration, evidence, and recall tools (`agent`, `all`)
+
+| Tool | Contract |
+|---|---|
+| `cortex_resolve` | confirm, challenge, or reject a hypothesis with a reason and optional evidence IDs; append history |
+| `cortex_note` | append redacted observation/decision/constraint/handoff context as low/medium `human_report`; never proof by itself |
+| `cortex_request_decision` | pause on one question with at least two option IDs, labels, and explicit consequences |
+| `cortex_answer_decision` | persist an answer/responder and resume `pausedFrom`; `resume=true` repairs an already-written answer after a crash |
+| `cortex_handoff` | return the canonical state projection with revision/actor/linkage/lease metadata, at most 20 recent non-sensitive evidence facts, current non-sensitive verifier runs and same-state named claims, decisions, assessment, and actions; sensitive record content is omitted with a warning while a pending sensitive decision retains only identity/status; the serialized packet has a 128 KiB hard cap and retains identity/pending decision/continuation when trimming; optional workspace fallback finds repo-local/custom stores; no raw output |
+| `cortex_abort_task` | stop an active task without deleting evidence; release any active lease |
+| `cortex_read_evidence` | return a full evidence record by ID |
+| `cortex_read_artifact` | bounded task-owned/task-referenced preview; safe relative path; default 32768 bytes, hard cap 131072; binary requires opt-in |
+| `cortex_recall_cases` | best-effort prior resolved cases/disproofs; returned as low-confidence leads |
+
+#### Operator-only tools (`all`)
+
+`cortex_list_tasks`, `cortex_sessions`, `cortex_timeline`, `cortex_metrics`, `cortex_overview`,
+`cortex_archive`, and `cortex_unarchive` are intentionally excluded from the default agent profile.
 
 ### 10.3 Shared result envelope
 
-All Cortex tools SHALL return the same outer schema.
+Lifecycle and mutation tools SHALL return the same outer envelope. Read/index/operator tools may
+return their documented structured projection directly.
 
 ```json
 {
@@ -754,7 +883,7 @@ All Cortex tools SHALL return the same outer schema.
     {
       "id": "ev_01J9Q6",
       "claim": "HandleCallback applies '/' fallback when returnTo is missing.",
-      "confidence": 0.93,
+      "confidence": "high",
       "source": "codemap"
     }
   ],
@@ -762,7 +891,7 @@ All Cortex tools SHALL return the same outer schema.
     {
       "id": "hyp_01J9Q7",
       "statement": "OAuth state loses returnTo before callback completion.",
-      "confidence": 0.74,
+      "confidence": "medium",
       "status": "active"
     }
   ],
@@ -771,21 +900,50 @@ All Cortex tools SHALL return the same outer schema.
     "Run existing browser contract.",
     "Inspect signed state creation path."
   ],
+  "actions": [
+    {
+      "tool": "cortex_plan",
+      "command": "cortex plan task_01J9Q5Y8B0M6D2",
+      "reason": "declare hypotheses, disproof paths, boundary, and verification",
+      "arguments": {"taskId": "task_01J9Q5Y8B0M6D2", "workspace": "/Users/abdul/projects/liftclub"},
+      "inputs": ["hypotheses", "uncertainty"],
+      "blockedBy": ["insufficient evidence"]
+    }
+  ],
   "artifacts": [],
   "rawAvailable": true
 }
 ```
 
+`nextActions` is the human-readable compatibility field. `actions` is authoritative for machine
+continuation: `tool` and `command` identify the operation, `arguments` contains known values,
+`inputs` lists values the caller must still supply, `reason` explains the recommendation, and
+`blockedBy` names unresolved gates. Clients SHALL NOT need to parse prose to continue a case.
+Every task-scoped action SHALL carry the case workspace so it remains invokable outside the
+originating cwd. Its human-facing CLI command SHALL pin that workspace and shell-quote
+case-derived arguments. A begin-change action SHALL carry the explicit default lease TTL. Interrupted
+`new`/`orienting` and half-committed decision request/answer states SHALL project a retry-safe
+repair action using their durable inputs.
+An MCP lifecycle rejection SHALL preserve this structured envelope with `ok: false` and set the
+protocol result's `isError` flag. If a kernel error accompanies a populated envelope, the
+transport SHALL retain the envelope rather than replacing it with unstructured error text.
+
 ### 10.4 Raw result retrieval
 
-Raw downstream output SHALL NOT be sent by default. Cortex MAY expose:
+Raw downstream output SHALL NOT be sent by default. Cortex exposes:
 
 ```text
 cortex_read_evidence(taskId, evidenceId)
-cortex_read_artifact(taskId, artifactRef)
+cortex_read_artifact(taskId, ref, path?, maxBytes?, allowBinary?)
 ```
 
-This protects the model context window and keeps initial results concise.
+Artifact reads are previews, not dumps. A case raw ref SHALL embed the exact requested task ID; an
+fcheap ref SHALL already appear in that task's artifact evidence or verification receipts. Paths
+SHALL be canonical, relative, traversal-free, and symlink-free. Discovery SHALL reject more than
+512 walked entries or 100 regular files. Text is redacted; binary SHALL be rejected unless
+`allowBinary` is explicit, then returned as bounded base64 marked sensitive. `maxBytes` defaults to
+32 KiB and is hard-capped at 128 KiB. The response reports the selected stash file, encoding,
+truncation, and returned byte count.
 
 ---
 
@@ -944,9 +1102,10 @@ groups:
 Recommended pins in lazy mode:
 
 ```text
-cortex__cortex_start_task
+cortex__cortex_open_task
 cortex__cortex_investigate
 cortex__cortex_plan
+cortex__cortex_begin_change
 cortex__cortex_verify
 cortex__cortex_status
 ```
@@ -1070,10 +1229,17 @@ Cortex determines minimum required capability
 Before a task enters `changing`, Cortex MUST have:
 
 - one or more active hypotheses;
-- evidence supporting each hypothesis;
 - a declared change boundary;
 - a verification plan;
 - an explicit statement of uncertainty.
+
+Change hypotheses SHOULD cite evidence; a missing support ID is surfaced as a warning rather than
+a hard gate because a falsifiable hypothesis may precede formal evidence. New workflows then call
+`begin-change` with a stable actor before editing.
+
+The CLI attaches supports with the strict one-based repeatable syntax
+`--support hypothesis-index=evidence-id[,evidence-id...]`. The kernel validates every supplied ID
+against the task's evidence ledger, matching MCP's typed per-hypothesis `supports` field.
 
 ### 13.2 Scope-drift detection
 
@@ -1113,6 +1279,33 @@ Review questions:
 - Did the change escape the planned boundary?
 - Is additional browser/terminal verification now required?
 
+### 13.4 Multi-agent coordination
+
+`open` records an optional non-secret actor, idempotency key, and same-workspace parent. The child
+stores `parentTaskId`; the parent stores the child ID. An explicit key returns its case on retry,
+including after completion. Without one, only the newest active normalized goal/mode/workspace/
+branch match may resume.
+
+`begin-change` acquires a `ChangeLease{actor, acquiredAt, renewedAt, expiresAt, releasedAt?}`. The
+default TTL is 15 minutes, with a one-second minimum and one-hour maximum. The same owner may retry;
+an explicit TTL renews the heartbeat. A different active owner is rejected. An expired or released
+lease may be replaced. Verification of an active lease requires the matching actor; completion and
+abort release it.
+
+`case.json` carries an optimistic `revision`. Snapshot saves compare the caller's revision to disk,
+then increment on success. Coordination mutations reload and retry bounded conflicts; an arbitrary
+stale write MUST NOT silently win. Plan and hypothesis/evidence companion snapshots commit under
+the same cross-process task lock and revision check. Lock owners heartbeat while live; stale-lock
+recovery atomically reaps only the stale candidate and owner-token checks prevent an old process
+from deleting a replacement lock.
+
+Status SHALL stream evidence counts and handoff SHALL retain only its bounded newest shareable
+window. Auto-refreshing Show and Studio views SHALL retain bounded recent ledgers and exact totals
+from one task-locked composite snapshot; dedicated evidence/timeline commands provide drill-down.
+Durable user/model text, collection counts, individual
+ledger records, and JSON snapshot files SHALL have hard size bounds; new case state SHALL be
+owner-only on platforms with POSIX permissions.
+
 ---
 
 ## 14. Verification Policy
@@ -1120,6 +1313,11 @@ Review questions:
 ### 14.1 Claim-to-proof mapping
 
 Every user-facing claim must map to a relevant verifier.
+
+Agents SHOULD submit typed claims with `statement`, explicit `surface`, optional stable `id`,
+optional exact `verifier`, and required exact `contract`. The surface chooses the default verifier;
+the contract makes the match exact. Legacy free-text claims remain compatible but use heuristic
+surface inference and are not preferred.
 
 | Claim | Minimum proof |
 |---|---|
@@ -1130,6 +1328,27 @@ Every user-facing claim must map to a relevant verifier.
 | “the CLI interaction works” | Glyphrun flow outcome |
 | “the artifact contains expected output” | Fcheap artifact inspection/diff |
 | “the deployment can access credentials” | Tvault-backed execution result without secret disclosure |
+
+Repositories may define trusted code checks in `cortex.yaml`:
+
+```yaml
+verifiers:
+  unit:
+    argv: ["go", "test", "./..."]
+    kind: unit_test
+    surface: code
+    timeout: 2m
+```
+
+Only configured argv may execute: the caller selects `command:unit` but cannot submit or append
+executable text. Cortex invokes argv directly without a shell. Names are restricted to
+letters/digits/dash/underscore; kinds are `unit_test | build | lint`; v0.1 permits only `code` and
+requires a positive timeout. Invalid verifier configuration fails kernel construction closed.
+Configured checks join the default verification plan and can be bound by exact typed contracts.
+Because repository-configured argv is arbitrary local code, configuration does not authorize
+execution. The trusted process launching Cortex MUST set `CORTEX_APPROVE_COMMANDS=1` (or install an
+equivalent explicit approver); otherwise Cortex records the requirement as `blocked`. A repository
+MUST NOT be able to grant this approval to itself.
 
 ### 14.2 Verification statuses
 
@@ -1144,17 +1363,30 @@ not_run
 
 `not_run` must never be rendered as `passed` in a final summary.
 
+The task-level assessment is separate from an individual receipt and is canonical across remember,
+status, metrics, sessions/overview, review, Show, Studio, and handoff:
+
+| Assessment | Rule over the latest current-revision receipts |
+|---|---|
+| `verified` | at least one proof passed and every required verifier plus named claim is satisfied |
+| `partial` | some proof passed, but a required verifier or named claim remains non-passing |
+| `failed` | a current verifier run or named claim failed |
+| `unverified` | no adequate current proof passed |
+
+A no-op acknowledgment is not evidence and does not alter these rules.
+
 ### 14.3 Verification receipts
 
 A verification receipt contains:
 
-- claim;
+- purpose (`verifier_run` or `named_claim`), claim, and optional stable claim ID;
+- exact planning requirement and/or contract;
+- actor when known;
 - verifier and version if known;
-- run ID;
 - timestamp;
 - result;
 - artifact location;
-- relevant code revision;
+- full code revision plus dirty-tree digest;
 - notes on limitations.
 
 ---
@@ -1235,8 +1467,10 @@ Cortex SHALL implement:
 
 1. **Secret redaction** before model-visible return.
 2. **Least privilege** through `tvault` project-level allowlists.
-3. **Action classing**: read-only, workspace mutation, external mutation, and secreted execution.
-4. **Explicit approval integration point** for external mutation, commit, push, deploy, and publish operations.
+3. **Action classing**: read-only, workspace mutation, configured execution, external mutation,
+   and secreted execution.
+4. **Explicit approval integration point** for configured execution, external mutation, commit,
+   push, deploy, and publish operations.
 5. **Artifact sensitivity labels** to prevent accidental archival of secrets.
 6. **No raw environment export** into case files.
 7. **Audit entries** for secret-backed execution that record capability name and result, not secret contents.
@@ -1247,6 +1481,7 @@ Cortex SHALL implement:
 |---|---|---|
 | read-only | search, inspect, status, graph query | allowed |
 | local mutation | edit working tree, generate a spec | allowed only inside active task boundary |
+| configured execution | repository-declared test/build/lint argv | requires trusted launcher/harness approval (`CORTEX_APPROVE_COMMANDS=1`) |
 | external mutation | send, deploy, publish, remote write | requires explicit user/harness approval |
 | secret-backed execution | private registry, authenticated integration | require tvault capability and redaction |
 
@@ -1343,6 +1578,35 @@ Cortex should be evaluated on a small benchmark of real repositories and task ty
 
 Success should require a correct outcome **and** an adequate evidence trail.
 
+### 18.4 Paired baseline evaluation
+
+The scenario harness SHALL also support paired observations for Cortex and an unassisted baseline
+on the same task and oracle. Every pair records its baseline protocol explicitly; the calibration
+protocol is the same model with direct repository/shell tools and no Cortex case file, gates, or
+recall. “Unassisted” MUST NOT remain an implicit moving target.
+
+Each applicable dimension is normalized to 0–100, higher-is-better:
+
+```text
+evidence quality
+disproof discipline
+boundary / scope control
+verifier correctness
+completion honesty
+recovery / resume
+cost / latency overhead
+```
+
+All quality dimensions have equal default weight. Cost/latency is a lower-weight guardrail
+(0.5) and raw Cortex-minus-baseline tool calls, latency, and estimated cost are reported separately.
+The quality score excludes cost; overall includes it. Aggregation is a macro-average across cases
+so a task with more claims cannot silently dominate the benchmark.
+
+Deterministic fixtures calibrate formulas and scorecard output; they are **not** statistical product
+claims. Real recorded repository trials populate the same paired model. The scorer MUST be capable
+of reporting a Cortex regression (for example, equal quality with higher overhead). `task eval`
+runs both the authored lifecycle scenarios and this paired calibration scorecard.
+
 ---
 
 ## 19. Reference Workflows
@@ -1358,9 +1622,11 @@ After OAuth login, a user who started from checkout lands on / instead of /check
 Kernel workflow:
 
 ```text
-1. cortex_start_task
+1. cortex_open_task
    goal: Fix post-login checkout redirect
    surfaces: code, browser
+   actor: agent-auth
+   idempotencyKey: checkout-redirect
 
 2. orientation
    - inspect git branch and baseline commit
@@ -1381,13 +1647,15 @@ Kernel workflow:
    - define specific files/symbols allowed to change
    - require structural review + unit tests + browser flow
 
-6. change
+6. begin change
+   - cortex_begin_change atomically leases the case to agent-auth
    - agent edits only planned locations
 
 7. verify
    - Codemap diff/impact review
-   - targeted auth tests
+   - configured command:unit check
    - Cairntrace checkout-return flow
+   - typed browser claim binds to cairntrace + exact checkout-return spec
 
 8. persist
    - stash meaningful browser artifact with Fcheap
@@ -1457,13 +1725,15 @@ The recommended system/developer instruction for MiniMax or another agent should
 You are working through Cortex.
 
 For non-trivial engineering work:
-1. Start or resume a Cortex task.
+1. Open or resume with Cortex; use an idempotency key when a retry is possible.
 2. Treat search output as candidates, not proof.
 3. Before editing, state a testable hypothesis, change boundary, and verification plan.
-4. Do not claim a user-visible behavior works without the relevant behavioral verifier.
-5. Keep changes within the declared boundary; expand the plan if scope changes.
-6. Preserve important evidence and state uncertainty explicitly.
-7. Never request or expose secret values. Use capability checks and scoped execution only.
+4. Claim bounded change ownership with a stable actor before editing.
+5. Prefer typed claims bound to the exact surface, verifier, and contract.
+6. Do not claim a user-visible behavior works without the relevant behavioral verifier.
+7. Keep changes within the declared boundary; expand the plan if scope changes.
+8. Preserve important evidence and state uncertainty explicitly.
+9. Never request or expose secret values. Use capability checks and scoped execution only.
 ```
 
 This prompt is intentionally small. Cortex should enforce behavior through state and interfaces, not depend on the model remembering a 500-line sermon.
@@ -1497,18 +1767,21 @@ Acceptance criteria:
 Commands:
 
 ```text
+cortex open
 cortex start
 cortex investigate
 cortex plan
+cortex begin-change / lease
 cortex verify
 cortex remember
 cortex status
+cortex note / decision / handoff
 ```
 
 Implementation:
 
 - Go CLI using Cobra or existing house style;
-- repository-local case files;
+- central XDG case files with repo-local opt-in;
 - Git adapter;
 - initial Codemap and Vecgrep adapters;
 - JSON output on every command;
@@ -1545,8 +1818,9 @@ Acceptance criteria:
 Implementation:
 
 - `cortex mcp` stdio server;
-- six public tools;
+- profiled public tools (17 in `agent`, 24 in `all`);
 - shared result envelope;
+- machine-readable structured actions;
 - `mcphub` configuration template;
 - agent scope presets for MiniMax and other harnesses.
 
@@ -1583,6 +1857,7 @@ Implementation:
 - redaction test suite;
 - task-level telemetry;
 - real-repository evaluation corpus;
+- paired unassisted-baseline scoring with quality and overhead dimensions;
 - no-secret-leak regression tests.
 
 Acceptance criteria:
@@ -1595,50 +1870,25 @@ Acceptance criteria:
 
 ## 22. Repository Structure
 
-Suggested initial layout:
+Current package layout (the dependency direction is `cmd/mcp → kernel → domain/adapters/store/config`):
 
 ```text
 cortex/
-├── cmd/
-│   └── cortex/
-│       └── main.go
+├── cmd/cortex/              # thin Cobra commands; CLI rendering only
 ├── internal/
-│   ├── domain/
-│   │   ├── case.go
-│   │   ├── evidence.go
-│   │   ├── hypothesis.go
-│   │   ├── plan.go
-│   │   ├── policy.go
-│   │   └── verification.go
-│   ├── workflow/
-│   │   ├── orient.go
-│   │   ├── investigate.go
-│   │   ├── plan.go
-│   │   ├── verify.go
-│   │   └── persist.go
-│   ├── adapters/
-│   │   ├── codemap/
-│   │   ├── vecgrep/
-│   │   ├── cairntrace/
-│   │   ├── glyphrun/
-│   │   ├── fcheap/
-│   │   ├── tvault/
-│   │   └── git/
-│   ├── store/
-│   │   ├── casefs/
-│   │   └── redact/
-│   ├── mcp/
-│   │   ├── server.go
-│   │   └── tools.go
-│   └── cli/
-│       └── commands.go
-├── specs/
-│   ├── glyphrun/
-│   └── cairntrace/
-├── docs/
-│   └── architecture.md
-├── AGENTS.md
-├── SPEC.md
+│   ├── domain/              # dependency-free case/evidence/plan/lease/decision/receipt types
+│   ├── kernel/              # shared lifecycle, coordination, assessment, views, and actions
+│   ├── adapters/            # flat adapters sharing exec/redaction plumbing
+│   ├── store/casefs/        # revisioned JSON/JSONL case persistence
+│   ├── store/redact/        # last-line secret-shape redaction
+│   ├── config/              # XDG paths + cortex.yaml policy and command verifiers
+│   ├── mcp/server.go        # thin profiled stdio MCP surface
+│   ├── tui/board.go         # read-only Studio operator surface
+│   └── eval/                # lifecycle scenarios + paired baseline scorecard
+├── docs/                    # VitePress product documentation
+├── specs/                   # Glyphrun end-to-end contracts
+├── AGENTS.md                # contributor source of truth
+├── SPEC.md                  # this design contract
 └── Taskfile.yml
 ```
 
@@ -1658,6 +1908,10 @@ Cover:
 - routing policy selection;
 - retry and timeout logic;
 - case-file serialization.
+- idempotent open matching and parent/child linkage;
+- optimistic revision conflicts and mutually exclusive change leases;
+- typed claim/contract routing and canonical assessment outcomes;
+- decision pause/answer/crash recovery, structured actions, and bounded artifact previews;
 
 ### 23.2 Adapter contract tests
 
@@ -1678,11 +1932,12 @@ Use Glyphrun to test Cortex's own CLI/TUI behavior and Cairntrace for any Studio
 Example acceptance flow:
 
 ```text
-start a task
+open a task idempotently
   → investigate with fake code evidence
   → attempt plan without disproof
   → observe rejection
   → submit valid plan
+  → begin change with an actor lease
   → create unexpected diff
   → observe scope-drift warning
   → attach a passing verification receipt
@@ -1704,7 +1959,9 @@ The following decisions are intentionally deferred:
 
 1. **Database vs files for active cases**: begin with JSON/JSONL case files; evaluate SQLite after case-link querying becomes painful.
 2. **Automatic code mutation**: v0.1 leaves edits to the agent harness; Cortex only controls the evidence/verification lifecycle.
-3. **Multi-agent collaboration**: start with one active writer per case; add locking and roles later.
+3. **Richer multi-agent roles**: v0.1 has optimistic revisions, actor metadata, parent/child links,
+   and one expiring writer lease per case. Shared subplans, role-based permissions, and automatic
+   merge/reconciliation remain deferred.
 4. **Remote artifacts**: local Fcheap is the default. Remote synchronization should be optional and encrypted.
 5. **Formal confidence calculus**: v0.1 uses policy bands, not probabilistic inference.
 6. **Autonomous verifier selection**: use explicit routing rules first; learn policies from local telemetry only after enough real cases exist.
@@ -1716,7 +1973,7 @@ The following decisions are intentionally deferred:
 
 Cortex v0.1 is successful when all of the following are true:
 
-1. A model can start, investigate, plan, verify, and complete a task through a small MCP surface.
+1. A model can idempotently open, investigate, plan, lease/begin, verify, and complete a task through the 17-tool agent profile.
 2. Each completed task has a readable case file with evidence IDs and verification receipts.
 3. Semantic results are never presented as structural proof without an explicit qualifier.
 4. Browser and terminal claims are marked unverified unless Cairntrace or Glyphrun evidence exists.
@@ -1726,6 +1983,9 @@ Cortex v0.1 is successful when all of the following are true:
 8. Tvault-backed operations do not expose secret values to the model or case file.
 9. `mcphub` can expose Cortex as the default agent interface while keeping specialist tools available through controlled discovery.
 10. A real MiniMax workflow uses fewer irrelevant tool calls and produces a more inspectable explanation than the same workflow with raw tools alone.
+11. Typed claims bind to exact verifier contracts, and every task view agrees on the canonical verification assessment.
+12. Notes, bounded decisions, handoffs, and artifact previews preserve human oversight without turning prose or truncated content into proof.
+13. Paired evaluation reports evidence/disproof/scope/verifier/completion/recovery quality together with raw cost/latency overhead against an explicit unassisted protocol.
 
 ---
 
@@ -1738,8 +1998,12 @@ Cortex v0.1 is successful when all of the following are true:
 | evidence ledger | append-oriented list of claims with provenance |
 | hypothesis | falsifiable proposed explanation |
 | change boundary | declared set of expected modifications |
+| change lease | expiring, actor-owned claim on bounded change work |
 | scope drift | observed change outside declared boundary |
 | verification receipt | structured proof record for a specific claim |
+| verification assessment | canonical task outcome: verified, partial, failed, or unverified |
+| structured action | machine-readable next operation with known arguments, missing inputs, reason, and blockers |
+| decision | durable bounded human question with explicit options and consequences |
 | cognitive action | compact model-facing operation such as investigate or verify |
 | adapter | integration layer that normalizes a downstream tool |
 | capability | a non-secret permission or available execution affordance |

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 	"github.com/spf13/cobra"
 )
 
@@ -85,7 +86,7 @@ var abortCmd = &cobra.Command{
 var readEvidenceCmd = &cobra.Command{
 	Use:     "read-evidence <taskId> <evidenceId>",
 	Aliases: []string{"evidence"},
-	Short:   "Print a full evidence record by ID (its rawRef points to the raw tool output)",
+	Short:   "Print a full evidence record by ID (/raw/ references support bounded preview)",
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		k, err := kernelFor(cmd)
@@ -103,27 +104,34 @@ var readEvidenceCmd = &cobra.Command{
 var readArtifactCmd = &cobra.Command{
 	Use:     "read-artifact <taskId> <ref>",
 	Aliases: []string{"artifact", "raw"},
-	Short:   "Resolve an evidence rawRef (or artifact reference) to its raw content",
+	Short:   "Preview a task-owned raw ref or task-referenced fcheap artifact",
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		k, err := kernelFor(cmd)
 		if err != nil {
 			return err
 		}
-		content, err := k.ReadArtifact(args[0], args[1])
+		path, _ := cmd.Flags().GetString("path")
+		maxBytes, _ := cmd.Flags().GetInt("max-bytes")
+		allowBinary, _ := cmd.Flags().GetBool("allow-binary")
+		preview, err := k.PreviewArtifactWithOptions(cmd.Context(), args[0], args[1], path, maxBytes, allowBinary)
 		if err != nil {
 			return err
 		}
 		if jsonMode(cmd) {
-			return emitJSON(map[string]string{"ref": args[1], "content": content})
+			return emitJSON(preview)
 		}
-		pln(os.Stdout, content)
+		pln(os.Stdout, preview.Content)
 		return nil
 	},
 }
 
 func init() {
 	statusCmd.Flags().String("detail", "standard", "standard | full (full adds tool health)")
+	readArtifactCmd.Flags().String("path", "", "safe relative path inside an fcheap stash (empty uses bounded discovery)")
+	readArtifactCmd.Flags().Int("max-bytes", kernel.DefaultArtifactPreviewBytes,
+		"maximum source bytes to return (hard-capped at 131072)")
+	readArtifactCmd.Flags().Bool("allow-binary", false, "explicitly allow bounded binary content as base64")
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(abortCmd)

@@ -46,14 +46,12 @@ type model struct {
 	lastRefresh time.Time
 }
 
-// detail is the loaded view of the selected case (read straight from the store,
-// so navigation stays instant — no subprocess health checks).
+// detail is the canonical read-only projection of the selected case. Keeping
+// Studio on SessionView prevents its interpretation of verification, decisions,
+// and next actions from drifting from `cortex show` and machine surfaces.
 type detail struct {
-	loaded   bool
-	c        *domain.CaseFile
-	evidence []domain.Evidence
-	hyps     []domain.Hypothesis
-	receipts []domain.VerificationRecord
+	loaded bool
+	view   kernel.SessionView
 }
 
 // tickMsg drives auto-refresh.
@@ -147,12 +145,12 @@ func (m *model) load() {
 		return
 	}
 	s := m.sessions[m.cursor]
-	d, err := kernel.LoadSession(s.Slug, s.ID)
+	d, err := kernel.LoadSessionView(s.Slug, s.ID)
 	if err != nil {
 		m.loadErr = err.Error()
 		return
 	}
-	m.detail = detail{loaded: true, c: d.Case, evidence: d.Evidence, hyps: d.Hyps, receipts: d.Receipts}
+	m.detail = detail{loaded: true, view: d}
 }
 
 func max(a, b int) int {
@@ -257,41 +255,143 @@ func (m model) renderDetail(w int) string {
 		}
 		return tDim.Render("select a session")
 	}
-	c := m.detail.c
+	v := m.detail.view
+	c := v.Case
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", tHeader.Render(clip(c.Goal, w-2)))
-	fmt.Fprintf(&b, "%s  %s\n", tDim.Render(c.ID), tPhase.Render("["+string(c.Status)+"]"))
+	phaseStyle := tPhase
+	if c.Status == domain.PhaseNeedsHumanDecision {
+		phaseStyle = tWarn
+	}
+	fmt.Fprintf(&b, "%s  %s\n", tDim.Render(c.ID), phaseStyle.Render("["+string(c.Status)+"]"))
 	fmt.Fprintf(&b, "%s %s@%s · %s · risk %s\n", tDim.Render("repo"), c.Workspace.Repository, c.Workspace.CommitBefore, c.Mode, c.Risk)
 	// The reasoning loop, with "you are here".
-	fmt.Fprintf(&b, "%s\n\n", loopStepper(c.Status))
+	fmt.Fprintf(&b, "%s\n", loopStepper(c.Status))
+	if c.Status == domain.PhaseNeedsHumanDecision {
+		fmt.Fprintf(&b, "%s\n", tWarn.Render("⚠ paused for human input · an answer resumes "+string(c.PausedFrom)))
+	}
+	b.WriteString("\n")
 
-	if len(m.detail.hyps) > 0 {
+	b.WriteString(tSection.Render("Verification") + "  " + assessmentMark(v.VerificationAssessment) + "\n")
+	for _, gap := range assessmentGaps(v.VerificationAssessment) {
+		fmt.Fprintf(&b, "  %s %s\n", tWarn.Render("⚠"), clip(gap, w-6))
+	}
+	for _, warning := range v.VerificationWarnings {
+		fmt.Fprintf(&b, "  %s %s\n", tWarn.Render("⚠"), clip(warning, w-6))
+	}
+	if len(v.StaleVerification) > 0 {
+		fmt.Fprintf(&b, "  %s %s\n", tWarn.Render("⚠"), clip(fmt.Sprintf("%d receipt(s) stale for current HEAD/diff", len(v.StaleVerification)), w-6))
+	}
+	if len(v.Receipts) > 0 {
+		start := max(0, len(v.Receipts)-4)
+		if start > 0 {
+			fmt.Fprintf(&b, "  %s\n", tDim.Render(fmt.Sprintf("… %d older receipts", start)))
+		}
+		for _, r := range v.Receipts[start:] {
+			mark, suffix := receiptMark(r.Status), ""
+			staleKey := r.ID
+			if staleKey == "" {
+				staleKey = r.Claim
+			}
+			if containsExact(v.StaleVerification, staleKey) {
+				mark, suffix = tWarn.Render("!"), tWarn.Render(" (stale)")
+			}
+			fmt.Fprintf(&b, "  %s %s %s%s\n", mark, tDim.Render(string(r.Surface)), clip(r.Claim, w-14), suffix)
+		}
+	}
+	b.WriteString("\n")
+
+	if decision := pendingDecision(v.Decisions); decision != nil {
+		b.WriteString(tSection.Render("Decision needed") + "\n")
+		fmt.Fprintf(&b, "  %s %s\n", tWarn.Render("?"), clip(decision.Question, w-6))
+		for _, option := range decision.Options {
+			fmt.Fprintf(&b, "  %s %s — %s\n", tPhase.Render("["+option.ID+"]"), clip(option.Label, 24), clip(option.Consequence, w-36))
+		}
+		b.WriteString("\n")
+	}
+
+	if len(v.Actions) > 0 {
+		action := v.Actions[0]
+		b.WriteString(tSection.Render("Next") + "\n")
+		fmt.Fprintf(&b, "  %s %s\n", tPhase.Render("→"), clip(actionLabel(action), w-6))
+		if action.Reason != "" {
+			fmt.Fprintf(&b, "    %s\n", tDim.Render(clip(action.Reason, w-6)))
+		}
+		if len(action.Inputs) > 0 {
+			fmt.Fprintf(&b, "    %s\n", tDim.Render("needs: "+strings.Join(action.Inputs, ", ")))
+		}
+		b.WriteString("\n")
+	}
+
+	if len(v.Hypotheses) > 0 {
 		b.WriteString(tSection.Render("Hypotheses") + "\n")
-		for _, h := range m.detail.hyps {
+		for _, h := range v.Hypotheses {
 			fmt.Fprintf(&b, "  %s %s\n", hypMark(h.Status), clip(h.Statement, w-6))
 		}
 		b.WriteString("\n")
 	}
 
-	if len(m.detail.receipts) > 0 {
-		b.WriteString(tSection.Render("Verification") + "\n")
-		for _, r := range m.detail.receipts {
-			fmt.Fprintf(&b, "  %s %s %s\n", receiptMark(r.Status), tDim.Render(string(r.Surface)), clip(r.Claim, w-14))
-		}
-		b.WriteString("\n")
+	fmt.Fprintf(&b, "%s %s\n", tSection.Render("Recent Evidence"), tDim.Render(fmt.Sprintf("(%d total)", len(v.Evidence))))
+	start := max(0, len(v.Evidence)-5)
+	if start > 0 {
+		fmt.Fprintf(&b, "  %s\n", tDim.Render(fmt.Sprintf("… %d older", start)))
 	}
-
-	fmt.Fprintf(&b, "%s %s\n", tSection.Render("Evidence"), tDim.Render(fmt.Sprintf("(%d)", len(m.detail.evidence))))
-	shown := 0
-	for _, e := range m.detail.evidence {
-		if shown >= 8 {
-			fmt.Fprintf(&b, "  %s\n", tDim.Render(fmt.Sprintf("… %d more", len(m.detail.evidence)-shown)))
-			break
-		}
+	for _, e := range v.Evidence[start:] {
 		fmt.Fprintf(&b, "  %s %s\n", confMark(e.Confidence), clip(e.Claim, w-8))
-		shown++
 	}
 	return b.String()
+}
+
+func containsExact(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingDecision(decisions []domain.Decision) *domain.Decision {
+	for i := len(decisions) - 1; i >= 0; i-- {
+		if decisions[i].Status == domain.DecisionPending {
+			return &decisions[i]
+		}
+	}
+	return nil
+}
+
+func assessmentMark(a kernel.VerificationAssessment) string {
+	switch a.Outcome {
+	case kernel.VerificationVerified:
+		return tOK.Render("✓ verified")
+	case kernel.VerificationFailed:
+		return tErr.Render("✗ failed")
+	case kernel.VerificationPartial:
+		return tWarn.Render("~ partial")
+	default:
+		return tDim.Render("○ unverified")
+	}
+}
+
+func assessmentGaps(a kernel.VerificationAssessment) []string {
+	gaps := make([]string, 0, len(a.MissingRequired)+len(a.NonPassingClaims)+len(a.FailedClaims))
+	for _, requirement := range a.MissingRequired {
+		gaps = append(gaps, "missing verifier: "+requirement)
+	}
+	for _, claim := range a.NonPassingClaims {
+		gaps = append(gaps, "not passing: "+claim)
+	}
+	for _, claim := range a.FailedClaims {
+		gaps = append(gaps, "failed claim: "+claim)
+	}
+	return gaps
+}
+
+func actionLabel(action domain.NextAction) string {
+	if action.Command != "" {
+		return action.Command
+	}
+	return action.Tool
 }
 
 // loopStepper draws orient─inv─plan─change─verify─keep (domain.LoopStages) with
@@ -319,7 +419,9 @@ func loopStepper(p domain.Phase) string {
 		}
 	}
 	track := strings.Join(parts, sep)
-	if cur < 0 { // blocked / abandoned / needs_human_decision
+	if p == domain.PhaseNeedsHumanDecision {
+		track += "  " + tWarn.Render("⏸ paused · needs human decision")
+	} else if cur < 0 { // blocked / abandoned
 		track += "  " + tErr.Render("■ "+string(p))
 	}
 	return track
@@ -329,7 +431,9 @@ func phaseColor(p domain.Phase) lipgloss.Style {
 	switch p {
 	case domain.PhaseComplete:
 		return tOK
-	case domain.PhaseBlocked, domain.PhaseAbandoned, domain.PhaseNeedsHumanDecision:
+	case domain.PhaseNeedsHumanDecision:
+		return tWarn
+	case domain.PhaseBlocked, domain.PhaseAbandoned:
 		return tErr
 	default:
 		return tPhase

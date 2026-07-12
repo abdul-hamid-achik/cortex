@@ -9,6 +9,7 @@ import (
 
 	"github.com/abdul-hamid-achik/cortex/internal/config"
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
+	"github.com/abdul-hamid-achik/cortex/internal/store/redact"
 )
 
 // TimelineEntry is one dated event in a session's activity feed.
@@ -21,17 +22,25 @@ type TimelineEntry struct {
 }
 
 // LocateSession finds which slug store under the central sessions tree holds
-// taskID and returns it opened. Workspace-independent, so `cortex timeline <id>`
-// works from anywhere regardless of which repo the session belongs to.
+// taskID and returns it opened. Use LocateSessionIn for a repo-local/custom
+// store that is not visible to the central walk.
 func LocateSession(taskID string) (string, *casefs.Store, error) {
+	return LocateSessionIn("", taskID)
+}
+
+// LocateSessionIn finds taskID in the central session tree, then in the
+// resolved case store for workspace. The explicit workspace fallback makes
+// repo-local/custom cases_dir sessions addressable by MCP servers and CLI
+// commands whose process cwd is not the task's repository.
+func LocateSessionIn(workspace, taskID string) (string, *casefs.Store, error) {
 	if slug, store, err := locateUnder(config.SessionsRoot(), taskID); err == nil {
 		return slug, store, nil
 	}
 	// Fallback: a session kept repo-local (opt-in cases_dir, or a pre-existing
-	// .cortex/cases that DefaultCasesDir honors) in the CURRENT workspace — the
-	// central-tree walk can't see those. Only probe an EXISTING dir so a lookup
-	// never creates one.
-	cfg := config.For("")
+	// .cortex/cases that DefaultCasesDir honors) in the requested workspace —
+	// the central-tree walk can't see those. Only probe an EXISTING dir so a
+	// lookup never creates one.
+	cfg := config.For(workspace)
 	if fi, statErr := os.Stat(cfg.CasesDir); statErr == nil && fi.IsDir() {
 		if store, err := casefs.New(cfg.CasesDir); err == nil {
 			if _, err := store.Load(taskID); err == nil {
@@ -72,37 +81,56 @@ func locateUnder(root, taskID string) (string, *casefs.Store, error) {
 // surfaces commands.jsonl, the audit log that until now had no reader outside
 // the metrics path (SPEC §18.1).
 func Timeline(taskID string) ([]TimelineEntry, error) {
-	_, store, err := LocateSession(taskID)
+	return TimelineIn("", taskID)
+}
+
+// TimelineIn returns a task timeline with an explicit workspace fallback for
+// repo-local/custom case stores.
+func TimelineIn(workspace, taskID string) ([]TimelineEntry, error) {
+	_, store, err := LocateSessionIn(workspace, taskID)
 	if err != nil {
 		return nil, err
 	}
-	return timelineFromStore(store, taskID), nil
+	entries := timelineFromStore(store, taskID)
+	if c, loadErr := store.Load(taskID); loadErr == nil {
+		r := redact.New(config.For(c.Workspace.Root).RedactLiterals...)
+		for i := range entries {
+			entries[i].Summary = r.String(entries[i].Summary)
+			entries[i].Detail = r.String(entries[i].Detail)
+			entries[i].Ref = r.String(entries[i].Ref)
+		}
+	}
+	return entries, nil
 }
 
 // timelineFromStore builds the merged, time-sorted feed for an already-located
 // store — so callers that already hold the store (e.g. ShowSession) don't walk
 // the tree twice.
 func timelineFromStore(store *casefs.Store, taskID string) []TimelineEntry {
+	snapshot, err := store.Snapshot(taskID)
+	if err != nil {
+		return nil
+	}
+	return timelineFromSnapshot(snapshot)
+}
+
+func timelineFromSnapshot(snapshot casefs.TaskSnapshot) []TimelineEntry {
 	var out []TimelineEntry
-	if evs, err := store.PhaseEvents(taskID); err == nil {
-		for _, e := range evs {
-			out = append(out, TimelineEntry{Timestamp: e.Timestamp, Kind: "phase", Summary: string(e.From) + " → " + string(e.To)})
-		}
+	for _, e := range snapshot.PhaseEvents {
+		out = append(out, TimelineEntry{Timestamp: e.Timestamp, Kind: "phase", Summary: string(e.From) + " → " + string(e.To)})
 	}
-	if evs, err := store.Evidence(taskID); err == nil {
-		for _, e := range evs {
-			out = append(out, TimelineEntry{Timestamp: e.Timestamp, Kind: "evidence", Summary: e.Claim, Detail: string(e.Kind), Ref: e.ID})
-		}
+	for _, e := range snapshot.Evidence {
+		out = append(out, TimelineEntry{Timestamp: e.Timestamp, Kind: "evidence", Summary: e.Claim, Detail: string(e.Kind), Ref: e.ID})
 	}
-	if cmds, err := store.Commands(taskID); err == nil {
-		for _, c := range cmds {
-			out = append(out, TimelineEntry{Timestamp: c.Timestamp, Kind: "command", Summary: c.Tool + "." + c.Operation + " (" + c.Status + ")", Detail: c.ActionClass})
+	for _, c := range snapshot.Commands {
+		detail := c.ActionClass
+		if c.Actor != "" {
+			detail += " · " + c.Actor
 		}
+		out = append(out, TimelineEntry{Timestamp: c.Timestamp, Kind: "command", Summary: c.Tool + "." + c.Operation + " (" + c.Status + ")", Detail: detail})
 	}
-	if recs, err := store.Verifications(taskID); err == nil {
-		for _, r := range recs {
-			out = append(out, TimelineEntry{Timestamp: r.Timestamp, Kind: "verification", Summary: string(r.Status) + ": " + r.Claim, Detail: string(r.Surface)})
-		}
+	for _, r := range snapshot.Verifications {
+		out = append(out, TimelineEntry{Timestamp: r.Timestamp, Kind: "verification", Summary: string(r.Status) + ": " + r.Claim, Detail: string(r.Surface)})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Timestamp.Before(out[j].Timestamp) })
 	return out

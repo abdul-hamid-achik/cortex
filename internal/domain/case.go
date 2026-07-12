@@ -26,7 +26,8 @@ const (
 	PhasePersisting    Phase = "persisting"
 	PhaseComplete      Phase = "complete"
 
-	// Terminal alternatives.
+	// Stop/wait alternatives. blocked and abandoned are terminal;
+	// needs_human_decision is a resumable waiting state.
 	PhaseBlocked            Phase = "blocked"
 	PhaseAbandoned          Phase = "abandoned"
 	PhaseNeedsHumanDecision Phase = "needs_human_decision"
@@ -41,6 +42,18 @@ const (
 	ModeReview      Mode = "review"      // diff-scoped analysis
 )
 
+// Valid reports whether m is one of the modes the lifecycle understands.
+// Transport descriptions are guidance only; the kernel calls this before a
+// case is created so an unknown mode cannot bypass change-task gates.
+func (m Mode) Valid() bool {
+	switch m {
+	case ModeChange, ModeInvestigate, ModeReview:
+		return true
+	default:
+		return false
+	}
+}
+
 // Surface is a user-visible system layer a change can affect (SPEC §3.6).
 type Surface string
 
@@ -51,6 +64,16 @@ const (
 	SurfaceArtifact Surface = "artifact"
 	SurfaceSecret   Surface = "secret"
 )
+
+// Valid reports whether s names a supported verification surface.
+func (s Surface) Valid() bool {
+	switch s {
+	case SurfaceCode, SurfaceBrowser, SurfaceTerminal, SurfaceArtifact, SurfaceSecret:
+		return true
+	default:
+		return false
+	}
+}
 
 // Workspace records repository identity and baseline VCS context.
 type Workspace struct {
@@ -80,13 +103,29 @@ func (b ChangeBoundary) Declared() bool {
 // CaseFile is the durable state of one task (SPEC §8.2). It is working memory,
 // not a transcript.
 type CaseFile struct {
-	SchemaVersion  int            `json:"schemaVersion"`
-	ID             string         `json:"id"`
-	CreatedAt      time.Time      `json:"createdAt"`
-	UpdatedAt      time.Time      `json:"updatedAt"`
-	Goal           string         `json:"goal"`
-	Mode           Mode           `json:"mode"`
-	Status         Phase          `json:"status"`
+	SchemaVersion int `json:"schemaVersion"`
+	// Revision is the optimistic-concurrency version of case.json. Stores
+	// initialize it to one and increment it after every successful snapshot
+	// update; zero is reserved for case files written before revisions existed.
+	Revision  uint64    `json:"revision"`
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Goal      string    `json:"goal"`
+	Mode      Mode      `json:"mode"`
+	Status    Phase     `json:"status"`
+	// Actor and task linkage are optional coordination metadata. They do not
+	// change lifecycle policy and older case files remain valid without them.
+	Actor          string   `json:"actor,omitempty"`
+	ParentTaskID   string   `json:"parentTaskId,omitempty"`
+	ChildTaskIDs   []string `json:"childTaskIds,omitempty"`
+	IdempotencyKey string   `json:"idempotencyKey,omitempty"`
+	// ChangeLease coordinates bounded change ownership across agents. A
+	// released or expired lease may be replaced without abandoning the case.
+	ChangeLease *ChangeLease `json:"changeLease,omitempty"`
+	// PausedFrom records the exact active phase interrupted by a human decision.
+	// It is set only while Status == needs_human_decision and cleared on resume.
+	PausedFrom     Phase          `json:"pausedFrom,omitempty"`
 	Risk           string         `json:"risk,omitempty"` // low | medium | high
 	Workspace      Workspace      `json:"workspace"`
 	Surfaces       []Surface      `json:"surfaces,omitempty"`
@@ -119,8 +158,8 @@ func (c *CaseFile) HasSurface(s Surface) bool {
 }
 
 // transitions is the legal phase graph (SPEC §6.2). A move is allowed only when
-// the source phase lists the destination. Terminal states (blocked/abandoned/
-// needs_human_decision) are reachable from any phase and handled separately.
+// the source phase lists the destination. Terminal states (blocked/abandoned)
+// and the resumable decision wait are handled separately.
 var transitions = map[Phase][]Phase{
 	PhaseNew:           {PhaseOrienting},
 	PhaseOrienting:     {PhaseInvestigating},
@@ -133,13 +172,13 @@ var transitions = map[Phase][]Phase{
 
 // terminalPhases can be entered from any non-terminal phase.
 var terminalPhases = map[Phase]bool{
-	PhaseBlocked:            true,
-	PhaseAbandoned:          true,
-	PhaseNeedsHumanDecision: true,
+	PhaseBlocked:   true,
+	PhaseAbandoned: true,
 }
 
-// IsTerminal reports whether a phase is a stop state (complete or a blocked
-// alternative) from which no further work proceeds.
+// IsTerminal reports whether a phase is a permanent stop state. A task waiting
+// for a human decision is deliberately non-terminal so it remains active and
+// can resume exactly where it paused.
 func (p Phase) IsTerminal() bool {
 	return p == PhaseComplete || terminalPhases[p]
 }
@@ -147,6 +186,12 @@ func (p Phase) IsTerminal() bool {
 // CanTransition reports whether moving from `from` to `to` is structurally
 // legal, ignoring the data-precondition invariants checked elsewhere.
 func CanTransition(from, to Phase) bool {
+	if to == PhaseNeedsHumanDecision {
+		return isActiveLifecyclePhase(from)
+	}
+	if from == PhaseNeedsHumanDecision {
+		return isActiveLifecyclePhase(to) || terminalPhases[to]
+	}
 	if terminalPhases[to] {
 		return !from.IsTerminal()
 	}
@@ -156,6 +201,18 @@ func CanTransition(from, to Phase) bool {
 		}
 	}
 	return false
+}
+
+// isActiveLifecyclePhase is the set a waiting decision may resume into. The
+// kernel additionally requires that the destination equals CaseFile.PausedFrom;
+// this helper only describes the structural graph.
+func isActiveLifecyclePhase(p Phase) bool {
+	switch p {
+	case PhaseNew, PhaseOrienting, PhaseInvestigating, PhasePlanned, PhaseChanging, PhaseVerifying, PhasePersisting:
+		return true
+	default:
+		return false
+	}
 }
 
 // ErrIllegalTransition describes a rejected phase move.

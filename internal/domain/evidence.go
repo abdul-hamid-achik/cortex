@@ -57,6 +57,7 @@ type Source struct {
 	RunID  string `json:"runId,omitempty"`  // adapter run identifier
 	URI    string `json:"uri,omitempty"`    // tool-specific locator
 	Origin string `json:"origin,omitempty"` // "human" for user-provided facts
+	Actor  string `json:"actor,omitempty"`  // named human/agent that supplied it
 }
 
 // Location pins a claim to a source-code position when available.
@@ -75,6 +76,7 @@ type Evidence struct {
 	Kind        EvidenceKind `json:"kind"`
 	Source      Source       `json:"source"`
 	Claim       string       `json:"claim"`
+	Category    string       `json:"category,omitempty"` // observation | decision | constraint | handoff
 	Location    *Location    `json:"location,omitempty"`
 	Confidence  Confidence   `json:"confidence"`
 	Sensitivity Sensitivity  `json:"sensitivity,omitempty"`

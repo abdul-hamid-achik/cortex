@@ -64,7 +64,7 @@ func BuildOverview(staleAfter time.Duration, now time.Time) (Overview, error) {
 			o.Completed++
 			rs.Completed++
 			elapsedSum += s.UpdatedAt.Sub(s.CreatedAt).Milliseconds()
-			if s.Verified > 0 && s.Verified >= s.Required {
+			if s.VerificationOutcome == VerificationVerified {
 				o.Verified++
 			}
 		}

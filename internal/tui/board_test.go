@@ -113,7 +113,7 @@ func TestBoardRendersFullCaseDetail(t *testing.T) {
 		ChangeBoundary: domain.ChangeBoundary{Files: []string{"callback.go"}},
 		Uncertainty:    "unsure",
 	})
-	_, _ = k.Verify(ctx, kernel.VerifyInput{TaskID: id, Claims: []string{"the code is sound"}})
+	_, _ = k.Verify(ctx, kernel.VerifyInput{TaskID: id, Claims: []string{"the code is sound"}, NoOpAcknowledged: true})
 
 	m, err := newModel(allFilter())
 	if err != nil {

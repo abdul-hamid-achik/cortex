@@ -1,11 +1,16 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -13,10 +18,18 @@ import (
 // from a zero value so a partial file only overrides what it names. YAML tags
 // live here (not on domain.Budget) to keep the domain package transport-free.
 type fileConfig struct {
-	Budget         *budgetFile `yaml:"budget"`
-	RedactLiterals []string    `yaml:"redact_literals"`
-	CasesDir       string      `yaml:"cases_dir"`
-	Recall         *recallFile `yaml:"recall"`
+	Budget         *budgetFile                    `yaml:"budget"`
+	RedactLiterals []string                       `yaml:"redact_literals"`
+	CasesDir       string                         `yaml:"cases_dir"`
+	Recall         *recallFile                    `yaml:"recall"`
+	Verifiers      map[string]commandVerifierFile `yaml:"verifiers"`
+}
+
+type commandVerifierFile struct {
+	Argv    []string `yaml:"argv"`
+	Kind    string   `yaml:"kind"`
+	Surface string   `yaml:"surface"`
+	Timeout string   `yaml:"timeout"`
 }
 
 type recallFile struct {
@@ -44,7 +57,12 @@ func (c Config) Sources() []string { return c.sources }
 // root cortex.yml/.yaml → CORTEX_* env vars (SPEC §27 config precedence).
 func load(cfg *Config) {
 	for _, p := range searchPaths(cfg.Workspace) {
-		if fc, ok := readConfigFile(p); ok {
+		fc, found, err := readConfigFile(p)
+		if err != nil {
+			cfg.problems = append(cfg.problems, fmt.Errorf("invalid config %s: %w", p, err))
+			continue
+		}
+		if found {
 			applyFile(cfg, fc)
 			cfg.sources = append(cfg.sources, p)
 		}
@@ -61,16 +79,30 @@ func searchPaths(workspace string) []string {
 	}
 }
 
-func readConfigFile(path string) (fileConfig, bool) {
+func readConfigFile(path string) (fileConfig, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fileConfig{}, false
+		if os.IsNotExist(err) {
+			return fileConfig{}, false, nil
+		}
+		return fileConfig{}, false, err
 	}
 	var fc fileConfig
-	if yaml.Unmarshal(data, &fc) != nil {
-		return fileConfig{}, false
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&fc); err == io.EOF {
+		return fc, true, nil
+	} else if err != nil {
+		return fileConfig{}, true, err
 	}
-	return fc, true
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fileConfig{}, true, fmt.Errorf("multiple YAML documents are not supported")
+		}
+		return fileConfig{}, true, err
+	}
+	return fc, true, nil
 }
 
 func applyFile(cfg *Config, fc fileConfig) {
@@ -93,6 +125,29 @@ func applyFile(cfg *Config, fc fileConfig) {
 	}
 	if fc.CasesDir != "" {
 		cfg.CasesDir = resolveCasesDir(cfg.Workspace, fc.CasesDir)
+	}
+	for name, raw := range fc.Verifiers {
+		timeout := 2 * time.Minute
+		if raw.Timeout != "" {
+			parsed, err := time.ParseDuration(raw.Timeout)
+			if err != nil {
+				cfg.problems = append(cfg.problems, fmt.Errorf("command verifier %q has invalid timeout %q", name, raw.Timeout))
+				continue
+			}
+			timeout = parsed
+		}
+		kind := domain.EvidenceKind(raw.Kind)
+		if kind == "" {
+			kind = domain.KindUnitTest
+		}
+		surface := domain.Surface(raw.Surface)
+		if surface == "" {
+			surface = domain.SurfaceCode
+		}
+		cfg.Verifiers[name] = CommandVerifier{
+			Argv: append([]string(nil), raw.Argv...), Kind: kind,
+			Surface: surface, Timeout: timeout,
+		}
 	}
 }
 

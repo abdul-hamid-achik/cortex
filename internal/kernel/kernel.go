@@ -35,6 +35,9 @@ type Kernel struct {
 // New builds a kernel for a workspace with a default adapter registry (git,
 // codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault).
 func New(cfg config.Config) (*Kernel, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid cortex configuration: %w", err)
+	}
 	store, err := casefs.New(cfg.CasesDir)
 	if err != nil {
 		return nil, err
@@ -54,6 +57,7 @@ func New(cfg config.Config) (*Kernel, error) {
 		adapters.NewVidtrace(),
 		adapters.NewTvault(),
 		adapters.NewVeclite(),
+		adapters.NewCommandVerifier(commandSpecs(cfg.Verifiers)),
 	)
 	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls)         // SPEC §7.3
 	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool) // SPEC §17.3
@@ -76,6 +80,17 @@ func New(cfg config.Config) (*Kernel, error) {
 	return k, nil
 }
 
+func commandSpecs(configured map[string]config.CommandVerifier) map[string]adapters.CommandSpec {
+	out := make(map[string]adapters.CommandSpec, len(configured))
+	for name, v := range configured {
+		out[name] = adapters.CommandSpec{
+			Argv: append([]string(nil), v.Argv...), Kind: string(v.Kind),
+			Surface: string(v.Surface), Timeout: v.Timeout,
+		}
+	}
+	return out
+}
+
 // envApprover approves external-mutation and secreted-execution actions when
 // CORTEX_APPROVE_EXTERNAL is set (truthy: 1, true, yes). It never weakens
 // read-only or local-mutation classes (those are always allowed). The action is
@@ -83,13 +98,31 @@ func New(cfg config.Config) (*Kernel, error) {
 type envApprover struct{}
 
 func (envApprover) Approve(_, _, _ string, class domain.ActionClass) bool {
-	return class == domain.ActionExternalMutation || class == domain.ActionSecretedExecution
+	switch class {
+	case domain.ActionConfiguredExecution:
+		return approveCommands()
+	case domain.ActionExternalMutation, domain.ActionSecretedExecution:
+		return approveExternal()
+	default:
+		return false
+	}
 }
 
 // approveExternal reads CORTEX_APPROVE_EXTERNAL; truthy values enable the env
 // approver. Unset or any other value keeps the default deny.
 func approveExternal() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("CORTEX_APPROVE_EXTERNAL"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// approveCommands is a trusted-process boundary for repository-configured
+// argv. A project cortex.yaml cannot grant this permission to itself; the
+// person or harness launching Cortex must set it out of band.
+func approveCommands() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CORTEX_APPROVE_COMMANDS"))) {
 	case "1", "true", "yes", "on":
 		return true
 	}
@@ -122,9 +155,10 @@ func (k *Kernel) Store() *casefs.Store { return k.store }
 // Registry exposes the adapter registry (for health reporting).
 func (k *Kernel) Registry() *adapters.Registry { return k.reg }
 
-// transition moves a case to a new phase, enforcing the structural graph
-// (SPEC §6.2). Data-precondition invariants are checked by the caller before
-// this is invoked.
+// transition updates an in-memory case to a new phase, enforcing the structural
+// graph (SPEC §6.2). Data-precondition invariants are checked by the caller.
+// The caller records phase history only after the corresponding case snapshot
+// commits; appending first can leave a phantom transition after a failed CAS.
 func (k *Kernel) transition(c *domain.CaseFile, to domain.Phase) error {
 	if c.Status == to {
 		return nil
@@ -132,9 +166,7 @@ func (k *Kernel) transition(c *domain.CaseFile, to domain.Phase) error {
 	if !domain.CanTransition(c.Status, to) {
 		return domain.ErrIllegalTransition{From: c.Status, To: to}
 	}
-	from := c.Status
 	c.Status = to
-	k.recordPhase(c.ID, from, to)
 	return nil
 }
 
@@ -152,6 +184,15 @@ func (k *Kernel) stampEvidence(taskID string, tool string, f adapters.Fact) (dom
 	return k.stampEvidenceRaw(taskID, tool, f, "")
 }
 
+func (k *Kernel) stampEvidenceOnce(taskID, stableID, tool string, f adapters.Fact, timestamp time.Time) (domain.Evidence, error) {
+	ev := k.buildEvidenceDerived(taskID, tool, f, "", nil)
+	ev.ID = stableID
+	ev.Timestamp = timestamp.UTC()
+	ev.RawRef = fmt.Sprintf("case://%s/evidence/%s", taskID, stableID)
+	durable, _, err := k.store.AppendEvidenceOnce(taskID, ev)
+	return durable, err
+}
+
 // storeRaw persists a tool result's redacted raw output once and returns a
 // resolvable rawRef (case://<taskID>/raw/<id>), or "" when there is no raw. The
 // raw is redacted again defensively before it touches disk (SPEC §10.4).
@@ -163,8 +204,8 @@ func (k *Kernel) storeRaw(taskID string, res adapters.Result) string {
 	// Apply the per-tool raw cap (SPEC §7.3 max_raw_output_bytes_per_tool) here,
 	// at the storage boundary — NOT on the string the adapter parses, which would
 	// corrupt valid-but-large JSON. The cap bounds only what is kept on disk.
-	raw := capRawForStore(res.Raw, k.cfg.Budget.MaxRawOutputBytesPerTool)
-	if err := k.store.WriteRaw(taskID, rawID, k.red.String(raw)); err != nil {
+	raw := capRawForStore(k.red.String(res.Raw), k.cfg.Budget.MaxRawOutputBytesPerTool)
+	if err := k.store.WriteRaw(taskID, rawID, raw); err != nil {
 		return ""
 	}
 	return fmt.Sprintf("case://%s/raw/%s", taskID, rawID)
@@ -175,7 +216,8 @@ func (k *Kernel) storeRaw(taskID string, res adapters.Result) string {
 // means "do not truncate".
 func capRawForStore(s string, max int) string {
 	if max > 0 && len(s) > max {
-		return s[:max] + "\n…(truncated)"
+		bounded, _ := boundedUTF8(s, max)
+		return bounded + "\n…(truncated)"
 	}
 	return s
 }
@@ -184,6 +226,17 @@ func capRawForStore(s string, max int) string {
 // causal-routing provenance: derivedFrom names the discovery evidence whose
 // candidate produced this structural claim. Empty derivedFrom is a plain stamp.
 func (k *Kernel) stampEvidenceDerived(taskID, tool string, f adapters.Fact, rawRef string, derivedFrom []string) (domain.Evidence, error) {
+	ev := k.buildEvidenceDerived(taskID, tool, f, rawRef, derivedFrom)
+	if err := k.store.AppendEvidence(taskID, ev); err != nil {
+		return domain.Evidence{}, err
+	}
+	return ev, nil
+}
+
+// buildEvidenceDerived creates the exact redacted durable record without
+// writing it. Verify uses this to stage facts until its case/lease CAS wins;
+// ordinary investigation and note paths call stampEvidenceDerived above.
+func (k *Kernel) buildEvidenceDerived(taskID, tool string, f adapters.Fact, rawRef string, derivedFrom []string) domain.Evidence {
 	id := ids.New("ev")
 	// Enforce invariant #4 (SPEC §6.3): no secret value enters an evidence
 	// record. Adapter facts are parsed from already-redacted tool output, but
@@ -193,6 +246,9 @@ func (k *Kernel) stampEvidenceDerived(taskID, tool string, f adapters.Fact, rawR
 	claim := k.red.String(f.Claim)
 	uri := k.red.String(f.URI)
 	sens := f.Sensitive || k.red.Detected(f.Claim) || k.red.Detected(f.URI)
+	if f.Location != nil {
+		sens = sens || k.red.Detected(f.Location.File) || k.red.Detected(f.Location.Symbol)
+	}
 	ref := rawRef
 	if ref == "" {
 		ref = fmt.Sprintf("case://%s/evidence/%s", taskID, id)
@@ -210,32 +266,61 @@ func (k *Kernel) stampEvidenceDerived(taskID, tool string, f adapters.Fact, rawR
 	}
 	if f.Location != nil {
 		ev.Location = &domain.Location{
-			File: f.Location.File, StartLine: f.Location.StartLine,
-			EndLine: f.Location.EndLine, Symbol: f.Location.Symbol,
+			File: k.red.String(f.Location.File), StartLine: f.Location.StartLine,
+			EndLine: f.Location.EndLine, Symbol: k.red.String(f.Location.Symbol),
 		}
 	}
-	if err := k.store.AppendEvidence(taskID, ev); err != nil {
-		return domain.Evidence{}, err
-	}
-	return ev, nil
+	return ev
 }
 
 func (k *Kernel) stampEvidenceRaw(taskID string, tool string, f adapters.Fact, rawRef string) (domain.Evidence, error) {
 	return k.stampEvidenceDerived(taskID, tool, f, rawRef, nil)
 }
 
+type commandActorContextKey struct{}
+
+func withCommandActor(ctx context.Context, actor string) context.Context {
+	if strings.TrimSpace(actor) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, commandActorContextKey{}, actor)
+}
+
+func commandActorFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	actor, _ := ctx.Value(commandActorContextKey{}).(string)
+	return strings.TrimSpace(actor)
+}
+
+func (k *Kernel) currentCommandActor(taskID string) string {
+	actor := ""
+	if taskID != "" {
+		if c, err := k.store.Load(taskID); err == nil {
+			actor = firstNonEmptyStr(activeLeaseActor(c, k.now().UTC()), c.Actor)
+		}
+	}
+	return actor
+}
+
 // recordCommand writes a non-sensitive audit entry for a tool invocation,
 // including its action class so the security posture is inspectable
 // (SPEC §16.2 #7 records capability and result, not secret contents).
 func (k *Kernel) recordCommand(taskID, tool, op string, class domain.ActionClass, status adapters.Status, started time.Time, note string) {
+	k.recordCommandAs(k.currentCommandActor(taskID), taskID, tool, op, class, status, started, note)
+}
+
+func (k *Kernel) recordCommandAs(actor, taskID, tool, op string, class domain.ActionClass, status adapters.Status, started time.Time, note string) {
 	_ = k.store.AppendCommand(taskID, casefs.CommandRecord{
 		Timestamp:   k.now().UTC(),
+		Actor:       actor,
 		Tool:        tool,
 		Operation:   op,
 		ActionClass: string(class),
 		Status:      string(status),
 		DurationMs:  time.Since(started).Milliseconds(),
-		Note:        note,
+		Note:        k.red.String(note),
 	})
 }
 
@@ -243,13 +328,17 @@ func (k *Kernel) recordCommand(taskID, tool, op string, class domain.ActionClass
 // method (fcheap stash, vecgrep memory, codemap annotate) so the audit trail is
 // complete, not just the query path (SPEC §16.2 #7).
 func (k *Kernel) recordWrite(taskID, tool, op string, err error) {
+	k.recordWriteAs(k.currentCommandActor(taskID), taskID, tool, op, err)
+}
+
+func (k *Kernel) recordWriteAs(actor, taskID, tool, op string, err error) {
 	status := adapters.StatusAuthoritative
 	note := ""
 	if err != nil {
 		status = adapters.StatusError
 		note = clipStr(err.Error(), 80)
 	}
-	k.recordCommand(taskID, tool, op, domain.ActionLocalMutation, status, k.now(), note)
+	k.recordCommandAs(actor, taskID, tool, op, domain.ActionLocalMutation, status, k.now(), note)
 }
 
 // Approver decides whether a mutation-class action may run. A harness injects
@@ -271,6 +360,11 @@ func (k *Kernel) actionAllowed(taskID, tool, op string, class domain.ActionClass
 	switch class {
 	case domain.ActionReadOnly, domain.ActionLocalMutation:
 		return true
+	case domain.ActionConfiguredExecution:
+		if k.approver != nil {
+			return k.approver.Approve(taskID, tool, op, class)
+		}
+		return approveCommands()
 	case domain.ActionExternalMutation, domain.ActionSecretedExecution:
 		if k.approver != nil {
 			return k.approver.Approve(taskID, tool, op, class)
@@ -295,9 +389,13 @@ func (k *Kernel) run(ctx context.Context, tool string, req adapters.Request) ada
 	}
 	class := domain.ClassifyOp(tool, req.Operation)
 	started := k.now()
+	actor := commandActorFromContext(ctx)
+	if actor == "" {
+		actor = k.currentCommandActor(req.TaskID)
+	}
 	if !k.actionAllowed(req.TaskID, tool, req.Operation, class) {
 		note := fmt.Sprintf("%s.%s (%s) blocked: requires explicit approval (SPEC §16.2)", tool, req.Operation, class)
-		k.recordCommand(req.TaskID, tool, req.Operation, class, adapters.StatusBlocked, started, note)
+		k.recordCommandAs(actor, req.TaskID, tool, req.Operation, class, adapters.StatusBlocked, started, note)
 		return adapters.Result{Tool: tool, Operation: req.Operation, Status: adapters.StatusBlocked, Summary: note,
 			Warnings: []string{note}}
 	}
@@ -325,7 +423,7 @@ func (k *Kernel) run(ctx context.Context, tool string, req adapters.Request) ada
 	if err != nil {
 		res = adapters.Result{Tool: tool, Operation: req.Operation, Status: adapters.StatusError, Summary: err.Error()}
 	}
-	k.recordCommand(req.TaskID, tool, req.Operation, class, res.Status, started, clipStr(res.Summary, 120))
+	k.recordCommandAs(actor, req.TaskID, tool, req.Operation, class, res.Status, started, clipStr(res.Summary, 120))
 	return res
 }
 
@@ -337,15 +435,33 @@ func (k *Kernel) envelope(c *domain.CaseFile, summary string, facts []domain.Evi
 		OK:           true,
 		TaskID:       c.ID,
 		Phase:        c.Status,
-		Summary:      summary,
-		Warnings:     warnings,
-		NextActions:  next,
-		RawAvailable: len(facts) > 0,
+		Summary:      k.red.String(summary),
+		Warnings:     k.redactStrings(warnings),
+		NextActions:  k.redactStrings(next),
+		RawAvailable: hasRawEvidence(facts),
 	}
+	k.attachStructuredActions(&env, c)
 	for _, f := range facts {
 		env.Facts = append(env.Facts, domain.ToFactView(f))
 	}
 	return env
+}
+
+func hasRawEvidence(facts []domain.Evidence) bool {
+	for _, fact := range facts {
+		if strings.Contains(fact.RawRef, "/raw/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (k *Kernel) redactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, k.red.String(value))
+	}
+	return out
 }
 
 func errEnvelope(taskID, msg string) domain.Envelope {

@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,38 +10,77 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/ids"
+	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
 // StartInput parameterizes StartTask (SPEC §10.2 cortex_start_task).
 type StartInput struct {
-	Goal     string
-	Mode     domain.Mode
-	Surfaces []domain.Surface
-	Risk     string
-	BaseRef  string // diff base for a review task (empty = working-tree diff)
+	Goal           string
+	Mode           domain.Mode
+	Surfaces       []domain.Surface
+	Risk           string
+	BaseRef        string // diff base for a review task (empty = working-tree diff)
+	Actor          string
+	ParentTaskID   string
+	IdempotencyKey string
 }
 
 // StartTask creates a case file and performs lightweight orientation: it reads
 // git identity and probes tool health, then advances the task to investigating
 // (SPEC §6.1 new → orienting → investigating).
 func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope, error) {
-	if in.Goal == "" {
+	goal := strings.TrimSpace(in.Goal)
+	if goal == "" {
 		return errEnvelope("", "a goal is required to start a task"), nil
 	}
-	mode := in.Mode
-	if mode == "" {
-		mode = domain.ModeChange
+	if textExceeds(goal, maxGoalBytes) {
+		return errEnvelope("", fmt.Sprintf("goal exceeds %d bytes", maxGoalBytes)), nil
+	}
+	if textExceeds(strings.TrimSpace(in.BaseRef), maxLocatorBytes) {
+		return errEnvelope("", fmt.Sprintf("base ref exceeds %d bytes", maxLocatorBytes)), nil
+	}
+	goal = k.red.String(goal)
+	mode, ok := normalizeMode(in.Mode)
+	if !ok {
+		return errEnvelope("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review (got %q)", in.Mode))), nil
+	}
+	risk, ok := normalizeRisk(in.Risk)
+	if !ok {
+		return errEnvelope("", k.red.String(fmt.Sprintf("risk must be one of: low, medium, high (got %q)", in.Risk))), nil
+	}
+	surfaces, err := normalizeSurfaces(in.Surfaces)
+	if err != nil {
+		return errEnvelope("", k.red.String(err.Error())), nil
+	}
+	actor, parentTaskID, idempotencyKey, err := k.normalizeTaskMetadata(in.Actor, in.ParentTaskID, in.IdempotencyKey)
+	if err != nil {
+		return errEnvelope("", err.Error()), nil
+	}
+	if parentTaskID != "" {
+		parent, loadErr := k.store.Load(parentTaskID)
+		if loadErr != nil {
+			return errEnvelope("", "parent task: "+loadErr.Error()), nil
+		}
+		if parent.Workspace.Root != k.cfg.Workspace {
+			return errEnvelope("", "parent task belongs to a different workspace"), nil
+		}
+		// Store lookup sanitizes path-like input defensively; persist the case's
+		// canonical minted ID so linkage never retains an alias such as task/x.
+		parentTaskID = parent.ID
 	}
 	c := &domain.CaseFile{
-		SchemaVersion: domain.SchemaVersion,
-		ID:            ids.New("task"),
-		CreatedAt:     k.now().UTC(),
-		Goal:          in.Goal,
-		Mode:          mode,
-		Status:        domain.PhaseNew,
-		Risk:          normalizeRisk(in.Risk),
-		Surfaces:      defaultSurfaces(in.Surfaces),
-		Workspace:     domain.Workspace{Root: k.cfg.Workspace, Repository: filepath.Base(k.cfg.Workspace), BaseRef: in.BaseRef},
+		SchemaVersion:  domain.SchemaVersion,
+		ID:             ids.New("task"),
+		CreatedAt:      k.now().UTC(),
+		Goal:           goal,
+		Mode:           mode,
+		Status:         domain.PhaseNew,
+		Risk:           risk,
+		Surfaces:       surfaces,
+		Workspace:      domain.Workspace{Root: k.cfg.Workspace, Repository: filepath.Base(k.cfg.Workspace), BaseRef: in.BaseRef},
+		Actor:          actor,
+		ParentTaskID:   parentTaskID,
+		IdempotencyKey: idempotencyKey,
 	}
 
 	// Persist the case skeleton FIRST. Appending to any ledger — phases.jsonl via
@@ -50,9 +90,24 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	if err := k.store.Create(c); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
+	return k.finishOrientation(ctx, c, false)
+}
+
+// finishOrientation completes a persisted new/orienting skeleton. OpenTask
+// calls it after a crash, so response loss during start cannot strand a case in
+// a phase with no continuation.
+func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resumed bool) (domain.Envelope, error) {
+	type phaseMove struct{ from, to domain.Phase }
+	var moves []phaseMove
 	// new → orienting: a goal and workspace exist.
-	if err := k.transition(c, domain.PhaseOrienting); err != nil {
-		return errEnvelope(c.ID, err.Error()), nil
+	if c.Status == domain.PhaseNew {
+		from := c.Status
+		if err := k.transition(c, domain.PhaseOrienting); err != nil {
+			return errEnvelope(c.ID, err.Error()), nil
+		}
+		moves = append(moves, phaseMove{from: from, to: c.Status})
+	} else if c.Status != domain.PhaseOrienting {
+		return errEnvelope(c.ID, fmt.Sprintf("cannot finish orientation in phase %q", c.Status)), nil
 	}
 
 	var facts []domain.Evidence
@@ -69,7 +124,7 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 				claim += " (working tree already dirty)"
 				warnings = append(warnings, "working tree is dirty at task start — baseline diff may include unrelated edits")
 			}
-			if ev, err := k.stampEvidence(c.ID, "git", adapters.Fact{Kind: "code_location", Claim: claim, Confidence: "high"}); err == nil {
+			if ev, err := k.stampEvidenceOnce(c.ID, "ev_orientation_git", "git", adapters.Fact{Kind: "code_location", Claim: claim, Confidence: "high"}, c.CreatedAt); err == nil {
 				facts = append(facts, ev)
 			}
 		} else {
@@ -85,7 +140,8 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 			down = append(down, h.Tool)
 		}
 	}
-	c.Notes = append(c.Notes, healthNote(health))
+	healthSummary := healthNote(health)
+	c.Notes = dedupeStr(append(c.Notes, healthSummary))
 	if len(down) > 0 {
 		warnings = append(warnings, "tools unavailable: "+joinStr(down, ", ")+" — verification on their surfaces will be blocked")
 	}
@@ -100,11 +156,36 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	}
 
 	// orienting → investigating: identity and tool health are known.
+	from := c.Status
 	if err := k.transition(c, domain.PhaseInvestigating); err != nil {
 		return errEnvelope(c.ID, err.Error()), nil
 	}
+	moves = append(moves, phaseMove{from: from, to: c.Status})
+	saved := false
 	if err := k.store.Save(c); err != nil {
-		return errEnvelope(c.ID, err.Error()), err
+		if errors.Is(err, casefs.ErrRevisionConflict) {
+			latest, loadErr := k.store.Load(c.ID)
+			if loadErr == nil && latest.Status == domain.PhaseInvestigating {
+				c = latest
+				warnings = append(warnings, "orientation was completed by a concurrent opener")
+			} else {
+				return errEnvelope(c.ID, err.Error()), err
+			}
+		} else {
+			return errEnvelope(c.ID, err.Error()), err
+		}
+	} else {
+		saved = true
+	}
+	if saved {
+		for _, move := range moves {
+			k.recordPhase(c.ID, move.from, move.to)
+		}
+	}
+	if c.ParentTaskID != "" {
+		if err := k.linkParentChild(c.ParentTaskID, c.ID); err != nil {
+			warnings = append(warnings, "task started but parent linkage needs repair: "+err.Error())
+		}
 	}
 
 	next := []string{
@@ -114,7 +195,11 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	if nPrior > 0 {
 		next = append([]string{fmt.Sprintf("%d prior related case(s) recalled — read before re-deriving a theory", nPrior)}, next...)
 	}
-	env := k.envelope(c, fmt.Sprintf("started task %s (%s); oriented and ready to investigate", c.ID, c.Goal), facts, warnings, next)
+	verb := "started"
+	if resumed {
+		verb = "recovered"
+	}
+	env := k.envelope(c, fmt.Sprintf("%s task %s (%s); oriented and ready to investigate", verb, c.ID, c.Goal), facts, warnings, next)
 	return env, nil
 }
 
@@ -130,25 +215,47 @@ func healthNote(reps []adapters.HealthReport) string {
 	return fmt.Sprintf("tool health: %d available, %d unavailable", up, down)
 }
 
-func defaultSurfaces(s []domain.Surface) []domain.Surface {
-	if len(s) == 0 {
-		return []domain.Surface{domain.SurfaceCode}
+func normalizeMode(mode domain.Mode) (domain.Mode, bool) {
+	if mode == "" {
+		return domain.ModeChange, true
 	}
-	return s
+	normalized := domain.Mode(strings.ToLower(strings.TrimSpace(string(mode))))
+	return normalized, normalized.Valid()
 }
 
 // normalizeRisk canonicalizes the risk band to lowercase low|medium|high so
 // downstream comparisons (e.g. the §13.3 escalation) are robust to "--risk HIGH"
-// or stray whitespace. An unrecognized value defaults to medium.
-func normalizeRisk(risk string) string {
-	switch strings.ToLower(strings.TrimSpace(risk)) {
-	case "low":
-		return "low"
-	case "high":
-		return "high"
-	default:
-		return "medium"
+// or stray whitespace. Empty defaults to medium; unknown values are rejected.
+func normalizeRisk(risk string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(risk))
+	if normalized == "" {
+		return "medium", true
 	}
+	switch normalized {
+	case "low", "medium", "high":
+		return normalized, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeSurfaces(surfaces []domain.Surface) ([]domain.Surface, error) {
+	if len(surfaces) == 0 {
+		return []domain.Surface{domain.SurfaceCode}, nil
+	}
+	out := make([]domain.Surface, 0, len(surfaces))
+	seen := make(map[domain.Surface]bool, len(surfaces))
+	for _, surface := range surfaces {
+		normalized := domain.Surface(strings.ToLower(strings.TrimSpace(string(surface))))
+		if !normalized.Valid() {
+			return nil, fmt.Errorf("surface must be one of: code, browser, terminal, artifact, secret (got %q)", surface)
+		}
+		if !seen[normalized] {
+			seen[normalized] = true
+			out = append(out, normalized)
+		}
+	}
+	return out, nil
 }
 
 func firstNonEmptyStr(xs ...string) string {

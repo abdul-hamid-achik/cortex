@@ -15,8 +15,8 @@ orient → investigate → form hypotheses → declare a boundary → change →
 
 This reduces four expensive failure modes of tool-rich agents:
 
-1. **Tool-context dilution** — too many overlapping tools burn context. Cortex exposes six
-   cognitive actions instead.
+1. **Tool-context dilution** — too many overlapping tools burn context. Cortex exposes a compact,
+   state-aware workflow instead.
 2. **Evidence collapse** — search results and logs treated as transient chat text. Cortex records
    them as durable, provenance-bearing evidence.
 3. **Hypothesis/proof confusion** — editing before a falsifiable explanation exists. The planning
@@ -32,7 +32,8 @@ guarded by a data precondition.
 ```
 new → orienting → investigating → planned → changing → verifying → persisting → complete
 
-terminal alternatives: blocked | abandoned | needs_human_decision
+terminal alternatives: blocked | abandoned
+resumable pause: needs_human_decision → the exact phase recorded in pausedFrom
 ```
 
 | Transition | Requires |
@@ -40,14 +41,43 @@ terminal alternatives: blocked | abandoned | needs_human_decision
 | new → orienting | a goal and workspace exist |
 | orienting → investigating | repository identity and tool health are known |
 | investigating → planned | at least one hypothesis **with a disproof path** + a verification plan |
-| planned → changing | a change boundary is declared |
-| changing → verifying | a diff/change record exists |
+| planned → changing | a boundary exists; the standard `begin-change` path also claims an actor lease |
+| changing → verifying | a diff/change record exists, or an intentional no-op is explicitly acknowledged |
 | verifying → persisting | required verification passed, **or** failure is explicitly recorded |
 | persisting → complete | summary, evidence references, and uncertainty are saved |
 
 Investigate-only tasks may skip `changing` (planned → verifying). A failed verify can loop back
 (verifying → changing). These rules live in `internal/domain/case.go` and are covered by tests —
 they are structural, not advisory.
+
+For compatibility, `verify` can still advance a legacy unleased task directly from `planned`.
+Agent workflows should use `begin-change` so ownership is explicit and competing writers are
+guarded.
+
+## Retry-safe opening and coordination
+
+`open` is the normal entry point for agents. An explicit idempotency key returns the same case even
+after completion, which makes a lost MCP response safe to retry. Without a key, Cortex normalizes
+the goal and resumes the newest active case with the same mode, workspace, and current branch;
+`start` always creates a fresh case.
+
+A case can record a stable actor and a same-workspace parent. The child stores `parentTaskId`; the
+parent stores the child's ID. These links describe delegation without merging the two evidence
+ledgers.
+
+Before editing, `begin-change` atomically claims a time-bounded lease. The default TTL is 15 minutes
+(minimum one second, maximum one hour). A same-owner retry is idempotent and an explicit TTL renews
+the heartbeat; another actor is rejected until the lease is released or expires. CLI operators can
+renew or release with `cortex lease`. Completion and abort release an active lease.
+
+Every `case.json` snapshot has an optimistic `revision`. A save compares the caller's revision to
+disk and increments only on success. Lease and parent-link updates reload after bounded conflicts,
+so concurrent processes cannot silently overwrite a newer case or both acquire an empty lease.
+Verifier facts, bounded raw output, receipts, and the verifying case revision commit as one
+recoverable bundle; behavioral annotations happen only after that bundle is bound. Status and
+handoff stream evidence instead of loading an unbounded history. Auto-refreshing Show and Studio
+retain the 200 newest evidence/command/phase records plus exact totals from one task-locked
+composite snapshot; explicit evidence and timeline commands remain the drill-down path.
 
 ## Core objects
 
@@ -104,9 +134,55 @@ The user-visible layer a change affects picks the verifier:
 | artifact content | fcheap |
 | secret-dependent runtime | tvault-assisted execution |
 
-A **verification receipt** names the exact claim it supports and its status: `passed`, `failed`,
-`inconclusive`, `blocked`, `not_applicable`, or `not_run`. **`not_run` is never rendered as
-`passed`.**
+A typed claim declares its statement, surface, and required exact contract (a browser/terminal
+spec path, configured check, artifact reference, or capability selector); the verifier may be
+omitted to use the surface default. This avoids guessing a surface from words such as “login” or
+“build.” Legacy free-text claims remain accepted, but agents should prefer typed claims.
+
+A **verification receipt** names the exact claim, purpose (`verifier_run` or `named_claim`),
+requirement/contract, actor, verifier, and the HEAD + dirty-diff digest it supports. Its status is
+`passed`, `failed`, `inconclusive`, `blocked`, `not_applicable`, or `not_run`. **`not_run` is never
+rendered as `passed`.** A verify call commits one batch. If the case, lease owner, HEAD, or dirty
+tree changes while it runs, definitive results are downgraded to inconclusive and the newest
+unbound batch masks older proof.
+
+All human and machine views derive one task-level assessment from current receipts:
+
+| Assessment | Meaning |
+|---|---|
+| `verified` | at least one current proof passed and every required verifier and named claim is satisfied |
+| `partial` | some proof passed, but a requirement or named claim remains non-passing |
+| `failed` | a current verifier run or named claim failed |
+| `unverified` | no adequate current proof passed |
+
+An intentional no-diff result must be acknowledged explicitly (`--no-op` /
+`noOpAcknowledged`). The acknowledgment only lets the task enter verification; it does not produce
+a receipt or upgrade the assessment.
+
+## Human decisions and transfer
+
+Observations from people, agents, and reviewers are stored as redacted `human_report` evidence with
+provenance. They can constrain reasoning but cannot satisfy verification. When work genuinely needs
+a choice, a decision request records one bounded question, at least two option IDs, and each
+option's consequence, then pauses in `needs_human_decision`. Answering records the selected option
+as evidence and resumes exactly `pausedFrom`; a recovery operation repairs the narrow crash window
+between persisting the answer and resuming the case.
+
+A handoff is a bounded projection, not a transcript: current plan and hypotheses, at most the 20
+most recent evidence facts, latest current receipts, decisions, assessment, and structured next
+actions. Raw output is excluded and remains addressable through evidence/artifact references. The
+serialized packet cannot exceed 128 KiB; if legacy free-form fields would cross that budget,
+Cortex retains transfer-critical identity, the pending decision, and the leading continuation and
+adds an explicit bounding warning. Records marked sensitive are not exported: the packet reports
+their omission and retains only a sensitive pending decision's non-content identity.
+
+## Structured next actions
+
+Envelopes keep human-readable `nextActions` and also return machine-readable `actions`. An action
+names the MCP `tool`, CLI `command`, known `arguments`, missing `inputs`, why it is appropriate, and
+anything in `blockedBy`. Agents and UIs can therefore offer or invoke the next step without parsing
+English strings. Every task action carries its originating `workspace`; its CLI command is also
+rendered with `-C` and shell-safe quoting for people who copy it from Status, Show, or a handoff.
 
 ## Four layers of memory
 
@@ -191,3 +267,17 @@ The retry budget `max_auto_retries_per_tool` is honored by every read-only adapt
 transient process failure (spawn/pipe/child-timeout, not a behavioral exit) retries up to the
 budget, the attempt count and final cause are recorded on the degraded result and in
 `commands.jsonl`, and mutating operations (memory writes, stashes, annotations) never retry.
+
+## Paired evaluation
+
+`task eval` runs the eight authored lifecycle scenarios and a paired Cortex-versus-unassisted
+scorecard. Each pair names the baseline protocol explicitly (the same model with direct repository
+and shell tools, without a Cortex case file, gates, or recall) and scores seven dimensions:
+evidence quality, disproof discipline, boundary/scope control, verifier correctness, completion
+honesty, recovery/resume, and cost/latency overhead.
+
+Quality is reported separately from cost; overall adds cost as a lower-weight guardrail and also
+shows raw tool-call, latency, and estimated-cost deltas. Cases are macro-averaged so a claim-heavy
+case does not dominate. The checked-in deterministic pairs calibrate the scoring formulas and prove
+the model can report a regression; they are not empirical claims about how much Cortex improves an
+arbitrary agent. Real repository trials can populate the same paired observation model.

@@ -14,11 +14,18 @@ var studioCmd = &cobra.Command{
 	Short:   "Live board of all Cortex sessions across every repo (read-only)",
 	Long: `Open the Cortex studio — a live Charm v2 terminal board of every session
 across every repository: the session list on the left, and the selected case's
-loop progress (orient→…→preserve), hypotheses, evidence ledger, and verification
-receipts on the right. Auto-refreshes; read-only.
+loop progress (orient→…→preserve), canonical verification assessment and gaps,
+pending decision, first structured next action, hypotheses, recent evidence, and
+recent receipts on the right. Auto-refreshes; read-only.
+
+Studio is interactive and deliberately does not support --json. Use
+cortex sessions --json or cortex show <taskId> --json for machine output.
 
 Keys: ↑/↓ (or j/k) navigate · g/G jump · a active-only · r refresh · q quit.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if jsonMode(cmd) {
+			return fail("studio is interactive and does not support --json; use cortex sessions --json or cortex show <taskId> --json")
+		}
 		repo, _ := cmd.Flags().GetString("repo")
 		active, _ := cmd.Flags().GetBool("active")
 		return tui.Run(cmd.Context(), kernel.SessionFilter{Repo: repo, ActiveOnly: active})

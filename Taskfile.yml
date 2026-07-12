@@ -132,25 +132,26 @@ tasks:
   docsdeps:
     desc: Install docs (VitePress) dependencies with Bun
     cmds:
-      - bun install
+      - bun install --cwd docs --frozen-lockfile
 
   docs:
     desc: Run the VitePress docs dev server
     cmds:
-      - bun run site
+      - bun run --cwd docs dev
 
   docsbuild:
     desc: Build the VitePress docs site
     cmds:
-      - bun run site:build
+      - bun run --cwd docs build
 
   ship:
-    desc: Full pre-release gate (check + race + build + flows)
+    desc: Full pre-release gate (check + race + build + flows + docs)
     cmds:
       - task: check
       - task: race
       - task: build
       - task: flows
+      - task: docsbuild
 
   clean:
     desc: Remove build artifacts

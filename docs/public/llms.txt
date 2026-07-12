@@ -1,0 +1,38 @@
+# Cortex
+
+> Cortex is a local-first, evidence-guided kernel for software-engineering agents. It preserves a
+> durable case file, explicit hypotheses and disproof paths, bounded change ownership, provenance,
+> and revision-bound verification across long tool-using tasks.
+
+Use the documentation below as the canonical product guide. The source code and design specification
+live at https://github.com/abdul-hamid-achik/cortex.
+
+## Start here
+
+- [Overview](https://cortexai.tools/): Product purpose, core guarantees, and the reasoning loop.
+- [Quick start](https://cortexai.tools/quick-start): Install Cortex and complete the golden path.
+- [Full tutorial](https://cortexai.tools/tutorial): Retry safety, evidence, planning, leases, verification, and preservation.
+- [Guide for agents](https://cortexai.tools/agents): Agent-specific operating rules and recovery behavior.
+
+## Interfaces
+
+- [MCP server](https://cortexai.tools/mcp): Compact agent profile, complete operator profile, tool schemas, and examples.
+- [CLI reference](https://cortexai.tools/cli): Human commands and machine-readable JSON equivalents.
+- [Studio](https://cortexai.tools/studio): Cross-repository operator board and canonical session projection.
+
+## Kernel model
+
+- [Concepts](https://cortexai.tools/concepts): Phase machine, evidence discipline, disproof, ownership, and verification semantics.
+- [Case file](https://cortexai.tools/case-file): Durable JSON/JSONL layout, coordination, and recovery.
+- [Configuration](https://cortexai.tools/configuration): XDG paths, budgets, redaction, recall, and configured verifiers.
+- [Adapters](https://cortexai.tools/adapters): Specialist-tool routing and safe degradation.
+- [FAQ](https://cortexai.tools/faq): Common failure and recovery questions.
+
+## Golden path
+
+`open → investigate → plan → begin-change → verify → remember`
+
+Prefer `cortex_open_task` over a fresh start. Follow the first machine-readable `actions` item returned
+by each successful result. Treat `ok: false` or an MCP error result as a rejected operation. Never call
+a change complete unless the canonical assessment is `verified`, or the user explicitly accepts a
+partial, failed, or unverified preservation outcome.

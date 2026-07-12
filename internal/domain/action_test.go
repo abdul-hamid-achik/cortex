@@ -14,6 +14,7 @@ func TestClassifyOp(t *testing.T) {
 		{"vecgrep", "remember", ActionLocalMutation},
 		{"codemap", "annotate", ActionLocalMutation},
 		{"tvault", "run", ActionSecretedExecution},
+		{"command", "unit", ActionConfiguredExecution},
 		{"anytool", "deploy", ActionExternalMutation},
 		{"anytool", "publish", ActionExternalMutation},
 		{"anytool", "push", ActionExternalMutation},
@@ -30,7 +31,7 @@ func TestActionClassMutating(t *testing.T) {
 	if ActionReadOnly.Mutating() {
 		t.Error("read-only is not mutating")
 	}
-	for _, c := range []ActionClass{ActionLocalMutation, ActionExternalMutation, ActionSecretedExecution} {
+	for _, c := range []ActionClass{ActionLocalMutation, ActionExternalMutation, ActionSecretedExecution, ActionConfiguredExecution} {
 		if !c.Mutating() {
 			t.Errorf("%s should be mutating", c)
 		}

@@ -5,6 +5,69 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-11
+
+### Added
+- **Retry-safe, coordinated agent workflow** — `open` resumes by explicit idempotency key or active
+  normalized goal; `begin-change` claims an expiring actor lease; parent/child task links, durable
+  human decisions, provenance notes, structured next actions, and bounded handoffs preserve work
+  across response loss, delegation, and human pauses.
+- **Profiled MCP surface** — the default `agent` profile exposes 17 focused lifecycle/evidence
+  tools; `--profile all` exposes the complete 24-tool operator and compatibility surface.
+- **Safe repository verifiers** — exact argv arrays declared in `cortex.yaml` can provide named
+  build/test/lint contracts. They never invoke a shell and remain blocked until the trusted
+  launcher explicitly sets `CORTEX_APPROVE_COMMANDS=1`; repository configuration cannot approve
+  its own execution.
+- **Bounded artifact previews** — task ownership, canonical stash IDs, safe relative paths,
+  symlink rejection, 512-entry/100-file discovery caps, a 128 KiB hard content cap, and explicit
+  binary opt-in protect CLI/MCP consumers from unbounded or cross-task reads.
+- **Paired evaluation scorecard** — deterministic Cortex-versus-unassisted calibration covers
+  evidence, disproof discipline, scope control, verifier correctness, completion honesty,
+  recovery, cost, and latency. Fixtures validate the measurement model; they are not an empirical
+  product-performance claim.
+- **Dedicated documentation site** — the isolated `docs/` VitePress application now ships a
+  responsive Cortex visual system, original favicon/social assets, local fonts, search-friendly
+  metadata, and a docs-only Vercel deployment contract for `cortexai.tools`.
+
+### Changed
+- **Verification is batch- and revision-bound.** Typed claims require an explicit surface and exact
+  contract. One verify call atomically commits one receipt batch only after the case revision,
+  lease owner, HEAD, and dirty digest remain stable; unbound results become inconclusive and mask
+  older proof. Status, Remember, Show, Studio, metrics, review, and handoff share the canonical
+  `verified | partial | failed | unverified` assessment.
+- **Case coordination is cross-process.** Case snapshots use optimistic revisions, plan/resolve
+  companion writes are journaled transactions, and heartbeat locks retain owner identity for
+  safe crash recovery. Concurrent plans, resolutions, decisions, leases, and verifier runs cannot
+  silently overwrite one another.
+- **Verifier output commits as one bundle.** Facts, bounded raw blobs, receipts, and the verifying
+  case revision are staged until the plan/lease CAS wins, then published by one recoverable
+  transaction. A discarded run leaves only its correctly attributed audit command—not evidence a
+  newer owner could mistake for proof.
+- **Read projections are transaction-consistent and portable.** Status streams evidence counts;
+  handoff streams only its newest shareable evidence; Show/Studio/timeline read one task-locked
+  snapshot (auto-refreshing Show/Studio views retain bounded recent ledgers and exact totals).
+  Structured actions carry workspace, commands pin `-C` with shell-safe quoting, and
+  repo-local/custom Show, Timeline, and Handoff accept an explicit workspace fallback.
+- **Studio and Show use the canonical projection** for decisions, verification gaps, receipts,
+  current actions, evidence, plan state, and stale-proof warnings.
+- Configuration parsing and safety budgets fail closed. `cortex config` projects recall and
+  verifier policy while deliberately omitting executable argv.
+
+### Security
+- Caller-supplied changed-file hints cannot invent a diff and bypass the explicit no-op gate.
+- Noncanonical task IDs are rejected instead of being rewritten into colliding filesystem names.
+- Redaction now covers durable write boundaries, human/decision text, receipts, handoffs, legacy
+  read projections, and sensitive artifact previews.
+- Handoffs omit sensitive evidence and receipts, retain only a sensitive pending decision's
+  non-content identity, and enforce a 128 KiB serialized ceiling. Exported Markdown and new case
+  state files are owner-only; durable text, collection, ledger-record, and snapshot sizes fail
+  closed before one malformed call can inflate every later read.
+- Behavioral codemap annotations are emitted only after a bound verifier bundle commits. Crash
+  recovery hides and rolls back partially renamed verification/raw files before any public reader
+  can observe them; orientation baseline/recall evidence uses retry-stable identities.
+
+## [0.10.0] — 2026-07-10
+
 ### Added
 - **`cortex rm <taskId>` / `delete`** — the first (and only) destructive operation in Cortex:
   permanently deletes a session's directory and everything under it. Guarded: refuses in-flight

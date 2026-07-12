@@ -1,7 +1,7 @@
 version: 1
 name: help
 intent: |
-    cortex --help lists the six cognitive actions so an operator can discover the workflow.
+    cortex --help lists the core lifecycle and coordination actions so an operator can discover the workflow.
 target:
     cmd:
         - "/bin/sh"
@@ -34,4 +34,4 @@ outcomes:
       verify:
         screen:
             contains: "serve"
-contractHash: sha256:7c9f1578b447dfc3ee8a61cfe80efe92eaead34d3752fe5f61379bda71b7b5b2
+contractHash: sha256:bbbab02cf2b7bc75bbaf5024a59d32ac51d959291fc93cc3aa74b952deb7189d

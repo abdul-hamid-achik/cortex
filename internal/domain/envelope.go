@@ -4,14 +4,18 @@ package domain
 // (SPEC §10.3). Keeping one shape across start/investigate/plan/verify/status
 // lets a weaker model learn the interface once.
 type Envelope struct {
-	OK           bool          `json:"ok"`
-	TaskID       string        `json:"taskId,omitempty"`
-	Phase        Phase         `json:"phase,omitempty"`
-	Summary      string        `json:"summary"`
-	Facts        []FactView    `json:"facts,omitempty"`
-	Hypotheses   []HypView     `json:"hypotheses,omitempty"`
-	Warnings     []string      `json:"warnings,omitempty"`
-	NextActions  []string      `json:"nextActions,omitempty"`
+	OK          bool       `json:"ok"`
+	TaskID      string     `json:"taskId,omitempty"`
+	Phase       Phase      `json:"phase,omitempty"`
+	Summary     string     `json:"summary"`
+	Facts       []FactView `json:"facts,omitempty"`
+	Hypotheses  []HypView  `json:"hypotheses,omitempty"`
+	Warnings    []string   `json:"warnings,omitempty"`
+	NextActions []string   `json:"nextActions,omitempty"`
+	// Actions is the machine-readable counterpart to the legacy human-facing
+	// NextActions strings. Tool and Arguments can be invoked directly; Inputs
+	// names values the caller still needs to supply.
+	Actions      []NextAction  `json:"actions,omitempty"`
 	Artifacts    []ArtifactRef `json:"artifacts,omitempty"`
 	RawAvailable bool          `json:"rawAvailable"`
 	// Degraded is true when OK=true but one or more underlying tools this call
@@ -24,6 +28,18 @@ type Envelope struct {
 	Error string `json:"error,omitempty"`
 }
 
+// NextAction is one concrete continuation an agent or UI can offer without
+// parsing prose. Arguments contains values Cortex already knows (especially
+// taskId); Inputs lists required values that remain unknown.
+type NextAction struct {
+	Tool      string         `json:"tool,omitempty"`
+	Command   string         `json:"command,omitempty"`
+	Reason    string         `json:"reason,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	Inputs    []string       `json:"inputs,omitempty"`
+	BlockedBy []string       `json:"blockedBy,omitempty"`
+}
+
 // FactView is the compact, model-facing projection of an Evidence record. Raw
 // output stays out of the envelope to protect the context window (SPEC §10.4).
 type FactView struct {
@@ -31,6 +47,8 @@ type FactView struct {
 	Claim       string       `json:"claim"`
 	Confidence  Confidence   `json:"confidence"`
 	Source      string       `json:"source"`
+	Actor       string       `json:"actor,omitempty"`
+	Category    string       `json:"category,omitempty"`
 	Kind        EvidenceKind `json:"kind,omitempty"`
 	DerivedFrom []string     `json:"derivedFrom,omitempty"`
 }
@@ -57,7 +75,10 @@ func ToFactView(e Evidence) FactView {
 	if src == "" {
 		src = e.Source.Origin
 	}
-	return FactView{ID: e.ID, Claim: e.Claim, Confidence: e.Confidence, Source: src, Kind: e.Kind, DerivedFrom: e.DerivedFrom}
+	return FactView{
+		ID: e.ID, Claim: e.Claim, Confidence: e.Confidence, Source: src,
+		Actor: e.Source.Actor, Category: e.Category, Kind: e.Kind, DerivedFrom: e.DerivedFrom,
+	}
 }
 
 // ToHypView projects a hypothesis into the envelope's compact form.
