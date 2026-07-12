@@ -33,13 +33,15 @@ The project configuration lives in [`docs/vercel.json`](https://github.com/abdul
 - output directory: `.vitepress/dist`
 - production domain: `cortexai.tools`
 
-Link and deploy from the documentation directory so Vercel cannot accidentally infer the repository
-root as the web application:
+Link the Git repository once from its root using Vercel's repository mapping, then deploy the mapped
+`docs/` project. This creates `.vercel/repo.json` at the repository root; do not run a standalone
+`vercel link` inside `docs/`, because that local project link applies the remote Root Directory a
+second time (`docs/docs`):
 
 ```bash
-vercel link --cwd docs --yes --project cortex --scope the-lacanians
-vercel deploy --cwd docs
-vercel deploy --cwd docs --prod
+vercel link --repo --yes --project cortex --scope the-lacanians
+vercel deploy --cwd docs --scope the-lacanians
+vercel deploy --cwd docs --prod --scope the-lacanians
 ```
 
 The generated `.vercel/` directory is local account state and must not be committed. Vercel's Git

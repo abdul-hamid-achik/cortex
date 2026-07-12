@@ -15,8 +15,10 @@ coverage.html
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/
-docs/.vercel/
 node_modules/
+
+# Vercel local repository link state
+.vercel/
 
 # OS / editor
 .DS_Store
