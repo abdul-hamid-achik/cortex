@@ -219,6 +219,34 @@ func TestFcheapSaveRejectsUnsafeReturnedStashID(t *testing.T) {
 	}
 }
 
+func TestFcheapSaveAcceptsV029DottedStashID(t *testing.T) {
+	want := "runbundle_20260712_192141.516352000_1bdc40f3792a51947518faf8"
+	runner := &countingRunner{stdout: fmt.Sprintf(`{"id":%q}`, want)}
+	f := &Fcheap{tool: tool{bin: "git", run: runner, redact: redact.New(), timeout: time.Second}}
+	got, err := f.Save(context.Background(), t.TempDir(), "bundle", []string{"failed-run"}, "glyphrun")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || runner.calls != 1 {
+		t.Fatalf("Save() = %q after %d calls, want %q after one call", got, runner.calls, want)
+	}
+}
+
+func TestFcheapVerifyAcceptsV029DottedStashID(t *testing.T) {
+	want := "runbundle_20260712_192141.516352000_1bdc40f3792a51947518faf8"
+	runner := &countingRunner{stdout: fmt.Sprintf(`{"id":%q,"files":[]}`, want)}
+	f := &Fcheap{tool: tool{bin: "git", run: runner, redact: redact.New(), timeout: time.Second}}
+	result, err := f.Execute(context.Background(), Request{
+		Operation: "verify", Input: map[string]any{"stash": "fcheap://stash/" + want},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusAuthoritative || len(result.Artifacts) != 1 || result.Artifacts[0].URI != "fcheap://stash/"+want {
+		t.Fatalf("dotted stash verification = %+v", result)
+	}
+}
+
 func TestFcheapVerifyRejectsInvalidOrMismatchedReturnedStashID(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

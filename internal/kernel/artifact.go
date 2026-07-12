@@ -123,7 +123,7 @@ func fcheapStashID(ref string) (string, error) {
 		return "", fmt.Errorf("fcheap artifact reference must use fcheap://stash/<stashId>")
 	}
 	stashID := strings.TrimPrefix(ref, prefix)
-	if err := adapters.ValidateArtifactID(stashID); err != nil {
+	if err := adapters.ValidateFcheapStashID(stashID); err != nil {
 		return "", fmt.Errorf("invalid fcheap stash id: %w", err)
 	}
 	if ref != prefix+stashID {
@@ -179,7 +179,7 @@ func (k *Kernel) previewFcheapArtifact(ctx context.Context, taskID, ref, stashID
 	if preview.StashID != stashID {
 		return ArtifactPreview{}, fmt.Errorf("artifact preview returned a different stash id")
 	}
-	if err := adapters.ValidateArtifactID(preview.StashID); err != nil {
+	if err := adapters.ValidateFcheapStashID(preview.StashID); err != nil {
 		return ArtifactPreview{}, fmt.Errorf("artifact preview returned invalid stash id: %w", err)
 	}
 	selected := k.red.String(preview.Selected)

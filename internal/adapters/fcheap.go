@@ -149,7 +149,7 @@ func (f *Fcheap) connect(ctx context.Context, dir, stash, codebase, query string
 
 func (f *Fcheap) verify(ctx context.Context, dir, stash string) (Result, error) {
 	stash = strings.TrimPrefix(stash, "fcheap://stash/")
-	if err := ValidateArtifactID(stash); err != nil {
+	if err := ValidateFcheapStashID(stash); err != nil {
 		return Result{Tool: "fcheap", Operation: "verify", Status: StatusError, Summary: "invalid artifact stash id: " + err.Error()}, nil
 	}
 	stdout, stderr, code, err := f.exec(ctx, dir, "info", stash, "--json")
@@ -172,7 +172,7 @@ func (f *Fcheap) verify(ctx context.Context, dir, stash string) (Result, error) 
 		return Result{Tool: "fcheap", Operation: "verify", Status: StatusPartial,
 			Summary: "fcheap returned no stash identity", Raw: stdout}, nil
 	}
-	if err := ValidateArtifactID(out.ID); err != nil {
+	if err := ValidateFcheapStashID(out.ID); err != nil {
 		return Result{Tool: "fcheap", Operation: "verify", Status: StatusPartial,
 			Summary: "fcheap returned an invalid stash identity", Raw: stdout}, nil
 	}
@@ -258,7 +258,7 @@ func (f *Fcheap) Save(ctx context.Context, dir, path string, tags []string, tool
 	if derr := decodeJSON(stdout, &out); derr != nil {
 		return "", derr
 	}
-	if err := ValidateArtifactID(out.ID); err != nil {
+	if err := ValidateFcheapStashID(out.ID); err != nil {
 		return "", fmt.Errorf("fcheap returned invalid stash id: %w", err)
 	}
 	return out.ID, nil
@@ -384,7 +384,7 @@ func artifactStashID(stash string) (string, error) {
 		return "", fmt.Errorf("artifact stash reference must not have surrounding whitespace")
 	}
 	id := strings.TrimPrefix(stash, "fcheap://stash/")
-	if err := ValidateArtifactID(id); err != nil {
+	if err := ValidateFcheapStashID(id); err != nil {
 		return "", fmt.Errorf("invalid artifact stash id: %w", err)
 	}
 	return id, nil

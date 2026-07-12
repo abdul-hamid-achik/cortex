@@ -401,6 +401,14 @@ func TestVerifyStashesFailedRun(t *testing.T) {
 	if _, err := exec.LookPath("fcheap"); err != nil {
 		t.Skip("fcheap not on PATH")
 	}
+	// Keep the real integration test hermetic: fcheap must not read the
+	// developer's config/embedder settings or write into their durable vault.
+	fcheapHome := t.TempDir()
+	t.Setenv("HOME", filepath.Join(fcheapHome, "home"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(fcheapHome, "config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(fcheapHome, "data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(fcheapHome, "cache"))
+	t.Setenv("FCHEAP_STASH_DIR", filepath.Join(fcheapHome, "stashes"))
 	ws := testRepo(t)
 	// A run bundle directory to stash.
 	bundle := filepath.Join(t.TempDir(), "runbundle")

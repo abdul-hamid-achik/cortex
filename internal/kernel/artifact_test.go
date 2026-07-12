@@ -98,20 +98,21 @@ func TestPreviewCaseArtifactRefusesBinaryUnlessExplicitlyAllowed(t *testing.T) {
 }
 
 func TestPreviewFcheapArtifactRoutesSelectorAndEnforcesKernelBound(t *testing.T) {
+	const stashID = "runbundle_20260712_192141.516352000_1bdc40f3792a51947518faf8"
+	ref := "fcheap://stash/" + stashID
 	fcheap := &previewingFcheap{preview: adapters.ArtifactPreview{
-		StashID: "stash_1", Files: []adapters.PreviewFile{{Path: "nested/final.txt", Size: 80}}, Selected: "nested/final.txt",
+		StashID: stashID, Files: []adapters.PreviewFile{{Path: "nested/final.txt", Size: 80}}, Selected: "nested/final.txt",
 		Content: strings.Repeat("x", 80), Encoding: "text",
 	}}
 	ws := testRepo(t)
 	k := newTestKernel(t, ws, fcheap)
 	started, _ := k.StartTask(context.Background(), StartInput{Goal: "preview stash"})
-	referenceFcheapEvidence(t, k, started.TaskID, "fcheap://stash/stash_1")
-	preview, err := k.PreviewArtifact(context.Background(), started.TaskID,
-		"fcheap://stash/stash_1", "nested/final.txt", 12)
+	referenceFcheapEvidence(t, k, started.TaskID, ref)
+	preview, err := k.PreviewArtifact(context.Background(), started.TaskID, ref, "nested/final.txt", 12)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fcheap.gotDir != ws || fcheap.gotStash != "fcheap://stash/stash_1" || fcheap.gotSelector != "nested/final.txt" || fcheap.gotMaxBytes != 12 {
+	if fcheap.gotDir != ws || fcheap.gotStash != ref || fcheap.gotSelector != "nested/final.txt" || fcheap.gotMaxBytes != 12 {
 		t.Fatalf("preview routing mismatch: %+v", fcheap)
 	}
 	if len(preview.Content) != 12 || !preview.Truncated || preview.MaxBytes != 12 || len(preview.Files) != 1 {

@@ -18,9 +18,21 @@ const (
 )
 
 // ValidateArtifactID accepts only the portable token shape used by case raw
-// IDs and fcheap stash IDs. URI syntax, separators, query strings, and traversal
-// components are deliberately outside this grammar.
+// IDs. URI syntax, separators, query strings, dots, and traversal components
+// are deliberately outside this grammar because casefs normalizes raw IDs into
+// filenames and must not admit aliases such as raw.foo and raw_foo.
 func ValidateArtifactID(id string) error {
+	return validatePortableID(id, false)
+}
+
+// ValidateFcheapStashID accepts fcheap's opaque, single-component stash IDs.
+// fcheap 0.29 added a dot inside its high-resolution UTC timestamp, while the
+// leading alphanumeric requirement continues to reject flag-like arguments.
+func ValidateFcheapStashID(id string) error {
+	return validatePortableID(id, true)
+}
+
+func validatePortableID(id string, allowDot bool) error {
 	if id == "" {
 		return fmt.Errorf("artifact id is empty")
 	}
@@ -32,7 +44,7 @@ func ValidateArtifactID(id string) error {
 	}
 	for i := 0; i < len(id); i++ {
 		c := id[i]
-		if artifactIDAlphaNumeric(c) || c == '_' || c == '-' {
+		if artifactIDAlphaNumeric(c) || c == '_' || c == '-' || (allowDot && c == '.') {
 			continue
 		}
 		return fmt.Errorf("artifact id contains unsafe characters")
