@@ -179,8 +179,10 @@ task install         # go install ./cmd/cortex
   **vecgrep uses `-f json` and `-n N`** (not `--json`/`--top`); **glyph uses `--format json`**
   and that flag must **precede** subcommand flags. `cairn`/`glyph` MCP subcommand is bare
   (`cairn mcp`, `glyph mcp`); `fcheap`/`mcphub` use `mcp serve`. See each adapter's doc comment.
-- **vecgrep has no `doctor`** — health is `vecgrep --version`. Search/similar/memory outputs are
-  **bare JSON arrays**, not wrapped objects.
+- **vecgrep has no `doctor`** — health is `vecgrep --version`. Search first requests
+  `-f json-envelope`: Cortex accepts schema v1 and the transitional schema-version-zero shape,
+  rejects unknown explicit majors, and falls back to the legacy bare-array `-f json` output.
+  Similar and memory outputs remain bare JSON arrays.
 - Every adapter returns a normalized `Result{Status, Facts, Artifacts, Warnings, Raw}`. `Status`
   is authoritative | partial | unavailable | error. Raw (redacted) output is retained for the
   case file but **not** returned to the model by default.

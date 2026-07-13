@@ -669,7 +669,7 @@ func TestTvaultNamesOnlyFallsBackOnOldBinary(t *testing.T) {
 func TestVecgrepEnvelopeIndexedWithSnippet(t *testing.T) {
 	// json-envelope with an index and hits → authoritative, and the matched
 	// content snippet enriches the fact.
-	fixture := `{"index":{"indexed":true,"fresh":false,"chunks":2126},"hits":[
+	fixture := `{"schema_version":1,"index":{"indexed":true,"fresh":false,"chunks":2126},"hits":[
 	  {"chunk_id":305,"relative_path":"internal/embed/provider.go","start_line":23,"end_line":45,"symbol_name":"Provider","language":"go","content":"func (p *Provider) Embed() error {","score":0.62}]}`
 	v := &Vecgrep{tool: fakeTool(fixture, "", 0)}
 	res, _ := v.Execute(context.Background(), Request{Operation: "search", Input: map[string]any{"query": "embed"}})
@@ -678,6 +678,18 @@ func TestVecgrepEnvelopeIndexedWithSnippet(t *testing.T) {
 	}
 	if !strings.Contains(res.Facts[0].Claim, "func (p *Provider) Embed") {
 		t.Errorf("search fact should include the matched snippet, got: %s", res.Facts[0].Claim)
+	}
+}
+
+func TestVecgrepEnvelopeUnknownSchemaDegrades(t *testing.T) {
+	fixture := `{"schema_version":2,"index":{"indexed":true,"fresh":true,"chunks":1},"hits":[]}`
+	v := &Vecgrep{tool: fakeTool(fixture, "", 0)}
+	res, _ := v.Execute(context.Background(), Request{Operation: "search", Input: map[string]any{"query": "x"}})
+	if res.Status != StatusPartial {
+		t.Fatalf("unknown vecgrep schema should degrade, got %s", res.Status)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, " "), "schema version 2") {
+		t.Fatalf("missing schema warning: %v", res.Warnings)
 	}
 }
 

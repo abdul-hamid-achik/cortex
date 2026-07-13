@@ -69,7 +69,11 @@ type vgHit struct {
 // plus hits. It lets cortex tell "indexed, nothing matched" (authoritative empty)
 // apart from "no index in this workspace" (unavailable — not a false negative).
 type vgEnvelope struct {
-	Index *struct {
+	// SchemaVersion is 0 for vecgrep's transitional pre-v1 envelope. Cortex
+	// dual-reads that shape during the compatibility window and fails safely on
+	// unknown explicit majors.
+	SchemaVersion int `json:"schema_version,omitempty"`
+	Index         *struct {
 		Indexed bool `json:"indexed"`
 		Fresh   bool `json:"fresh"`
 		Chunks  int  `json:"chunks"`
@@ -89,6 +93,9 @@ func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int
 	// empty match set, so cortex never reads "no index" as "no such code".
 	var env vgEnvelope
 	if decodeJSON(stdout, &env) == nil && env.Index != nil {
+		if env.SchemaVersion != 0 && env.SchemaVersion != 1 {
+			return degraded("vecgrep", "search", stdout, "unsupported vecgrep search schema version "+strconv.Itoa(env.SchemaVersion), code), nil
+		}
 		if !env.Index.Indexed {
 			return vecgrepNoIndex(query), nil
 		}
