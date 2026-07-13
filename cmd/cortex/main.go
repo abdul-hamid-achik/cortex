@@ -2,7 +2,7 @@
 
 // Command cortex is a local-first, evidence-guided agent kernel for software-
 // engineering agents. It sits between an LLM and a set of specialist tools
-// (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault) and enforces a
+// (codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite) and enforces a
 // stateful reasoning loop: orient → investigate → plan → change → verify →
 // preserve evidence. Three surfaces share one kernel: a CLI (with --json for
 // agents), an MCP server (cortex serve), and Studio (cortex studio).

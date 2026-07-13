@@ -1,10 +1,24 @@
 package kernel
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
+
+func TestAssessCaseVerificationKeepsLegacySemanticsWithoutCriteria(t *testing.T) {
+	c := &domain.CaseFile{VerificationRequired: []string{"codemap_review"}}
+	receipts := []domain.VerificationRecord{{
+		Claim: "structural review", Surface: domain.SurfaceCode, Tool: "codemap",
+		Purpose: domain.VerificationPurposeVerifierRun, Requirement: "codemap_review", Status: domain.VerifyPassed,
+	}}
+	want := assessVerification(c.VerificationRequired, receipts)
+	got := assessCaseVerification(c, receipts)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy case assessment changed: got=%+v want=%+v", got, want)
+	}
+}
 
 func TestAssessVerificationOutcomes(t *testing.T) {
 	verifier := func(claim string, surface domain.Surface, status domain.VerificationStatus) domain.VerificationRecord {

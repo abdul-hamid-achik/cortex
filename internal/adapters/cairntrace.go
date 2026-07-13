@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Cairntrace adapts the cairn CLI for browser behavior verification (SPEC §11.3,
-// §12.4). `cairn run <spec> --json` executes a browser contract; the exit code
+// Cairntrace adapts the cairn CLI for browser behavior verification.
+// `cairn run <spec> --json` executes a browser contract; the exit code
 // is authoritative (0 ok, 1 outcome fail, 2 errored, 6 contract-hash mismatch).
 type Cairntrace struct{ tool }
 

@@ -34,12 +34,14 @@ resolved path.
 ```bash
 cortex open "Fix post-login checkout redirect" \
   --surface code --surface browser \
-  --actor agent-auth --idempotency-key checkout-redirect
+  --actor agent-auth --idempotency-key checkout-redirect \
+  --criterion 'checkout_return=Login started at checkout returns to checkout'
 ```
 
 Cortex returns an existing case for the idempotency key, so retrying after a lost response cannot
 duplicate work. Without a key it resumes the newest active case matching the normalized goal, mode,
-workspace, and branch. Only a real first call records git identity, probes tool health, and creates
+workspace, branch, and acceptance contract. Criteria are immutable and must later be proven with
+the same claim ID and exact statement. Only a real first call records git identity, probes tool health, and creates
 the `taskId`; use `cortex start` when you intentionally want a new case.
 
 ### 2. Investigate — discover, then resolve structure
@@ -82,7 +84,8 @@ Make your edits within the declared boundary, then:
 
 ```bash
 cortex verify task_06FK… \
-  --claim "the OAuth callback preserves the return URL" \
+  --claim "Login started at checkout returns to checkout" \
+  --claim-id checkout_return \
   --claim-surface browser \
   --claim-verifier cairntrace \
   --claim-contract specs/cairntrace/checkout_return.yml \
@@ -108,7 +111,8 @@ cortex remember task_06FK… \
 
 Completion uses one canonical assessment: `verified`, `partial`, `failed`, or `unverified`.
 Normal completion requires `verified`. If adequate proof could not be completed and the assessment
-is `partial` or `unverified`, use `--unverified`; if it is `failed`, use `--accept-failed`. Cortex preserves the real assessment rather
+is `partial` or `unverified`, use `--unverified`; if it is `failed`, use `--accept-failed`. Those
+acknowledgments do not bypass registered acceptance criteria. Cortex preserves the real assessment rather
 than letting an incomplete or failed outcome masquerade as a clean pass.
 
 ## Inspect anytime
@@ -119,7 +123,8 @@ cortex show task_06FK…                   # assessment, pending decision, first
 cortex list                              # all tasks, newest first
 cortex read-evidence task_06FK… ev_06FK… # a full evidence record
 cortex handoff task_06FK…                # bounded transfer packet for another person or agent
-cortex studio                            # live read-only operator view across repos
+cortex sessions --query "billing partial" # shared AND-search across repo/state/outcome
+cortex studio                            # live board; press / to search across repos
 ```
 
 Add `--json` to any non-interactive read command for machine output. Output is styled at a terminal

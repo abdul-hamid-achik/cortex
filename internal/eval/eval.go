@@ -1,4 +1,4 @@
-// Package eval is Cortex's evaluation harness (SPEC §18.3): a small benchmark of
+// Package eval is Cortex's evaluation harness: a small benchmark of
 // real task types where success requires BOTH a correct outcome AND an adequate
 // evidence trail. Each scenario drives a real kernel through the lifecycle in a
 // throwaway git workspace and scores the result. Scenarios needing live external
@@ -21,7 +21,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
-// Scenario is one benchmark case (a §18.3 task type).
+// Scenario is one benchmark case.
 type Scenario struct {
 	Name     string
 	Category string
@@ -191,7 +191,7 @@ func codemapPass() adapters.Adapter {
 }
 
 // vecgrepMisleading is a vecgrep fake that returns a plausible-but-wrong,
-// low-confidence candidate — the §18.3 #7 misleading-search case.
+// low-confidence candidate for the misleading-search case.
 func vecgrepMisleading() adapters.Adapter {
 	return &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
 		def: adapters.Result{Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{

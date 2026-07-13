@@ -14,7 +14,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
-// VerifyInput parameterizes Verify (SPEC §10.2 cortex_verify).
+// VerifyInput parameterizes Verify.
 type VerifyInput struct {
 	TaskID        string
 	Actor         string
@@ -52,10 +52,10 @@ var behavioralSurfaces = []struct {
 const maxAutoSpecs = 3
 
 // Verify runs the verification policy and reports whether the named claims are
-// supported (SPEC §14). It runs a structural diff review, executes any provided
+// supported. It runs a structural diff review, executes any provided
 // behavioral specs, checks for scope drift, and writes a receipt per claim. A
 // claim with no relevant verifier is recorded not_run — never rendered as
-// passed (SPEC §14.2).
+// passed.
 func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, error) {
 	c, err := k.store.Load(in.TaskID)
 	if err != nil {
@@ -76,6 +76,9 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	}
 	claims, claimErr := k.normalizeClaims(in.Claims, in.ClaimSpecs)
 	if claimErr != nil {
+		return errEnvelope(in.TaskID, k.red.String(claimErr.Error())), nil
+	}
+	if claimErr := validateRegisteredClaimIdentities(c.AcceptanceCriteria, claims); claimErr != nil {
 		return errEnvelope(in.TaskID, k.red.String(claimErr.Error())), nil
 	}
 	if claimErr := k.validateStableClaimIdentities(c.ID, claims); claimErr != nil {
@@ -169,12 +172,12 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 		}
 	}
 
-	// Change-control rigor for change tasks (SPEC §6.2, §13.3):
+	// Apply additional change-control rigor for change tasks.
 	if c.Mode == domain.ModeChange {
 		if len(changed) > 0 && (c.Risk == "medium" || c.Risk == "high") {
-			// §13.3: medium/high-risk tasks SHALL have a passing structural review.
+			// Medium/high-risk tasks must have a passing structural review.
 			if st := surfaceStatus[domain.SurfaceCode]; st != domain.VerifyPassed {
-				warnings = append(warnings, fmt.Sprintf("%s-risk change requires a structural diff review that passed, but codemap review is %s — run `codemap index` and re-verify (SPEC §13.3)",
+				warnings = append(warnings, fmt.Sprintf("%s-risk change requires a structural diff review that passed, but codemap review is %s — run `codemap index` and re-verify",
 					c.Risk, reviewStateWord(st)))
 			}
 		}
@@ -211,7 +214,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	// is in the task's declared set and a diff exists, cortex auto-selects the
 	// specs whose coverage intersects the change (cairn --select-only / glyph
 	// affected-specs) and runs them — turning a not_run receipt into a real
-	// verification instead of requiring the agent to name the spec (SPEC §14.1).
+	// verification instead of requiring the agent to name the check.
 	// A failed run is stashed to fcheap and the receipt links the durable stash.
 	for _, bs := range behavioralSurfaces {
 		explicit := bs.specOf(in)
@@ -292,10 +295,10 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 		}
 	}
 
-	// 3) Map each named claim to a verifier receipt (SPEC §14.1). Track the
+	// 3) Map each named claim to a verifier receipt. Track the
 	// structured status per claim — never derive the pass count from strings
 	// that embed the free-text claim (a claim mentioning "passed" must not be
-	// counted as verified; SPEC §14.2).
+	// counted as verified).
 	var claimStatuses []domain.VerificationStatus
 	for _, claim := range claims {
 		surf := claim.Surface
@@ -323,7 +326,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 		claimStatuses = append(claimStatuses, st)
 	}
 
-	// Scope drift is a warning, not a failure (SPEC §13.2).
+	// Scope drift is a warning, not a failure.
 	if scope.Scope == "drift_detected" {
 		warnings = append(warnings, fmt.Sprintf("scope drift (%s risk): %s changed outside the boundary — %s",
 			scope.Risk, pluralizeGeneric(len(scope.UnexpectedFiles), "file", "files"), scope.Action))
@@ -420,7 +423,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 		next = append([]string{"provide the missing verifier spec (browser_spec / terminal_spec) and re-run cortex verify"}, next...)
 	}
 	env := k.envelope(c, summary, facts, dedupeStr(warnings), next)
-	env.Actions = k.redactStructuredActions(structuredNextForCaseAt(c, k.now().UTC(), assessVerification(c.VerificationRequired, assessmentReceipts)))
+	env.Actions = k.redactStructuredActions(structuredNextForCaseAt(c, k.now().UTC(), assessCaseVerification(c, assessmentReceipts)))
 	return env, nil
 }
 
@@ -495,8 +498,7 @@ type receiptSpec struct {
 }
 
 // writeReceipt persists a verification record naming the exact claim it
-// supports, its verifier + version, limitation notes, and a sensitivity label
-// (SPEC §14.3, §16.2 #5).
+// supports, its verifier + version, limitation notes, and a sensitivity label.
 func (k *Kernel) writeReceipt(taskID string, rev adapters.Revision, r receiptSpec) error {
 	record := k.makeReceipt(taskID, "", rev, r)
 	if rev.Commit == "" || rev.DirtyDigest == "" {
@@ -647,8 +649,8 @@ func (k *Kernel) normalizeClaims(legacy []string, typed []domain.VerificationCla
 		if !claim.Surface.Valid() {
 			return nil, fmt.Errorf("typed verification claim %q has invalid surface %q", claim.Statement, claim.Surface)
 		}
-		if len(claim.Statement) > 2048 {
-			return nil, fmt.Errorf("typed verification claim exceeds 2048 bytes")
+		if len(claim.Statement) > domain.MaxAcceptanceCriterionStatementBytes {
+			return nil, fmt.Errorf("typed verification claim exceeds %d bytes", domain.MaxAcceptanceCriterionStatementBytes)
 		}
 		if len(claim.ID) > 128 || (claim.ID != "" && !validClaimIdentifier(claim.ID)) {
 			return nil, fmt.Errorf("typed verification claim id must contain only letters, digits, dash, or underscore")
@@ -783,7 +785,7 @@ func (k *Kernel) currentRevision(ctx context.Context) (adapters.Revision, string
 	return rev, ""
 }
 
-// toolVersion returns a verifier tool's version, best-effort (SPEC §14.3).
+// toolVersion returns a verifier tool's version, best-effort.
 func (k *Kernel) toolVersion(ctx context.Context, tool string) string {
 	if a, ok := k.reg.Get(tool).(interface {
 		Version(context.Context) string
@@ -795,7 +797,7 @@ func (k *Kernel) toolVersion(ctx context.Context, tool string) string {
 
 // evidenceSensitive reports whether any of the linked evidence records is
 // sensitive, so the receipt (and its artifact) can be labeled to prevent
-// careless archival of secret-adjacent material (SPEC §16.2 #5).
+// careless archival of secret-adjacent material.
 func (k *Kernel) evidenceSensitive(taskID string, ids []string) bool {
 	if len(ids) == 0 {
 		return false
@@ -869,7 +871,7 @@ func capabilityLimitation(surface domain.Surface, st domain.VerificationStatus) 
 
 // behavioralStatus classifies a behavioral run into a verification status,
 // distinguishing a genuine failure from an ambiguous errored run — the latter
-// is inconclusive, never a failed verdict (SPEC §11.4, §14.2).
+// is inconclusive, never a failed verdict.
 func behavioralStatus(res adapters.Result) domain.VerificationStatus {
 	if res.Status == adapters.StatusUnavailable {
 		return domain.VerifyBlocked
@@ -908,10 +910,10 @@ func firstArtifactURI(res adapters.Result) string {
 }
 
 // stashRunBundle durably archives a behavioral run bundle when it is worth
-// keeping — SPEC §12.6 stashes failed browser/terminal runs (high debugging
+// keeping: failed browser/terminal runs have high debugging
 // value) but not passing ones (low future value). On success it returns an
 // fcheap:// reference for the receipt so the evidence is linked back to the
-// case file (SPEC §25 #6). On a pass, missing bundle, or unavailable fcheap it
+// case file. On a pass, missing bundle, or unavailable fcheap it
 // returns the ephemeral run-bundle URI unchanged.
 func (k *Kernel) stashRunBundle(ctx context.Context, c *domain.CaseFile, res adapters.Result, passed bool, surface string) (string, []string) {
 	uri := firstArtifactURI(res)
@@ -938,7 +940,7 @@ func (k *Kernel) stashRunBundle(ctx context.Context, c *domain.CaseFile, res ada
 // annotateBehavior links a proven or meaningfully-failed behavior to the code
 // symbols the task DECLARED it would change — the declared change boundary is
 // the reasonable-confidence identification of the owning symbol, so Cortex does
-// not guess when none is declared (SPEC §12.2 structural memory). It annotates
+// not guess when none is declared. It annotates
 // only definitive pass/fail outcomes (an inconclusive/errored run teaches
 // nothing), tags the annotation with the verifier as its source, and is
 // best-effort: a failure is a warning, never a hard error.
@@ -962,7 +964,7 @@ func (k *Kernel) annotateBehavior(ctx context.Context, c *domain.CaseFile, sourc
 	return warns
 }
 
-// claimSurface infers the verification surface a claim belongs to (SPEC §14.1).
+// claimSurface infers the verification surface a claim belongs to.
 // Terminal is checked before browser, and the browser hint is the spaced " ui "
 // token, so a "tui"/"cli" claim (or any word merely containing "ui" like "build"
 // or "requires") is not misrouted to the browser surface — mirroring
@@ -1027,7 +1029,7 @@ func verifySummary(claims []string, statuses []domain.VerificationStatus, scope 
 	return fmt.Sprintf("%d/%d claims verified; scope %s", passed, len(claims), scope.Scope)
 }
 
-// claimLimitation notes why a claim's receipt is not a clean pass (SPEC §14.3).
+// claimLimitation notes why a claim's receipt is not a clean pass.
 func claimLimitation(st domain.VerificationStatus) string {
 	switch st {
 	case domain.VerifyNotRun:
@@ -1041,7 +1043,7 @@ func claimLimitation(st domain.VerificationStatus) string {
 	}
 }
 
-// behavioralLimitation notes a limitation on a behavioral receipt (SPEC §14.3).
+// behavioralLimitation notes a limitation on a behavioral receipt.
 func behavioralLimitation(res adapters.Result, st domain.VerificationStatus) string {
 	if res.Status == adapters.StatusUnavailable {
 		return "verifier tool unavailable — behavior not proven"

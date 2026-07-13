@@ -1,7 +1,7 @@
 // Package config resolves Cortex's paths and runtime policy. Case files default
 // to a central, XDG-organized location — $XDG_STATE_HOME/cortex/sessions/<repo>/
 // — so every session across every repo is visible and auditable in one place
-// (SPEC §8.1). A pre-existing repo-local .cortex/cases is honored (so in-flight
+// A pre-existing repo-local .cortex/cases is honored (so in-flight
 // work isn't orphaned by the move), and both are fully overridable via
 // cases_dir / CORTEX_CASES_DIR. Config/state/cache dirs follow the XDG Base
 // Directory spec (paths.go); $CORTEX_HOME or a legacy ~/.cortex collapses them
@@ -33,13 +33,13 @@ type Config struct {
 	// .cortex/cases). Override with cases_dir in cortex.yaml or CORTEX_CASES_DIR
 	// (absolute paths allowed) to pin sessions anywhere.
 	CasesDir string
-	// Budget bounds tool use per workflow (SPEC §7.3).
+	// Budget bounds tool use per workflow.
 	Budget domain.Budget
 	// RedactLiterals are extra exact strings to always mask (e.g. known secret
 	// names surfaced by tvault). Never populate this with secret values.
 	RedactLiterals []string
-	// Recall configures cross-case disproof recall (SPEC §15.4 — the fourth
-	// memory layer). Defaults: a central veclite DB, the nomic-embed-text model,
+	// Recall configures cross-case disproof recall, the fourth memory layer.
+	// Defaults: a central veclite DB, the nomic-embed-text model,
 	// ollama at localhost:11434, enabled.
 	Recall RecallConfig
 	// Verifiers are repository-defined, read-only command checks. The command is
@@ -131,7 +131,7 @@ func validVerifierName(name string) bool {
 }
 
 // For resolves configuration for a given workspace directory: built-in defaults
-// layered with any cortex.yaml files and CORTEX_* env overrides (SPEC §27). A
+// layered with any cortex.yaml files and CORTEX_* env overrides. A
 // blank workspace falls back to the current working directory.
 func For(workspace string) Config {
 	ws := ExpandPath(workspace)

@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// Fcheap adapts the fcheap CLI as a durable evidence archive (SPEC §11.3,
-// §12.6): stash artifacts, search across stashes, and connect a stash to the
+// Fcheap adapts the fcheap CLI as a durable evidence archive: stash artifacts,
+// search across stashes, and connect a stash to the
 // codebase that likely owns a bug. `--json` is a persistent flag on every
 // subcommand.
 type Fcheap struct{ tool }
@@ -222,7 +222,7 @@ func (f *Fcheap) list(ctx context.Context, dir string, tags []string) (Result, e
 }
 
 // Save stashes a directory/file as durable evidence and returns the stash ID.
-// Used by the persist phase for high-value artifacts (SPEC §12.6). It is a
+// Used by the persist phase for high-value artifacts. It is a
 // write method, not a query op.
 func (f *Fcheap) Save(ctx context.Context, dir, path string, tags []string, toolLabel string) (string, error) {
 	if !binExists(f.bin) {
@@ -238,7 +238,7 @@ func (f *Fcheap) Save(ctx context.Context, dir, path string, tags []string, tool
 	// Index on save (fcheap ≥0.28) so the archived evidence is immediately
 	// searchable — otherwise `fcheap search` returns nothing for cortex's own
 	// stashes (a silently-dead archive→search loop). A stash is a write, so no
-	// auto-retry (SPEC §17.3) via execOnce.
+	// auto-retry via execOnce.
 	withIndex := append(append([]string{}, args...), "--index")
 	stdout, serr, code, err := f.execOnce(ctx, dir, withIndex...)
 	// An old fcheap rejects --index at flag-parse time (non-zero exit, "unknown

@@ -10,7 +10,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
-// ResolveInput parameterizes Resolve (SPEC §9.3 contradiction handling).
+// ResolveInput parameterizes Resolve.
 type ResolveInput struct {
 	TaskID       string
 	HypothesisID string
@@ -20,7 +20,7 @@ type ResolveInput struct {
 }
 
 // Resolve updates a hypothesis's status as evidence accumulates, preserving the
-// investigation path rather than silently overwriting it (SPEC §9.3): the prior
+// investigation path rather than silently overwriting it: the prior
 // hypothesis is retained, its status is changed, and a provenance-bearing
 // evidence record documenting the resolution is appended. A confirmed
 // hypothesis needs supporting evidence; a challenge/rejection records the
@@ -41,8 +41,8 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 		return errEnvelope(in.TaskID, "resolve needs a reason (what evidence changed the status)"), nil
 	}
 	// Confirmation raises a hypothesis to high confidence, so it must rest on
-	// evidence — a hypothesis can't be promoted on assertion alone (SPEC §5.2
-	// evidence-not-assertions, §9.3). That evidence need not already have a
+	// evidence — a hypothesis can't be promoted on assertion alone. That
+	// evidence need not already have a
 	// formal evidence ID: when none is cited, the reason itself is minted into
 	// an evidence record below and cited automatically, so a caller whose proof
 	// was e.g. an ad hoc repro script (no cortex_investigate evidence ID) isn't
@@ -148,7 +148,7 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 		return errEnvelope(in.TaskID, err.Error()), err
 	}
 
-	// Cross-case disproof recall (SPEC §15.4): index the resolved hypothesis
+	// Cross-case disproof recall indexes the resolved hypothesis
 	// immediately — rejected/challenged are the gold. Best-effort, decoupled
 	// from this request's lifecycle (a cancelled caller must not drop a save
 	// that already landed), so a background context is correct here.

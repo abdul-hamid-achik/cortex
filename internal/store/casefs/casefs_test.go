@@ -120,6 +120,7 @@ func TestPhaseEventsRoundTrip(t *testing.T) {
 func TestCaseRoundTrip(t *testing.T) {
 	s := newStore(t)
 	c := sampleCase()
+	c.AcceptanceCriteria = []domain.AcceptanceCriterion{{ID: "criterion_1", Statement: "tests pass"}}
 	if err := s.Create(c); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -133,6 +134,9 @@ func TestCaseRoundTrip(t *testing.T) {
 	if got.SchemaVersion != domain.SchemaVersion {
 		t.Errorf("schema version not stamped: %d", got.SchemaVersion)
 	}
+	if len(got.AcceptanceCriteria) != 1 || got.AcceptanceCriteria[0] != c.AcceptanceCriteria[0] {
+		t.Errorf("acceptance criteria round-trip mismatch: %+v", got.AcceptanceCriteria)
+	}
 }
 
 func TestCreateRejectsDuplicate(t *testing.T) {
@@ -143,6 +147,65 @@ func TestCreateRejectsDuplicate(t *testing.T) {
 	}
 	if err := s.Create(c); err == nil {
 		t.Error("creating an existing case should error")
+	}
+}
+
+func TestAcceptanceCriteriaAreImmutableAfterCreate(t *testing.T) {
+	s := newStore(t)
+	c := sampleCase()
+	c.AcceptanceCriteria = []domain.AcceptanceCriterion{{ID: "criterion_1", Statement: "tests pass"}}
+	if err := s.Create(c); err != nil {
+		t.Fatal(err)
+	}
+	c.AcceptanceCriteria[0].Statement = "different"
+	if err := s.Save(c); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("mutated acceptance criteria save error = %v", err)
+	}
+	loaded, err := s.Load(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AcceptanceCriteria[0].Statement != "tests pass" {
+		t.Fatalf("immutable criteria changed on disk: %+v", loaded.AcceptanceCriteria)
+	}
+}
+
+func TestAcceptanceCriteriaAreImmutableAcrossTransactionalWrites(t *testing.T) {
+	s := newStore(t)
+	c := sampleCase()
+	c.AcceptanceCriteria = []domain.AcceptanceCriterion{{ID: "criterion_1", Statement: "tests pass"}}
+	if err := s.Create(c); err != nil {
+		t.Fatal(err)
+	}
+	c.AcceptanceCriteria[0].Statement = "different"
+	c.Status = domain.PhasePlanned
+	plan := domain.Plan{
+		Hypotheses: []domain.Hypothesis{{
+			ID: "hyp_1", Statement: "h", DisproveBy: domain.Disproof{Note: "d"}, Status: domain.HypActive,
+		}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"a.go"}}, Uncertainty: "u",
+	}
+	c.ChangeBoundary = plan.ChangeBoundary
+	if err := s.CommitPlan(c, plan, plan.Hypotheses); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("transactional criteria mutation error = %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidAcceptanceCriteria(t *testing.T) {
+	s := newStore(t)
+	c := sampleCase()
+	if err := s.Create(c); err != nil {
+		t.Fatal(err)
+	}
+	c.AcceptanceCriteria = []domain.AcceptanceCriterion{
+		{ID: "same", Statement: "first"},
+		{ID: "same", Statement: "second"},
+	}
+	if err := writeJSON(filepath.Join(s.dir(c.ID), "case.json"), c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Load(c.ID); err == nil || !strings.Contains(err.Error(), "duplicate acceptance criterion") {
+		t.Fatalf("invalid acceptance criteria load error = %v", err)
 	}
 }
 

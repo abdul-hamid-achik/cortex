@@ -126,7 +126,7 @@ func buildHypotheses(statements, disproofs []string, confidence string) ([]kerne
 }
 
 // parseTimeouts turns repeated "tool=duration" flags into a per-tool timeout
-// override map (SPEC §17.2). Invalid or duplicate entries fail explicitly so a
+// override map. Invalid or duplicate entries fail explicitly so a
 // caller never believes an override was applied when it was silently dropped.
 func parseTimeouts(flags []string) (map[string]string, error) {
 	if len(flags) == 0 {

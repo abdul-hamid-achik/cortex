@@ -114,7 +114,7 @@ with no disproof path.
 As evidence accumulates, `cortex resolve` marks a hypothesis **confirmed**, **challenged**, or
 **rejected**. History is retained — the prior status and the reason are appended to the evidence
 ledger rather than silently overwritten, so a later agent can learn from a failed line of
-reasoning (SPEC §9.3 contradiction handling).
+reasoning.
 
 ### Change boundary
 
@@ -200,7 +200,7 @@ declared it would change with the behavior and its evidence reference — so the
 codemap about that symbol sees what it's known to do. A failed behavioral run is also archived to
 fcheap and linked on its receipt, turning an ephemeral run into durable, discoverable evidence.
 
-The **cross-case** layer (SPEC §15.4) breaks the loop where a weak model re-forms the same wrong
+The **cross-case** layer breaks the loop where a weak model re-forms the same wrong
 theory every session. When a hypothesis is resolved (rejected/challenged) or a verification
 definitively passes/fails, the case is redaction-gated (sensitive records are **excluded**, not
 masked) and indexed into a veclite collection. At orient and investigate time, prior related

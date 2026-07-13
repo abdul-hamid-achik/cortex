@@ -17,6 +17,7 @@ they **never fabricate** a missing tool's output.
 | fcheap | `fcheap` | artifacts | durable evidence stash + search + connect |
 | vidtrace | `vidtrace` | artifacts | bug-video → timestamped evidence → owning code |
 | tvault | `tvault` | secrets | secret-safe execution boundary |
+| veclite | `veclite` | recall | prior disproofs and definitive receipts; embeddings use the configured Ollama endpoint |
 
 ## Degraded modes
 

@@ -217,6 +217,33 @@ func renderStatus(rep kernel.StatusReport) {
 			pln(w, "  "+paint(styWarn, "✗ "+m))
 		}
 	}
+	if len(rep.ClaimProofs) > 0 {
+		pln(w, heading("Claim proofs"))
+		for _, proof := range rep.ClaimProofs {
+			mark := paint(styWarn, "○")
+			if proof.Status == domain.VerifyPassed && proof.Binding != domain.VerificationUnbound {
+				mark = paint(styOK, "✓")
+			} else if proof.Status == domain.VerifyFailed {
+				mark = paint(styErr, "✗")
+			}
+			statement := proof.Statement
+			if proof.StatementTruncated {
+				statement += "…"
+			}
+			binding := proof.Binding
+			if binding == "" {
+				binding = "legacy"
+			}
+			pf(w, "  %s %s %s · %s/%s\n", mark, paint(styLabel, proof.ClaimID),
+				clipLine(statement, 90), proof.Status, binding)
+			if proof.SensitiveRefsOmitted || proof.EvidenceRefsOmitted > 0 {
+				pln(w, "    "+paint(styMuted, "some evidence references omitted from this bounded projection"))
+			}
+		}
+		if rep.ClaimProofsTruncated {
+			pf(w, "  %s\n", paint(styWarn, fmt.Sprintf("showing %d of %d proofs", len(rep.ClaimProofs), rep.ClaimProofTotal)))
+		}
+	}
 	if rep.Scope != nil && rep.Scope.Scope == "drift_detected" {
 		pln(w, heading("Scope drift"))
 		pf(w, "  %s risk — %s\n", rep.Scope.Risk, rep.Scope.Action)

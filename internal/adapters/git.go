@@ -12,7 +12,7 @@ import (
 )
 
 // Git adapts the git CLI for workspace identity and change (diff) evidence
-// (SPEC §11.3 git.Adapter). It is the one adapter Cortex relies on for
+// It is the one adapter Cortex relies on for
 // orientation and scope-drift detection, so it stays fully concrete.
 type Git struct{ tool }
 
@@ -144,7 +144,7 @@ func (g *Git) status(ctx context.Context, dir string) (Result, error) {
 }
 
 // ChangedFiles returns the list of files changed in the working tree (or staged,
-// or since a ref). Used by scope-drift detection (SPEC §13.2).
+// or since a ref). Used by scope-drift detection.
 func (g *Git) ChangedFiles(ctx context.Context, dir, since string, staged bool) ([]string, error) {
 	args := []string{"diff", "--name-only"}
 	switch {

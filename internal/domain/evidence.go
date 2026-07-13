@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-// EvidenceKind classifies a piece of evidence by how it was obtained (SPEC §9.2).
+// EvidenceKind classifies a piece of evidence by how it was obtained.
 type EvidenceKind string
 
 const (
@@ -21,7 +21,7 @@ const (
 )
 
 // verifiableKinds are evidence classes that can satisfy a verification
-// requirement on their own. model_inference and human_report cannot (SPEC §9.2).
+// requirement on their own. model_inference and human_report cannot.
 var verifiableKinds = map[EvidenceKind]bool{
 	KindCodeLocation: true, KindCodeGraph: true, KindBrowserRun: true,
 	KindTerminalRun: true, KindUnitTest: true, KindBuild: true,
@@ -32,7 +32,7 @@ var verifiableKinds = map[EvidenceKind]bool{
 // verification pass. Semantic search is a candidate, not proof.
 func (k EvidenceKind) CanVerify() bool { return verifiableKinds[k] }
 
-// Confidence is a policy band, not a probability (SPEC §8.6).
+// Confidence is a policy band, not a probability.
 type Confidence string
 
 const (
@@ -68,7 +68,7 @@ type Location struct {
 	Symbol    string `json:"symbol,omitempty"`
 }
 
-// Evidence is a structured claim backed by a locatable source (SPEC §8.3). A
+// Evidence is a structured claim backed by a locatable source. A
 // model statement without a source is an assertion, not evidence.
 type Evidence struct {
 	ID          string       `json:"id"`
@@ -87,7 +87,7 @@ type Evidence struct {
 	DerivedFrom []string `json:"derivedFrom,omitempty"`
 }
 
-// Validate enforces the evidence invariants (SPEC §9.1): a claim, an origin,
+// Validate enforces the evidence invariants: a claim, an origin,
 // and a timestamp are mandatory.
 func (e Evidence) Validate() error {
 	if e.Claim == "" {

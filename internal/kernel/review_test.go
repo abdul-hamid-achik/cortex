@@ -55,6 +55,9 @@ func TestReviewBranchApproves(t *testing.T) {
 	if !strings.Contains(env.Summary, "APPROVE") {
 		t.Errorf("a change with a passing review should APPROVE, got: %s", env.Summary)
 	}
+	if !env.Degraded || !hasWarning(env.Warnings, "degraded") {
+		t.Fatalf("review hid degraded discovery state: degraded=%t warnings=%v", env.Degraded, env.Warnings)
+	}
 	// The review is a real, inspectable case with a base ref and evidence.
 	c, _ := k.Store().Load(env.TaskID)
 	if c.Mode != domain.ModeReview || c.Workspace.BaseRef == "" {
@@ -63,6 +66,33 @@ func TestReviewBranchApproves(t *testing.T) {
 	m, _ := k.TaskMetrics(env.TaskID)
 	if m.EvidenceItems == 0 {
 		t.Error("a review should leave an evidence trail")
+	}
+}
+
+func TestReviewExplicitHeadRestoresOriginalBranch(t *testing.T) {
+	ws := reviewRepo(t)
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ws
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v (%s)", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("checkout", "-q", "main")
+
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative,
+			Facts: []adapters.Fact{{Kind: "code_graph", Claim: "diff reviewed", Confidence: "high"}}}}
+	k := newTestKernel(t, ws, codemap)
+	env, err := k.Review(context.Background(), ReviewInput{Base: "main", Head: "feature"})
+	if err != nil || !env.OK {
+		t.Fatalf("explicit-head review failed: %+v (%v)", env, err)
+	}
+	if branch := runGit("branch", "--show-current"); branch != "main" {
+		t.Fatalf("review left workspace on %q, want original branch main", branch)
 	}
 }
 
@@ -139,7 +169,7 @@ func TestHasDefinitiveVerification(t *testing.T) {
 func TestReviewBrowserSurfaceNeverFalseApproves(t *testing.T) {
 	// Regression (found by the review's own adversarial review): with a browser
 	// surface declared, a passing CODE review plus a user --claim must NOT yield
-	// APPROVE while the required browser verifier never ran (SPEC §14.2). The
+	// APPROVE while the required browser verifier never ran. The
 	// custom claim must augment, not replace, the browser safety-net claim.
 	ws := reviewRepo(t)
 	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},

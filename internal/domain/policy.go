@@ -2,7 +2,7 @@ package domain
 
 import "strings"
 
-// Budget bounds tool use within a workflow so an agent can't thrash (SPEC §7.3).
+// Budget bounds tool use within a workflow so an agent can't thrash.
 type Budget struct {
 	MaxParallelCalls          int `json:"max_parallel_calls"`
 	MaxInvestigationRounds    int `json:"max_investigation_rounds"`
@@ -12,7 +12,7 @@ type Budget struct {
 	MaxAutoRetriesPerTool     int `json:"max_auto_retries_per_tool"`
 }
 
-// DefaultBudget is the v0.1 budget from SPEC §7.3.
+// DefaultBudget is the default investigation budget.
 func DefaultBudget() Budget {
 	return Budget{
 		MaxParallelCalls:          3,
@@ -24,7 +24,7 @@ func DefaultBudget() Budget {
 	}
 }
 
-// Route is a recommended tool sequence for a question (SPEC §7.1).
+// Route is a recommended tool sequence for a question.
 type Route struct {
 	First    string // primary tool
 	FollowUp string // secondary tool
@@ -45,7 +45,7 @@ type RoutingRule struct {
 	Why      string    `json:"why"`
 }
 
-// RoutingMatrix is the ordered SPEC §7.1 policy table. It is both the
+// RoutingMatrix is the ordered routing-policy table. It is both the
 // executable source for RouteFor and the serializable source for `cortex route
 // --json`; keep precedence encoded by row order.
 var RoutingMatrix = []RoutingRule{
@@ -92,8 +92,8 @@ var RoutingMatrix = []RoutingRule{
 }
 
 // RouteFor chooses a discovery/structure route from a question and surfaces
-// (SPEC §7.1 routing matrix). It is deliberately rule-based, not learned — v0.1
-// prefers explicit routing over telemetry-derived policy (SPEC §24 #6).
+// routing matrix. It is deliberately rule-based, not learned: the initial
+// implementation prefers explicit routing over telemetry-derived policy.
 func RouteFor(question string, surfaces []Surface) Route {
 	q := strings.ToLower(question)
 	for _, rule := range RoutingMatrix {
@@ -156,7 +156,7 @@ func containsAny(s string, subs ...string) bool {
 }
 
 // SurfaceVerifier maps a verification surface to its primary verifier tool
-// (SPEC §3.6 table).
+// for the affected surface.
 func SurfaceVerifier(s Surface) string {
 	switch s {
 	case SurfaceBrowser:

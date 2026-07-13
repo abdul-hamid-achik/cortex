@@ -23,6 +23,7 @@ CORTEX_APPROVE_COMMANDS=1; otherwise their receipts are blocked.
 
   cortex verify task_X \
     --claim "the OAuth callback preserves the return URL" \
+    --claim-id checkout_return \
     --claim-surface browser \
     --claim-contract specs/cairntrace/checkout_return.yml \
     --browser-spec specs/cairntrace/checkout_return.yml`,
@@ -33,10 +34,11 @@ CORTEX_APPROVE_COMMANDS=1; otherwise their receipts are blocked.
 			return err
 		}
 		claims, _ := cmd.Flags().GetStringArray("claim")
+		claimIDs, _ := cmd.Flags().GetStringArray("claim-id")
 		claimSurfaces, _ := cmd.Flags().GetStringArray("claim-surface")
 		claimVerifiers, _ := cmd.Flags().GetStringArray("claim-verifier")
 		claimContracts, _ := cmd.Flags().GetStringArray("claim-contract")
-		claimSpecs, err := verificationClaimSpecs(claims, claimSurfaces, claimVerifiers, claimContracts)
+		claimSpecs, err := verificationClaimSpecs(claims, claimIDs, claimSurfaces, claimVerifiers, claimContracts)
 		if err != nil {
 			return err
 		}
@@ -73,6 +75,7 @@ CORTEX_APPROVE_COMMANDS=1; otherwise their receipts are blocked.
 
 func init() {
 	verifyCmd.Flags().StringArray("claim", nil, "a user-facing claim to prove (repeatable)")
+	verifyCmd.Flags().StringArray("claim-id", nil, "optional stable ID for each --claim; required to prove a registered criterion")
 	verifyCmd.Flags().StringArray("claim-surface", nil, "explicit surface for each --claim: code, browser, terminal, artifact, or secret")
 	verifyCmd.Flags().StringArray("claim-verifier", nil, "optional exact verifier for each --claim (repeat once per claim)")
 	verifyCmd.Flags().StringArray("claim-contract", nil, "required exact spec/check for each typed --claim (repeat once per claim)")
@@ -87,8 +90,8 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 }
 
-func verificationClaimSpecs(claims, surfaces, verifiers, contracts []string) ([]domain.VerificationClaim, error) {
-	if len(surfaces) == 0 && len(verifiers) == 0 && len(contracts) == 0 {
+func verificationClaimSpecs(claims, ids, surfaces, verifiers, contracts []string) ([]domain.VerificationClaim, error) {
+	if len(ids) == 0 && len(surfaces) == 0 && len(verifiers) == 0 && len(contracts) == 0 {
 		return nil, nil
 	}
 	if len(claims) == 0 || len(surfaces) != len(claims) {
@@ -97,12 +100,18 @@ func verificationClaimSpecs(claims, surfaces, verifiers, contracts []string) ([]
 	if len(verifiers) != 0 && len(verifiers) != len(claims) {
 		return nil, fmt.Errorf("--claim-verifier must be omitted or repeated once for every --claim")
 	}
+	if len(ids) != 0 && len(ids) != len(claims) {
+		return nil, fmt.Errorf("--claim-id must be omitted or repeated once for every --claim")
+	}
 	if len(contracts) != len(claims) {
 		return nil, fmt.Errorf("--claim-contract must be repeated once for every typed --claim")
 	}
 	out := make([]domain.VerificationClaim, 0, len(claims))
 	for i, statement := range claims {
 		claim := domain.VerificationClaim{Statement: statement, Surface: domain.Surface(surfaces[i]), Required: true}
+		if len(ids) > 0 {
+			claim.ID = ids[i]
+		}
 		if len(verifiers) > 0 {
 			claim.Verifier = verifiers[i]
 		}

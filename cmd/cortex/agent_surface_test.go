@@ -156,6 +156,22 @@ func TestCLIAgentWorkflowPreservesContractsAndStructuredActions(t *testing.T) {
 	}
 }
 
+func TestCLIInvestigationMakesPlanTheFirstContinuation(t *testing.T) {
+	ws := cliRepo(t)
+	opened := qaRunCLIEnvelope(t, "--json", "-C", ws, "open", "trace the callback path",
+		"--actor", "agent-a", "--idempotency-key", "qa-investigation-order")
+	qaRequireCLIAction(t, opened, "cortex_investigate")
+
+	investigated := qaRunCLIEnvelope(t, "--json", "-C", ws, "investigate", opened.TaskID, "HandleCallback")
+	plan := qaRequireCLIAction(t, investigated, "cortex_plan")
+	if plan.Arguments["taskId"] != opened.TaskID || plan.Arguments["workspace"] != ws {
+		t.Fatalf("plan continuation is not portable: %+v", plan)
+	}
+	if len(investigated.Actions) != 2 || investigated.Actions[1].Tool != "cortex_investigate" {
+		t.Fatalf("post-investigation choices = %+v, want plan then optional investigation", investigated.Actions)
+	}
+}
+
 func TestCLIAgentHelpMatchesExposedContracts(t *testing.T) {
 	serve, err := runCLI(t, "serve", "--help")
 	if err != nil {

@@ -46,13 +46,13 @@ Cortex exposes a small task workflow instead of dozens of overlapping raw tools:
 
 | Action | What it enforces |
 |---|---|
-| **open** | retry-safely resumes matching work or starts one durable case; a newly created case records actor and parent/child linkage when supplied |
+| **open** | retry-safely resumes matching work or starts one durable case; a new case can register an immutable acceptance contract and records actor/parent linkage when supplied |
 | **investigate** | routes a question through discovery (vecgrep) then structure (codemap); records evidence with provenance — search output is a *candidate*, not proof |
 | **plan** | requires a testable hypothesis **with a disproof path**, a change boundary, and a verification plan — plans without a disproof path are **rejected** |
 | **begin-change** | atomically claims bounded change ownership for an actor before editing; leases expire, renew, and prevent competing writers |
 | **verify** | binds typed claims to an explicit surface, optional verifier, and required exact contract; detects scope drift and atomically writes one revision-bound receipt batch |
 | **remember** | persists the outcome and completes the task — normal completion requires the canonical assessment to be `verified`; explicit acknowledgments preserve partial/unverified/failed outcomes honestly |
-| **status / show** | phase, structured next actions, decisions, scope drift, and the canonical `verified / partial / failed / unverified` assessment |
+| **status / show** | phase, structured next actions, decisions, scope drift, bounded claim-proof manifest, and the canonical `verified / partial / failed / unverified` assessment |
 
 These are structural invariants enforced by a **phase machine**, not by prompting. A model can't
 skip the disproof path by restating a hypothesis, or call a change "done" without proof.
@@ -67,16 +67,17 @@ task build   # → ./bin/cortex
 
 Cortex is a single pure-Go binary (`CGO_ENABLED=0`), with **Git required** for repository identity,
 diffs, scope drift, and revision-bound verification. The specialist tools it composes
-(`codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `vidtrace`, `tvault`) are **optional at runtime** — every
-adapter degrades safely when its tool is absent, and Cortex never fabricates a missing tool's
-output.
+(`codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `vidtrace`, `tvault`, `veclite`) are **optional
+at runtime** — every adapter degrades safely when its tool is absent, and Cortex never fabricates
+a missing tool's output.
 
 ## Quick start (CLI)
 
 ```bash
 # 1. Open or resume a case safely
 cortex open "Fix post-login checkout redirect" \
-  --surface code --surface browser --actor agent-auth --idempotency-key checkout-redirect
+  --surface code --surface browser --actor agent-auth --idempotency-key checkout-redirect \
+  --criterion 'checkout_return=Login started at checkout returns to checkout'
 #   → task_06FK…  [investigating]
 
 # 2. Investigate (routes vecgrep → codemap, records evidence)
@@ -93,7 +94,8 @@ cortex begin-change task_06FK… --actor agent-auth
 
 # 5. Verify a typed claim against the exact browser contract
 cortex verify task_06FK… \
-  --claim "the OAuth callback preserves the return URL" \
+  --claim "Login started at checkout returns to checkout" \
+  --claim-id checkout_return \
   --claim-surface browser --claim-verifier cairntrace \
   --claim-contract specs/cairntrace/checkout_return.yml \
   --actor agent-auth \
@@ -108,12 +110,13 @@ cortex status task_06FK… --detail full
 cortex list                 # tasks in the current workspace
 
 # audit & monitor across EVERY repo (central XDG store)
-cortex sessions             # all sessions, any repo (--repo/--active/--stale filters)
+cortex sessions             # all sessions, any repo (--repo/--active/--stale/--query filters)
+cortex sessions --query "billing partial" # AND-search goal/repo/state/outcome
 cortex show task_06FK…      # full one-screen view of a session — from ANY directory
 cortex overview             # cross-repo rollup: completion, verification, where work sits
 cortex timeline task_06FK…  # a session's phases + evidence + tool calls + verification, time-sorted
 cortex metrics task_06FK…   # outcome & evidence metrics, incl. time-in-phase
-cortex studio               # live board of ALL sessions across repos, w/ loop stepper (Charm v2 TUI)
+cortex studio               # live board; press / to search every repo/session
 cortex doctor               # environment + session snapshot + specialist tool health
 ```
 
@@ -124,7 +127,9 @@ TTY and plain when piped. Studio is interactive and directs machines to `session
 Cortex has three surfaces over the same kernel: the CLI for direct operation and scripting, the MCP
 server for agents, and **Studio** (`cortex studio`) for a live, read-only human view across sessions.
 Humans and agents can also attach provenance-bearing notes, pause on bounded decisions with explicit
-consequences, and export a compact, 128 KiB-capped handoff packet without copying raw transcripts.
+consequences, and export a compact handoff without copying raw transcripts. General handoffs are
+capped at 128 KiB; complete verified handoffs use a 90 KiB primary-result budget and preserve their
+entire non-sensitive named-claim/verifier proof closure or omit it explicitly as one unit.
 
 ## MCP server
 
@@ -156,6 +161,16 @@ mcphub sync --write
 In gateway mode the agent sees only mcphub, which proxies Cortex's tools as `cortex__<tool>` and
 keeps the raw specialist tools available as an expert escape hatch.
 
+### local-agent compatibility
+
+Cortex's compact profile is contract-tested with `local-agent`: its required
+`cortex_open_task`, `cortex_status`, and `cortex_handoff` calls remain stable, while additive
+acceptance criteria and proof manifests are optional. Use the normal MCPHub gateway process
+(`mcphub mcp serve --agent local-agent`) or register a direct server named `cortex` with command
+`cortex` and arguments `serve`. `cortex doctor --probe` performs a live gateway handshake; the
+default Cortex registration should report 17 tools. Completed handoffs stay within local-agent's
+96 KiB tool-result ceiling by budgeting the primary proof packet at 90 KiB.
+
 ## The case file
 
 Each non-trivial task gets a durable, human-readable case file in the central XDG state store by
@@ -163,7 +178,7 @@ default. Override `cases_dir` / `CORTEX_CASES_DIR` only when you want repo-local
 
 ```
 $XDG_STATE_HOME/cortex/sessions/<repo-slug>/task_06FK…/
-  case.json          # goal, workspace identity, phase, change boundary, required verification
+  case.json          # goal, acceptance criteria, workspace, phase, boundary, required verification
   decisions.json     # bounded human questions, options, consequences, and answers
   evidence.jsonl     # append-only ledger of claims with provenance and confidence
   hypotheses.json    # falsifiable explanations + disproof paths
@@ -201,23 +216,23 @@ files, and binary content is refused unless explicitly allowed.
 | [file.cheap](https://github.com/abdul-hamid-achik/file.cheap) (`fcheap`) | durable evidence stash + search |
 | vidtrace | screen-recording evidence linked to owning code |
 | [tinyvault](https://github.com/abdul-hamid-achik/tinyvault) (`tvault`) | secret-safe execution boundary (values never enter model context) |
+| veclite | cross-case recall of prior disproofs and definitive receipts (embeddings via Ollama) |
 | [mcphub](https://github.com/abdul-hamid-achik/mcphub) | MCP gateway that exposes Cortex as the default agent interface |
 
 ## Documentation
 
 Full documentation is published at **[cortexai.tools](https://cortexai.tools)**; its isolated
-VitePress source lives in [`docs/`](./docs) and runs locally with `task docs`. The design
-specification is in [`SPEC.md`](./SPEC.md); architecture and contributor guidance in
-[`AGENTS.md`](./AGENTS.md).
+VitePress source lives in [`docs/`](./docs) and runs locally with `task docs`. Architecture,
+behavior, and contributor guidance live in [`AGENTS.md`](./AGENTS.md).
 
 ## Status
 
-**v0.11.0.** The kernel, all three surfaces (CLI + MCP + Studio), the
+**v0.12.0.** The kernel, all three surfaces (CLI + MCP + Studio), the
 adapter suite, case-file coordination, redaction, scope-drift detection, and revision-bound
 verification policy are implemented and tested. `task eval` also prints a paired
 Cortex-versus-unassisted calibration scorecard; its deterministic fixtures validate the
 measurement model, not an empirical product claim. See `CHANGELOG.md` for the current release
-scope and `SPEC.md` §18 for the evaluation contract.
+scope and `internal/eval` for the executable evaluation contract.
 
 ## License
 

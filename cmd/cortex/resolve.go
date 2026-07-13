@@ -13,7 +13,7 @@ var resolveCmd = &cobra.Command{
 	Long: `Resolve a hypothesis without erasing history. As investigation and
 verification produce evidence, mark a hypothesis confirmed, challenged, or
 rejected — the prior state is retained and the resolution is appended to the
-evidence ledger with your reason (SPEC §9.3 contradiction handling).
+evidence ledger with your reason.
 
   cortex resolve task_06FK… hyp_06FK… --status rejected \
     --reason "the browser flow returned to checkout, so returnTo was NOT dropped"`,

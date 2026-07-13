@@ -75,10 +75,18 @@ func structuredNextForCaseAt(c *domain.CaseFile, now time.Time, assessments ...V
 		if c.Mode == domain.ModeChange {
 			planInputs = append(planInputs, "files")
 		}
-		return []domain.NextAction{
-			{Tool: "cortex_investigate", Command: cortexCommand(c, "investigate", c.ID), Reason: "gather evidence before choosing a change", Arguments: args(), Inputs: []string{"question"}},
-			{Tool: "cortex_plan", Command: cortexCommand(c, "plan", c.ID), Reason: "declare hypotheses, disproof paths, boundary, and verification", Arguments: args(), Inputs: planInputs},
+		investigate := domain.NextAction{
+			Tool: "cortex_investigate", Command: cortexCommand(c, "investigate", c.ID),
+			Reason: "gather evidence before choosing a change", Arguments: args(), Inputs: []string{"question"},
 		}
+		plan := domain.NextAction{
+			Tool: "cortex_plan", Command: cortexCommand(c, "plan", c.ID),
+			Reason: "declare hypotheses, disproof paths, boundary, and verification", Arguments: args(), Inputs: planInputs,
+		}
+		if c.InvestigationRounds > 0 {
+			return []domain.NextAction{plan, investigate}
+		}
+		return []domain.NextAction{investigate, plan}
 	case domain.PhasePlanned:
 		if c.Mode == domain.ModeChange {
 			return []domain.NextAction{beginChange("claim the bounded change before editing")}
@@ -196,7 +204,7 @@ func (k *Kernel) attachStructuredActions(env *domain.Envelope, c *domain.CaseFil
 				}
 				receipts, _ = verificationReceiptsAtRevision(receipts, current, revisionErr)
 			}
-			actions = structuredNextForCaseAt(c, k.now().UTC(), assessVerification(c.VerificationRequired, receipts))
+			actions = structuredNextForCaseAt(c, k.now().UTC(), assessCaseVerification(c, receipts))
 		}
 	}
 	if c != nil {

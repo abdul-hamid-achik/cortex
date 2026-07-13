@@ -132,8 +132,8 @@ never masquerade as a clean pass later.
 
 ### My high-risk change threw an extra warning at verify. Bug?
 
-No — that's `--risk high` working as intended. High-risk changes must clear a stricter bar
-(SPEC §13.3): a structural diff review that actually *passed*. If codemap isn't indexed the review
+No — that's `--risk high` working as intended. High-risk changes must clear a stricter bar: a
+structural diff review that actually *passed*. If codemap isn't indexed the review
 is inconclusive, and Cortex says so rather than waving the change through. Index codemap and
 re-verify, or lower the risk band if it was overstated.
 
@@ -178,9 +178,16 @@ via `.cortex/.gitignore`. See [The case file](/case-file) and [Configuration](/c
 
 ### Does Cortex send my code anywhere?
 
-The kernel itself is local — it orchestrates local tools and writes local files. What leaves your
-machine is whatever the *model* and the *tools you configured* send (your LLM harness, or a tool
-that calls a remote service). Cortex adds no network calls of its own.
+Cortex does not upload your repository by default: the kernel orchestrates local tools and writes
+local case files. One optional exception is cross-case recall. When recall is enabled and Veclite
+is available, the adapter sends redacted goal, hypothesis, and resolution text to the configured
+`recall.embed_url` to obtain embeddings. Recall queries and indexed verification statements also
+use that endpoint. The default endpoint is local Ollama at
+`http://localhost:11434`; if you configure a remote endpoint, that text leaves your machine.
+Set `recall.enabled: false` to disable this call, or keep `embed_url` on a trusted local endpoint.
+
+Your LLM harness and any other configured specialist tools may have their own network behavior;
+review those separately.
 
 ### How does the secret-safety story work?
 
@@ -228,9 +235,10 @@ on the code surface. See
 
 ### Which agent harnesses does Cortex work with?
 
-Anything that speaks MCP. Register the server once with mcphub and every harness behind the gateway
-sees it — this project is wired for **codex, claude, omp, opencode, hermes, and copilot.** `omp`
-(oh-my-phi) inherits claude's config, so it needs no separate setup. Register with:
+Any harness that supports stdio MCP can use Cortex; the kernel and result contract are independent
+of the model provider. Cortex tests its MCP schemas in memory and through a real stdio subprocess,
+but individual client configuration still varies. Register the server once with mcphub to expose
+the same profile to every harness behind that gateway:
 
 ```bash
 mcphub add cortex cortex serve
@@ -238,7 +246,8 @@ mcphub sync --write
 ```
 
 In gateway mode the tools are namespaced `cortex__<tool>`. Details and recommended tool pins are in
-[MCP](/mcp).
+[MCP](/mcp). Run `cortex doctor --probe` to verify the live registration and handshake instead of
+assuming a particular client is configured correctly.
 
 ### Can I investigate a bug from a screen recording?
 

@@ -41,7 +41,7 @@ func (a slowHealthAdapter) Health(context.Context) error {
 }
 
 func TestRegistryHealthBounded(t *testing.T) {
-	// SPEC §7.3 max_parallel_calls: the health fan-out must not exceed the bound.
+	// The health fan-out must not exceed max_parallel_calls.
 	var cur, peak int32
 	var as []Adapter
 	for i := 0; i < 8; i++ {
@@ -56,7 +56,7 @@ func TestRegistryHealthBounded(t *testing.T) {
 }
 
 func TestRegistryThreadsRetryBudget(t *testing.T) {
-	// SPEC §17.3: the budget threads into every adapter that shells out.
+	// The retry budget threads into every adapter that shells out.
 	r := NewRegistry(NewCodemap(), NewVecgrep())
 	r.SetMaxAutoRetries(0)
 	if cm := r.Get("codemap").(*Codemap); cm.retries != 0 {
@@ -162,7 +162,7 @@ func (c *countingRunner) run(context.Context, string, string, ...string) ([]byte
 }
 
 func TestExecRetriesReadOnlyOnce(t *testing.T) {
-	// SPEC §17.3: a read-only query retries once on a transient failure.
+	// A read-only query retries once on a transient failure.
 	r := &countingRunner{failFirst: 1, stdout: "ok"}
 	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 1}
 	out, _, _, err := tl.exec(context.Background(), "", "x")
@@ -188,7 +188,7 @@ func TestExecOnceDoesNotRetry(t *testing.T) {
 }
 
 func TestExecHonorsRetryBudgetZero(t *testing.T) {
-	// SPEC §17.3: a budget of 0 disables automatic retry.
+	// A budget of 0 disables automatic retry.
 	r := &countingRunner{failFirst: 1, stdout: "ok"}
 	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 0}
 	if _, _, _, err := tl.exec(context.Background(), "", "x"); err == nil {
@@ -200,7 +200,7 @@ func TestExecHonorsRetryBudgetZero(t *testing.T) {
 }
 
 func TestExecHonorsLargerRetryBudget(t *testing.T) {
-	// SPEC §17.3: a larger budget retries until success within the budget.
+	// A larger budget retries until success within the budget.
 	r := &countingRunner{failFirst: 2, stdout: "ok"}
 	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 2}
 	out, _, _, err := tl.exec(context.Background(), "", "x")
@@ -213,7 +213,7 @@ func TestExecHonorsLargerRetryBudget(t *testing.T) {
 }
 
 func TestExecFinalFailureRecordsAttemptsAndCause(t *testing.T) {
-	// SPEC §17.3: a still-failing call reports attempt count + final cause.
+	// A still-failing call reports attempt count and the final cause.
 	r := &countingRunner{failFirst: 99, stdout: "ok"}
 	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 1}
 	_, _, _, err := tl.exec(context.Background(), "", "x")
@@ -240,7 +240,7 @@ func (e *exitRunner) run(context.Context, string, string, ...string) ([]byte, []
 }
 
 func TestExecNeverRetriesNonZeroExit(t *testing.T) {
-	// SPEC §17.3: a non-zero exit is data — never replayed.
+	// A non-zero exit is data — never replayed.
 	r := &exitRunner{}
 	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 3}
 	out, _, exit, err := tl.exec(context.Background(), "", "x")
@@ -253,7 +253,7 @@ func TestExecNeverRetriesNonZeroExit(t *testing.T) {
 }
 
 func TestExecDoesNotRetryAfterCallerCancel(t *testing.T) {
-	// SPEC §17.3: a pre-cancelled caller context is not retried.
+	// A pre-cancelled caller context is not retried.
 	r := &countingRunner{failFirst: 99, stdout: "ok"}
 	tl := tool{bin: "git", run: r, redact: redact.New(), retries: 3}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -267,7 +267,7 @@ func TestExecDoesNotRetryAfterCallerCancel(t *testing.T) {
 }
 
 func TestExecReturnsFullOutputForParsing(t *testing.T) {
-	// The SPEC §7.3 raw cap bounds only the raw *stored* for the case file — it
+	// The raw cap bounds only the raw *stored* for the case file — it
 	// must NOT truncate the string the adapter parses, or valid-but-large JSON
 	// would be corrupted into an unparseable blob. exec returns the full output
 	// (bounded only by the 4 MiB memory backstop, applied by the real runner).

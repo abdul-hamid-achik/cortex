@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,32 @@ func TestSessionStaleSince(t *testing.T) {
 	}
 	if old.StaleSince(now, 0) {
 		t.Error("a zero age disables the stale check")
+	}
+}
+
+func TestSessionQueryMatchesTokensAcrossFields(t *testing.T) {
+	session := SessionSummary{
+		ID: "task_ABC123", Goal: "Repair Redirect Contract", Phase: domain.PhasePlanned,
+		Mode: domain.ModeChange, Repository: "Billing API", Workspace: "/work/services/payments",
+		Slug: "billing-api", VerificationOutcome: VerificationPartial,
+	}
+	for _, query := range []string{
+		"", "   ", "TASK_abc123", "redirect", "PLANNED change", "billing partial", "services payments",
+	} {
+		if !sessionMatchesQuery(session, query) {
+			t.Errorf("query %q should match %+v", query, session)
+		}
+	}
+	for _, query := range []string{"billing complete", "redirect investigate", "other-repo"} {
+		if sessionMatchesQuery(session, query) {
+			t.Errorf("query %q should not match %+v", query, session)
+		}
+	}
+}
+
+func TestSessionQueryRejectsUnboundedInput(t *testing.T) {
+	if _, err := allSessionsIn(t.TempDir(), SessionFilter{Query: strings.Repeat("q", MaxSessionQueryBytes+1)}); err == nil {
+		t.Fatal("oversized session query should fail before walking the session tree")
 	}
 }
 
@@ -110,6 +137,23 @@ func TestAllSessionsCrossWorkspace(t *testing.T) {
 	}
 	if len(only) != 1 || only[0].Slug != "alpha" {
 		t.Fatalf("repo filter should return only alpha, got %+v", only)
+	}
+
+	// Query tokens compose with repository and active filters, and match across
+	// separate summary fields without becoming case-sensitive.
+	searched, err := AllSessions(SessionFilter{Repo: "alpha", ActiveOnly: true, Query: "ALPHA redirect investigating"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(searched) != 1 || searched[0].Slug != "alpha" {
+		t.Fatalf("composed session query should return only alpha, got %+v", searched)
+	}
+	missing, err := AllSessions(SessionFilter{Query: "alpha beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("AND-token query should reject sessions missing a token, got %+v", missing)
 	}
 }
 

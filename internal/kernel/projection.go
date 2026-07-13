@@ -23,6 +23,10 @@ func redactSessionView(view *SessionView) {
 	c.Workspace.Branch = r.String(c.Workspace.Branch)
 	c.Workspace.BaseRef = r.String(c.Workspace.BaseRef)
 	c.Notes = redactSlice(r, c.Notes)
+	for i := range c.AcceptanceCriteria {
+		c.AcceptanceCriteria[i].ID = r.String(c.AcceptanceCriteria[i].ID)
+		c.AcceptanceCriteria[i].Statement = r.String(c.AcceptanceCriteria[i].Statement)
+	}
 	redactBoundary(r, &c.ChangeBoundary)
 	if view.Plan != nil {
 		view.Plan.Uncertainty = r.String(view.Plan.Uncertainty)
@@ -52,6 +56,8 @@ func redactSessionView(view *SessionView) {
 		redactDecision(r, &view.Decisions[i])
 	}
 	view.VerificationAssessment.MissingRequired = redactSlice(r, view.VerificationAssessment.MissingRequired)
+	view.VerificationAssessment.SatisfiedCriteria = redactSlice(r, view.VerificationAssessment.SatisfiedCriteria)
+	view.VerificationAssessment.MissingCriteria = redactSlice(r, view.VerificationAssessment.MissingCriteria)
 	view.VerificationAssessment.NonPassingClaims = redactSlice(r, view.VerificationAssessment.NonPassingClaims)
 	view.VerificationAssessment.FailedClaims = redactSlice(r, view.VerificationAssessment.FailedClaims)
 	view.StaleVerification = redactSlice(r, view.StaleVerification)

@@ -9,7 +9,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
 
-// StatusReport is the detailed view of a task's health (SPEC §10.2 cortex_status).
+// StatusReport is the detailed view of a task's health.
 type StatusReport struct {
 	domain.Envelope
 	Revision             uint64                  `json:"revision"`
@@ -27,6 +27,11 @@ type StatusReport struct {
 	VerificationRequired []string                `json:"verificationRequired,omitempty"`
 	VerificationDone     []string                `json:"verificationDone,omitempty"`
 	VerificationOutcome  VerificationOutcome     `json:"verificationOutcome"`
+	SatisfiedCriteria    []string                `json:"satisfiedCriteria,omitempty"`
+	MissingCriteria      []string                `json:"missingCriteria,omitempty"`
+	ClaimProofs          []ClaimProof            `json:"claimProofs,omitempty"`
+	ClaimProofTotal      int                     `json:"claimProofTotal"`
+	ClaimProofsTruncated bool                    `json:"claimProofsTruncated,omitempty"`
 	StaleVerification    []string                `json:"staleVerification,omitempty"`
 	MissingVerification  []string                `json:"missingVerification,omitempty"`
 	Scope                *ScopeReport            `json:"scope,omitempty"`
@@ -37,7 +42,7 @@ type StatusReport struct {
 }
 
 // Status returns the task phase, unresolved hypotheses, scope drift, required
-// verification, and tool health (SPEC §10.2 cortex_status).
+// verification, and tool health.
 func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusReport, error) {
 	detail = strings.ToLower(strings.TrimSpace(detail))
 	if detail == "" {
@@ -90,7 +95,7 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 		}
 	}
 
-	// Required vs done verification (SPEC acceptance: status detects missing
+	// Required vs done verification (status detects missing
 	// verification). Only fresh receipts participate in the canonical assessment.
 	freshReceipts, staleReceipts := verificationReceiptsAtRevision(receipts, currentRev, revErr)
 	for _, r := range staleReceipts {
@@ -101,18 +106,26 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 			rep.VerificationDone = append(rep.VerificationDone, r.Claim)
 		}
 	}
-	assessment := assessVerification(c.VerificationRequired, freshReceipts)
+	assessment := assessCaseVerification(c, freshReceipts)
 	rep.VerificationOutcome = assessment.Outcome
 	rep.MissingVerification = assessment.MissingRequired
+	rep.SatisfiedCriteria = assessment.SatisfiedCriteria
+	rep.MissingCriteria = assessment.MissingCriteria
+	rep.ClaimProofs, rep.ClaimProofTotal = claimProofsForCase(c.ID, c, freshReceipts)
+	rep.ClaimProofsTruncated = rep.ClaimProofTotal > len(rep.ClaimProofs)
 	rep.Actions = hydrateDecisionActions(c, structuredNextForCaseAt(c, k.now().UTC(), assessment), decisions)
 
 	// Scope drift for in-flight change tasks.
 	if c.Mode == domain.ModeChange && (c.Status == domain.PhaseChanging || c.Status == domain.PhaseVerifying) && k.git != nil {
-		changed, _ := k.git.ChangedFiles(ctx, k.cfg.Workspace, c.Workspace.BaseRef, false)
-		sr := k.detectScopeDrift(ctx, c, changed)
-		rep.Scope = &sr
-		if sr.Scope == "drift_detected" {
-			rep.Warnings = append(rep.Warnings, "scope drift detected — see scope.unexpectedFiles")
+		changed, changedErr := k.git.ChangedFiles(ctx, k.cfg.Workspace, c.Workspace.BaseRef, false)
+		if changedErr != nil {
+			rep.Warnings = append(rep.Warnings, "could not evaluate scope drift: "+changedErr.Error())
+		} else {
+			sr := k.detectScopeDrift(ctx, c, changed)
+			rep.Scope = &sr
+			if sr.Scope == "drift_detected" {
+				rep.Warnings = append(rep.Warnings, "scope drift detected — see scope.unexpectedFiles")
+			}
 		}
 	}
 
@@ -122,6 +135,21 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 
 	if len(rep.MissingVerification) > 0 && c.Status != domain.PhaseComplete {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d required verification(s) still missing", len(rep.MissingVerification)))
+	}
+	if len(rep.MissingCriteria) > 0 && c.Status != domain.PhaseComplete {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d registered acceptance criterion/criteria still lack current bound proof", len(rep.MissingCriteria)))
+	}
+	if rep.ClaimProofsTruncated {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("claim proofs bounded to %d of %d current stable claim ids", len(rep.ClaimProofs), rep.ClaimProofTotal))
+	}
+	sensitiveProofs := 0
+	for _, proof := range rep.ClaimProofs {
+		if proof.SensitiveRefsOmitted {
+			sensitiveProofs++
+		}
+	}
+	if sensitiveProofs > 0 {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("sensitive evidence references omitted from %d claim proof(s)", sensitiveProofs))
 	}
 	if len(assessment.FailedClaims) > 0 {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d current named claim(s) failed", len(assessment.FailedClaims)))
@@ -158,6 +186,18 @@ func (k *Kernel) redactStatusReport(rep *StatusReport) {
 	rep.VerificationDone = k.redactStrings(rep.VerificationDone)
 	rep.StaleVerification = k.redactStrings(rep.StaleVerification)
 	rep.MissingVerification = k.redactStrings(rep.MissingVerification)
+	rep.SatisfiedCriteria = k.redactStrings(rep.SatisfiedCriteria)
+	rep.MissingCriteria = k.redactStrings(rep.MissingCriteria)
+	for i := range rep.ClaimProofs {
+		proof := &rep.ClaimProofs[i]
+		proof.ClaimID = k.red.String(proof.ClaimID)
+		proof.Statement = k.red.String(proof.Statement)
+		proof.ReceiptID = k.red.String(proof.ReceiptID)
+		proof.BatchID = k.red.String(proof.BatchID)
+		proof.Revision = k.red.String(proof.Revision)
+		proof.DirtyDigest = k.red.String(proof.DirtyDigest)
+		proof.Evidence = k.redactStrings(proof.Evidence)
+	}
 	redactDecision(k.red, rep.PendingDecision)
 	rep.Warnings = k.redactStrings(rep.Warnings)
 	rep.NextActions = k.redactStrings(rep.NextActions)
@@ -236,8 +276,7 @@ func nextForPhase(p domain.Phase) []string {
 	}
 }
 
-// AbortTask stops the active task without deleting evidence (SPEC §10.2
-// cortex_abort_task). A reason is required.
+// AbortTask stops the active task without deleting evidence. A reason is required.
 func (k *Kernel) AbortTask(taskID, reason string) (domain.Envelope, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -267,7 +306,7 @@ func (k *Kernel) AbortTask(taskID, reason string) (domain.Envelope, error) {
 		Summary: "task aborted: " + reason, RawAvailable: false}, nil
 }
 
-// ReadEvidence returns a full evidence record (SPEC §10.4 raw retrieval).
+// ReadEvidence returns a full evidence record, including raw retrieval metadata.
 func (k *Kernel) ReadEvidence(taskID, evidenceID string) (domain.Evidence, error) {
 	evidence, err := k.store.GetEvidence(taskID, evidenceID)
 	if err != nil {

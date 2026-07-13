@@ -54,7 +54,7 @@ func (c Config) Sources() []string { return c.sources }
 
 // load layers configuration onto cfg from files then environment. Precedence,
 // lowest to highest: built-in defaults → global → project .config → project
-// root cortex.yml/.yaml → CORTEX_* env vars (SPEC §27 config precedence).
+// root cortex.yml/.yaml → CORTEX_* env vars.
 func load(cfg *Config) {
 	for _, p := range searchPaths(cfg.Workspace) {
 		fc, found, err := readConfigFile(p)

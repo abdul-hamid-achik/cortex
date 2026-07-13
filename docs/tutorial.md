@@ -23,8 +23,8 @@ go install github.com/abdul-hamid-achik/cortex/cmd/cortex@latest
 # or, from a clone: task build  →  ./bin/cortex
 ```
 
-Cortex composes specialist tools (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault, vidtrace)
-but **none are required**. Check what you have:
+Cortex composes specialist tools (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault, vidtrace,
+veclite), but **none are required**. Check what you have:
 
 ```bash
 cortex doctor
@@ -75,7 +75,8 @@ use the degraded branch in step 5 rather than treating an unavailable review as 
 ```bash
 cortex open "Fix post-login checkout redirect" \
   --surface code --risk low \
-  --actor tutorial-agent --idempotency-key tutorial-oauth-redirect
+  --actor tutorial-agent --idempotency-key tutorial-oauth-redirect \
+  --criterion 'return_to_preserved=HandleCallback returns state.ReturnTo when it is present'
 ```
 
 ```ansi
@@ -104,6 +105,8 @@ A few things just happened:
   you already have enough evidence, the kernel permits a valid plan while the case is in this phase.
 - `--surface code` declares the proof surface used by this small demo. A real checkout application
   should also declare `--surface browser` and verify the redirect with a real Cairntrace flow.
+- `--criterion` makes success explicit and immutable. Retrying this idempotency key with a different
+  criterion is rejected; verification must reuse both the ID and exact statement.
 
 ::: info Save the id in a shell variable
 Every command below takes the task id. To follow along:
@@ -207,6 +210,7 @@ the actor must match the active lease:
 ```bash
 cortex verify $TID \
   --claim "HandleCallback returns state.ReturnTo when it is present" \
+  --claim-id return_to_preserved \
   --claim-surface code \
   --claim-verifier codemap \
   --claim-contract codemap_review \

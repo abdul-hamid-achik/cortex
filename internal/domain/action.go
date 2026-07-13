@@ -1,6 +1,6 @@
 package domain
 
-// ActionClass classifies an operation by its side-effect risk (SPEC §16.3). The
+// ActionClass classifies an operation by its side-effect risk. The
 // class drives the approval policy: read-only and local-mutation run freely
 // within an active task, while external mutation and secret-backed execution
 // require an explicit decision.
@@ -14,10 +14,10 @@ const (
 	// an fcheap stash, a codemap annotation.
 	ActionLocalMutation ActionClass = "local_mutation"
 	// ActionExternalMutation writes to a remote/outside system: send, deploy,
-	// publish, push. Requires explicit approval (SPEC §16.2 #4).
+	// publish, push. Requires explicit approval.
 	ActionExternalMutation ActionClass = "external_mutation"
 	// ActionSecretedExecution runs with injected secrets (authenticated
-	// integration). Requires a secrets capability and redaction (SPEC §16.3).
+	// integration). Requires a secrets capability and redaction.
 	ActionSecretedExecution ActionClass = "secreted_execution"
 	// ActionConfiguredExecution runs repository-configured argv. Even a command
 	// described as a test or lint check is arbitrary local code and may access
@@ -29,7 +29,7 @@ const (
 // Mutating reports whether the class changes state (anything but read-only).
 func (c ActionClass) Mutating() bool { return c != ActionReadOnly }
 
-// ClassifyOp maps a downstream tool operation to its action class (SPEC §16.3).
+// ClassifyOp maps a downstream tool operation to its action class.
 // Unknown operations default to read-only — the safe assumption for a query
 // layer, since Cortex's only writes are the explicitly-classed local ones.
 func ClassifyOp(tool, op string) ActionClass {

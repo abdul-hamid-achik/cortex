@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/abdul-hamid-achik/cortex/internal/config"
@@ -28,8 +29,9 @@ user-visible behavior. Follow the actions returned in each JSON result; they are
 continuations, while the inputs field lists values you must still supply.
 
 1. cortex_open_task — preferred entry point: retry-safe resume-or-start for a goal. Supply an
-   idempotencyKey when a lost response may be retried. Use cortex_start_task only when you
-   deliberately want a fresh case.
+   idempotencyKey when a lost response may be retried. When success rules are already known,
+   register acceptanceCriteria and later verify each with the same claim id and exact statement.
+   Use cortex_start_task only when you deliberately want a fresh case.
 2. cortex_investigate — route a question through discovery then structure and retain evidence
    IDs. Treat search output as candidates, NOT proof.
 3. cortex_plan — before editing, state hypotheses WITH disproof paths, uncertainty, a change
@@ -37,7 +39,8 @@ continuations, while the inputs field lists values you must still supply.
 4. cortex_begin_change — for a planned change, name a stable actor, claim the bounded lease,
    then edit only within the declared boundary. Same-actor retries are safe.
 5. cortex_verify — after editing, pass the lease actor and prefer typed claimSpecs with explicit
-   surfaces and exact contracts. Cortex runs relevant verifiers, detects scope drift, and records
+   surfaces and exact contracts. Reuse registered acceptance-criterion ids/statements exactly.
+   Cortex runs relevant verifiers, detects scope drift, and records
    receipts; a claim with no verifier is not_run, never passed. Repository-configured commands run
    only when the trusted launcher set CORTEX_APPROVE_COMMANDS=1; otherwise they are blocked.
 6. cortex_remember — persist the outcome. Normal completion requires the canonical assessment to
@@ -56,6 +59,7 @@ archive controls. Never request or expose secret values — Cortex checks capabi
 type Server struct {
 	defaultWorkspace string
 	profile          Profile
+	envelopeSchema   *jsonschema.Schema
 	srv              *sdkmcp.Server
 }
 
@@ -84,7 +88,11 @@ func NewServerWithProfile(defaultWorkspace, rawProfile string) (*Server, error) 
 	if profile != ProfileAgent && profile != ProfileAll {
 		return nil, fmt.Errorf("profile must be agent or all")
 	}
-	s := &Server{defaultWorkspace: defaultWorkspace, profile: profile}
+	envelopeSchema, err := jsonschema.For[domain.Envelope](&jsonschema.ForOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("build envelope output schema: %w", err)
+	}
+	s := &Server{defaultWorkspace: defaultWorkspace, profile: profile, envelopeSchema: envelopeSchema}
 	s.srv = sdkmcp.NewServer(
 		&sdkmcp.Implementation{Name: "cortex", Version: version.Version},
 		&sdkmcp.ServerOptions{Instructions: instructions},
@@ -114,22 +122,29 @@ func (s *Server) kernelFor(workspace string) (*kernel.Kernel, error) {
 // ---- tool inputs ----
 
 type startInput struct {
-	Goal      string   `json:"goal" jsonschema:"the engineering goal for this task"`
-	Workspace string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
-	Mode      string   `json:"mode,omitempty" jsonschema:"change | investigate | review (default change)"`
-	Surfaces  []string `json:"surfaces,omitempty" jsonschema:"user-visible surfaces: code, browser, terminal, artifact, secret"`
-	Risk      string   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
+	Goal               string                   `json:"goal" jsonschema:"the engineering goal for this task"`
+	Workspace          string                   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	Mode               string                   `json:"mode,omitempty" jsonschema:"change | investigate | review (default change)"`
+	Surfaces           []string                 `json:"surfaces,omitempty" jsonschema:"user-visible surfaces: code, browser, terminal, artifact, secret"`
+	Risk               string                   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
+	AcceptanceCriteria []acceptanceCriterionArg `json:"acceptanceCriteria,omitempty" jsonschema:"optional immutable success contract; prove each criterion with a claimSpec using the same id and exact statement"`
 }
 
 type openTaskInput struct {
-	Goal           string   `json:"goal" jsonschema:"the engineering goal to resume or start"`
-	Workspace      string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
-	Mode           string   `json:"mode,omitempty" jsonschema:"change | investigate | review (default change)"`
-	Surfaces       []string `json:"surfaces,omitempty" jsonschema:"user-visible surfaces: code, browser, terminal, artifact, secret"`
-	Risk           string   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
-	Actor          string   `json:"actor,omitempty" jsonschema:"stable non-secret person or agent identifier"`
-	ParentTaskID   string   `json:"parentTaskId,omitempty" jsonschema:"parent case when this task was delegated"`
-	IdempotencyKey string   `json:"idempotencyKey,omitempty" jsonschema:"stable retry key; exact matches return the existing task even after completion"`
+	Goal               string                   `json:"goal" jsonschema:"the engineering goal to resume or start"`
+	Workspace          string                   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	Mode               string                   `json:"mode,omitempty" jsonschema:"change | investigate | review (default change)"`
+	Surfaces           []string                 `json:"surfaces,omitempty" jsonschema:"user-visible surfaces: code, browser, terminal, artifact, secret"`
+	Risk               string                   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
+	Actor              string                   `json:"actor,omitempty" jsonschema:"stable non-secret person or agent identifier"`
+	ParentTaskID       string                   `json:"parentTaskId,omitempty" jsonschema:"parent case when this task was delegated"`
+	IdempotencyKey     string                   `json:"idempotencyKey,omitempty" jsonschema:"stable retry key; exact matches return the existing task even after completion"`
+	AcceptanceCriteria []acceptanceCriterionArg `json:"acceptanceCriteria,omitempty" jsonschema:"optional immutable success contract; retries and automatic resume must supply the same criteria"`
+}
+
+type acceptanceCriterionArg struct {
+	ID        string `json:"id" jsonschema:"stable non-secret criterion id; use the same id in verify.claimSpecs"`
+	Statement string `json:"statement" jsonschema:"the exact success statement that verification must prove"`
 }
 
 type beginChangeInput struct {
@@ -163,7 +178,7 @@ type planInput struct {
 	BoundaryReason   string            `json:"boundaryReason,omitempty" jsonschema:"why these files/symbols are the expected change set"`
 	Verification     []string          `json:"verification,omitempty" jsonschema:"required verifiers (e.g. codemap_review, cairntrace_flow)"`
 	Uncertainty      string            `json:"uncertainty" jsonschema:"explicit statement of what remains uncertain (required)"`
-	TimeoutOverrides map[string]string `json:"timeoutOverrides,omitempty" jsonschema:"per-task timeout override as tool→duration (e.g. {\"codemap\":\"45s\"}) — written to the case file (SPEC §17.2)"`
+	TimeoutOverrides map[string]string `json:"timeoutOverrides,omitempty" jsonschema:"per-task timeout override as tool→duration (e.g. {\"codemap\":\"45s\"}) — written to the case file"`
 	Workspace        string            `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -207,6 +222,7 @@ type listTasksInput struct {
 type sessionsInput struct {
 	Repo   string `json:"repo,omitempty" jsonschema:"only sessions whose repository or slug contains this substring"`
 	Active bool   `json:"active,omitempty" jsonschema:"only in-flight (non-terminal) sessions"`
+	Query  string `json:"query,omitempty" jsonschema:"case-insensitive AND search across task id, goal, phase, mode, repository, workspace, and verification outcome"`
 }
 
 type timelineInput struct {
@@ -314,105 +330,110 @@ type recallCasesInput struct {
 	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
-func (s *Server) register() {
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_start_task",
-		Description: "Create a case file for a non-trivial engineering task and perform lightweight orientation (git identity + tool health). Returns the task ID and the recommended next action.",
-	}, s.handleStart)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_open_task",
-		Description: "Idempotently resume matching work or start it once. An idempotencyKey survives response loss; otherwise the newest active case with the same normalized goal, mode, workspace, and branch is resumed.",
-	}, s.handleOpen)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_investigate",
-		Description: "Route a question through discovery (vecgrep) then structure (codemap), record the returned evidence with provenance, and return a bounded summary. Search output is recorded as candidates, not proof.",
-	}, s.handleInvestigate)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_plan",
-		Description: "The planning gate. Store hypotheses (each REQUIRES a disproof path), a change boundary (files/symbols), and a verification plan. Rejects plans with no disproof path or (for change tasks) no boundary. Not a code generator.",
-	}, s.handlePlan)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_begin_change",
-		Description: "After planning and before editing, atomically claim a bounded change lease and enter changing. Competing actors are rejected; the same owner may safely retry.",
-	}, s.handleBeginChange)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_verify",
-		Description: "Run verification after editing, passing actor when a change lease is active. Prefer typed claimSpecs with an explicit surface and exact contract (verifier may default from surface). Repository-configured commands require trusted-launcher CORTEX_APPROVE_COMMANDS=1 or produce blocked receipts. Runs relevant checks and scope-drift detection; an unverified claim is never passed.",
-	}, s.handleVerify)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_remember",
-		Description: "Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome.",
-	}, s.handleRemember)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_status",
-		Description: "Report a task's phase, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health.",
-	}, s.handleStatus)
-	if s.profile == ProfileAll {
-		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-			Name:        "cortex_list_tasks",
-			Description: "List all tasks in the workspace (newest first): id, goal, phase, repository, createdAt.",
-		}, s.handleListTasks)
-		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-			Name:        "cortex_sessions",
-			Description: "List Cortex sessions across EVERY repository (the central XDG audit view), newest first: id, goal, phase, mode, repository, slug, verified/required verification counts, active flag, timestamps. Workspace-independent — use it to see everything you have open or left unfinished anywhere. Filter with repo (substring) and active (in-flight only).",
-		}, s.handleSessions)
-		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-			Name:        "cortex_timeline",
-			Description: "Return a session's chronological activity feed — phase transitions, evidence, audited tool calls, and verification receipts merged and time-sorted. Located centrally by task ID; workspace is a fallback for repo-local/custom stores.",
-		}, s.handleTimeline)
-		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-			Name:        "cortex_metrics",
-			Description: "Observability metrics (SPEC §18): outcomes and the evidence trail, not tool-call volume. With taskId — that task's tool calls, calls-before-first-evidence, verification coverage, time-in-phase, and each tool's contribution. Without taskId — workspace aggregate (completion/verified rates, mean tools & time to complete).",
-		}, s.handleMetrics)
-		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-			Name:        "cortex_overview",
-			Description: "Cross-repository rollup of EVERY Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
-		}, s.handleOverview)
-		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-			Name:        "cortex_archive",
-			Description: "Archive a terminal (complete/abandoned/blocked) session — MOVE it out of the active tree to the archive (reversible via cortex_unarchive; nothing is deleted). Refuses in-flight sessions. Workspace-independent; located by task ID.",
-		}, s.handleArchive)
-		sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-			Name:        "cortex_unarchive",
-			Description: "Restore an archived session back into the active tree. Workspace-independent; located by task ID.",
-		}, s.handleUnarchive)
+// toolBehavior projects standard MCP safety and execution hints. These hints
+// let clients built around different models present consistent approval UX and
+// choose read-only tools without reverse-engineering Cortex's descriptions.
+// They complement kernel enforcement; clients must not treat them as policy.
+type toolBehavior struct {
+	readOnly       bool
+	additive       bool
+	idempotent     bool
+	openWorld      bool
+	sharedEnvelope bool
+}
+
+func (s *Server) tool(name, title, description string, behavior toolBehavior) *sdkmcp.Tool {
+	destructive := !behavior.readOnly && !behavior.additive
+	openWorld := behavior.openWorld
+	tool := &sdkmcp.Tool{
+		Name: name, Title: title, Description: description,
+		Annotations: &sdkmcp.ToolAnnotations{
+			Title: title, ReadOnlyHint: behavior.readOnly,
+			DestructiveHint: &destructive, IdempotentHint: behavior.idempotent,
+			OpenWorldHint: &openWorld,
+		},
 	}
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_resolve",
-		Description: "Update a hypothesis's status as evidence accumulates (confirmed/challenged/rejected). History is retained and the resolution is appended to the evidence ledger — this is how contradicting evidence is handled without silently overwriting a prior explanation.",
-	}, s.handleResolve)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_note",
-		Description: "Record redacted human, reviewer, or agent context as provenance-bearing human_report evidence. Notes can inform reasoning but can never satisfy verification by themselves.",
-	}, s.handleObservation)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_request_decision",
-		Description: "Pause an active case on one bounded human question with at least two explicit options and consequences. The case remains active in needs_human_decision and cannot advance until answered.",
-	}, s.handleRequestDecision)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_answer_decision",
-		Description: "Record a human-selected option and resume the exact phase that was paused. Set resume=true only to recover an answer persisted just before a process crash.",
-	}, s.handleAnswerDecision)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_handoff",
-		Description: "Return a bounded transfer packet with coordination metadata, current plan, hypotheses, recent evidence, current verifier/named-claim receipts, decisions, and executable actions. Workspace is a repo-local/custom-store fallback; raw output is excluded.",
-	}, s.handleHandoff)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_abort_task",
-		Description: "Stop the active task without deleting its evidence. Requires a reason.",
-	}, s.handleAbort)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_read_evidence",
-		Description: "Return a full evidence record by ID. When its rawRef contains /raw/, fetch that bounded detail with cortex_read_artifact; self-pointing human/decision evidence has no separate raw output.",
-	}, s.handleReadEvidence)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_read_artifact",
-		Description: "Return a bounded, redacted preview of a task-owned case rawRef or a fcheap stash already referenced by that task. path must be safe and relative; discovery is capped at 512 entries and 100 files. Binary is refused unless allowBinary is true.",
-	}, s.handleReadArtifact)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "cortex_recall_cases",
-		Description: "Recall prior resolved cases (rejected/challenged hypotheses and definitive receipts) related to a query, across repos or scoped to one. Returns low-confidence model_inference evidence — prior disproofs to read before re-deriving a theory. Best-effort: no veclite → empty, never an error.",
-	}, s.handleRecallCases)
+	if behavior.sharedEnvelope {
+		tool.OutputSchema = s.envelopeSchema
+	}
+	return tool
+}
+
+func (s *Server) register() {
+	sdkmcp.AddTool(s.srv, s.tool("cortex_start_task", "Start a fresh task",
+		"Create a case file for a non-trivial engineering task and perform lightweight orientation (git identity + tool health). acceptanceCriteria optionally registers an immutable success contract. Returns the task ID and the recommended next action.",
+		toolBehavior{additive: true, openWorld: true, sharedEnvelope: true}), s.handleStart)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_open_task", "Open or resume a task",
+		"Idempotently resume matching work or start it once. An idempotencyKey survives response loss; otherwise the newest active case with the same normalized goal, mode, workspace, branch, and acceptanceCriteria is resumed. acceptanceCriteria is an optional immutable success contract.",
+		toolBehavior{additive: true, idempotent: true, openWorld: true, sharedEnvelope: true}), s.handleOpen)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_investigate", "Investigate a task",
+		"Route a question through discovery (vecgrep) then structure (codemap), record the returned evidence with provenance, and return a bounded summary. Search output is recorded as candidates, not proof.",
+		toolBehavior{additive: true, openWorld: true, sharedEnvelope: true}), s.handleInvestigate)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_plan", "Plan a bounded change",
+		"The planning gate. Store hypotheses (each REQUIRES a disproof path), a change boundary (files/symbols), and a verification plan. Rejects plans with no disproof path or (for change tasks) no boundary. Not a code generator.",
+		toolBehavior{sharedEnvelope: true}), s.handlePlan)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_begin_change", "Begin a bounded change",
+		"After planning and before editing, atomically claim a bounded change lease and enter changing. Competing actors are rejected; the same owner may safely retry.",
+		toolBehavior{sharedEnvelope: true}), s.handleBeginChange)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_verify", "Verify task claims",
+		"Run verification after editing, passing actor when a change lease is active. Prefer typed claimSpecs with an explicit surface and exact contract (verifier may default from surface). Repository-configured commands require trusted-launcher CORTEX_APPROVE_COMMANDS=1 or produce blocked receipts. Runs relevant checks and scope-drift detection; an unverified claim is never passed.",
+		toolBehavior{openWorld: true, sharedEnvelope: true}), s.handleVerify)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_remember", "Preserve the task outcome",
+		"Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome.",
+		toolBehavior{idempotent: true, openWorld: true, sharedEnvelope: true}), s.handleRemember)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_status", "Read task status",
+		"Report a task's canonical verification outcome, bounded claimProofs for stable claim ids, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health.",
+		toolBehavior{readOnly: true, additive: true}), s.handleStatus)
+	if s.profile == ProfileAll {
+		sdkmcp.AddTool(s.srv, s.tool("cortex_list_tasks", "List workspace tasks",
+			"List all tasks in the workspace (newest first): id, goal, phase, repository, createdAt.",
+			toolBehavior{readOnly: true, additive: true}), s.handleListTasks)
+		sdkmcp.AddTool(s.srv, s.tool("cortex_sessions", "List all sessions",
+			"List Cortex sessions across EVERY repository (the central XDG audit view), newest first: id, goal, phase, mode, repository, slug, verified/required verification counts, active flag, timestamps. Workspace-independent — use it to see everything you have open or left unfinished anywhere. Filter with repo (substring), active (in-flight only), and query (case-insensitive AND terms across identity, goal, state, repo, workspace, and outcome).",
+			toolBehavior{readOnly: true, additive: true}), s.handleSessions)
+		sdkmcp.AddTool(s.srv, s.tool("cortex_timeline", "Read a session timeline",
+			"Return a session's chronological activity feed — phase transitions, evidence, audited tool calls, and verification receipts merged and time-sorted. Located centrally by task ID; workspace is a fallback for repo-local/custom stores.",
+			toolBehavior{readOnly: true, additive: true}), s.handleTimeline)
+		sdkmcp.AddTool(s.srv, s.tool("cortex_metrics", "Read task metrics",
+			"Observability metrics focused on outcomes and the evidence trail, not tool-call volume. With taskId — that task's tool calls, calls-before-first-evidence, verification coverage, time-in-phase, and each tool's contribution. Without taskId — workspace aggregate (completion/verified rates, mean tools & time to complete).",
+			toolBehavior{readOnly: true, additive: true}), s.handleMetrics)
+		sdkmcp.AddTool(s.srv, s.tool("cortex_overview", "Read the session overview",
+			"Cross-repository rollup of EVERY Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
+			toolBehavior{readOnly: true, additive: true}), s.handleOverview)
+		sdkmcp.AddTool(s.srv, s.tool("cortex_archive", "Archive a session",
+			"Archive a terminal (complete/abandoned/blocked) session — MOVE it out of the active tree to the archive (reversible via cortex_unarchive; nothing is deleted). Refuses in-flight sessions. Workspace-independent; located by task ID.",
+			toolBehavior{idempotent: true}), s.handleArchive)
+		sdkmcp.AddTool(s.srv, s.tool("cortex_unarchive", "Restore an archived session",
+			"Restore an archived session back into the active tree. Workspace-independent; located by task ID.",
+			toolBehavior{idempotent: true}), s.handleUnarchive)
+	}
+	sdkmcp.AddTool(s.srv, s.tool("cortex_resolve", "Resolve a hypothesis",
+		"Update a hypothesis's status as evidence accumulates (confirmed/challenged/rejected). History is retained and the resolution is appended to the evidence ledger — this is how contradicting evidence is handled without silently overwriting a prior explanation.",
+		toolBehavior{idempotent: true, openWorld: true, sharedEnvelope: true}), s.handleResolve)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_note", "Add a task note",
+		"Record redacted human, reviewer, or agent context as provenance-bearing human_report evidence. Notes can inform reasoning but can never satisfy verification by themselves.",
+		toolBehavior{additive: true, sharedEnvelope: true}), s.handleObservation)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_request_decision", "Request a human decision",
+		"Pause an active case on one bounded human question with at least two explicit options and consequences. The case remains active in needs_human_decision and cannot advance until answered.",
+		toolBehavior{idempotent: true, sharedEnvelope: true}), s.handleRequestDecision)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_answer_decision", "Answer a pending decision",
+		"Record a human-selected option and resume the exact phase that was paused. Set resume=true only to recover an answer persisted just before a process crash.",
+		toolBehavior{idempotent: true, sharedEnvelope: true}), s.handleAnswerDecision)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_handoff", "Read a task handoff",
+		"Return a bounded transfer packet with coordination metadata, current plan, hypotheses, recent evidence, current verifier/named-claim receipts, decisions, and executable actions. Workspace is a repo-local/custom-store fallback; raw output is excluded.",
+		toolBehavior{readOnly: true, additive: true}), s.handleHandoff)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_abort_task", "Abort a task",
+		"Stop the active task without deleting its evidence. Requires a reason.",
+		toolBehavior{idempotent: true, sharedEnvelope: true}), s.handleAbort)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_read_evidence", "Read evidence",
+		"Return a full evidence record by ID. When its rawRef contains /raw/, fetch that bounded detail with cortex_read_artifact; self-pointing human/decision evidence has no separate raw output.",
+		toolBehavior{readOnly: true, additive: true}), s.handleReadEvidence)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_read_artifact", "Preview an evidence artifact",
+		"Return a bounded, redacted preview of a task-owned case rawRef or a fcheap stash already referenced by that task. path must be safe and relative; discovery is capped at 512 entries and 100 files. Binary is refused unless allowBinary is true.",
+		toolBehavior{readOnly: true, additive: true}), s.handleReadArtifact)
+	sdkmcp.AddTool(s.srv, s.tool("cortex_recall_cases", "Recall related cases",
+		"Recall prior resolved cases (rejected/challenged hypotheses and definitive receipts) related to a query, across repos or scoped to one. Returns low-confidence model_inference evidence — prior disproofs to read before re-deriving a theory. Missing veclite returns an empty success; other recall failures return an error envelope.",
+		toolBehavior{readOnly: true, additive: true, openWorld: true, sharedEnvelope: true}), s.handleRecallCases)
 }
 
 // ---- handlers (thin: build kernel, call kernel, return JSON) ----
@@ -420,11 +441,12 @@ func (s *Server) register() {
 func (s *Server) handleStart(ctx context.Context, _ *sdkmcp.CallToolRequest, in startInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.StartTask(ctx, kernel.StartInput{
 		Goal: in.Goal, Mode: domain.Mode(in.Mode),
 		Surfaces: toSurfaces(in.Surfaces), Risk: in.Risk,
+		AcceptanceCriteria: toAcceptanceCriteria(in.AcceptanceCriteria),
 	})
 	return result(env, err)
 }
@@ -432,11 +454,12 @@ func (s *Server) handleStart(ctx context.Context, _ *sdkmcp.CallToolRequest, in 
 func (s *Server) handleOpen(ctx context.Context, _ *sdkmcp.CallToolRequest, in openTaskInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.OpenTask(ctx, kernel.OpenInput{StartInput: kernel.StartInput{
 		Goal: in.Goal, Mode: domain.Mode(in.Mode), Surfaces: toSurfaces(in.Surfaces), Risk: in.Risk,
 		Actor: in.Actor, ParentTaskID: in.ParentTaskID, IdempotencyKey: in.IdempotencyKey,
+		AcceptanceCriteria: toAcceptanceCriteria(in.AcceptanceCriteria),
 	}})
 	return result(env, err)
 }
@@ -444,7 +467,7 @@ func (s *Server) handleOpen(ctx context.Context, _ *sdkmcp.CallToolRequest, in o
 func (s *Server) handleInvestigate(ctx context.Context, _ *sdkmcp.CallToolRequest, in investigateInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.Investigate(ctx, kernel.InvestigateInput{
 		TaskID: in.TaskID, Question: in.Question, Surfaces: toSurfaces(in.Surfaces), Depth: in.Depth, Video: in.Video,
@@ -455,7 +478,7 @@ func (s *Server) handleInvestigate(ctx context.Context, _ *sdkmcp.CallToolReques
 func (s *Server) handlePlan(_ context.Context, _ *sdkmcp.CallToolRequest, in planInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	hyps := make([]kernel.HypothesisInput, 0, len(in.Hypotheses))
 	for _, h := range in.Hypotheses {
@@ -474,13 +497,13 @@ func (s *Server) handlePlan(_ context.Context, _ *sdkmcp.CallToolRequest, in pla
 func (s *Server) handleBeginChange(_ context.Context, _ *sdkmcp.CallToolRequest, in beginChangeInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	var ttl time.Duration
 	if in.TTL != "" {
 		ttl, err = time.ParseDuration(in.TTL)
 		if err != nil {
-			return result(nil, fmt.Errorf("invalid change lease ttl: %w", err))
+			return envelopeErrorResult(fmt.Errorf("invalid change lease ttl: %w", err))
 		}
 	}
 	env, err := k.BeginChange(kernel.BeginChangeInput{TaskID: in.TaskID, Actor: in.Actor, TTL: ttl})
@@ -490,7 +513,7 @@ func (s *Server) handleBeginChange(_ context.Context, _ *sdkmcp.CallToolRequest,
 func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in verifyInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	claimSpecs := make([]domain.VerificationClaim, 0, len(in.ClaimSpecs))
 	for _, claim := range in.ClaimSpecs {
@@ -513,7 +536,7 @@ func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, in rememberInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.Remember(ctx, kernel.RememberInput{
 		TaskID: in.TaskID, Outcome: in.Outcome, Importance: in.Importance,
@@ -537,7 +560,7 @@ func (s *Server) handleListTasks(_ context.Context, _ *sdkmcp.CallToolRequest, i
 
 func (s *Server) handleSessions(_ context.Context, _ *sdkmcp.CallToolRequest, in sessionsInput) (*sdkmcp.CallToolResult, any, error) {
 	// Workspace-independent: reads the global state tree, so no kernel is built.
-	sessions, err := kernel.AllSessions(kernel.SessionFilter{Repo: in.Repo, ActiveOnly: in.Active})
+	sessions, err := kernel.AllSessions(kernel.SessionFilter{Repo: in.Repo, ActiveOnly: in.Active, Query: in.Query})
 	return result(sessions, err)
 }
 
@@ -603,7 +626,7 @@ func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 func (s *Server) handleResolve(_ context.Context, _ *sdkmcp.CallToolRequest, in resolveInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.Resolve(kernel.ResolveInput{
 		TaskID: in.TaskID, HypothesisID: in.HypothesisID, Status: in.Status,
@@ -615,7 +638,7 @@ func (s *Server) handleResolve(_ context.Context, _ *sdkmcp.CallToolRequest, in 
 func (s *Server) handleObservation(_ context.Context, _ *sdkmcp.CallToolRequest, in observationInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.RecordObservation(kernel.ObservationInput{
 		TaskID: in.TaskID, Claim: in.Claim, Category: in.Category, Origin: in.Origin,
@@ -627,7 +650,7 @@ func (s *Server) handleObservation(_ context.Context, _ *sdkmcp.CallToolRequest,
 func (s *Server) handleRequestDecision(_ context.Context, _ *sdkmcp.CallToolRequest, in requestDecisionInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	options := make([]domain.DecisionOption, 0, len(in.Options))
 	for _, option := range in.Options {
@@ -642,7 +665,7 @@ func (s *Server) handleRequestDecision(_ context.Context, _ *sdkmcp.CallToolRequ
 func (s *Server) handleAnswerDecision(_ context.Context, _ *sdkmcp.CallToolRequest, in answerDecisionInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	if in.Resume {
 		env, err := k.ResumeDecision(in.TaskID)
@@ -662,7 +685,7 @@ func (s *Server) handleHandoff(_ context.Context, _ *sdkmcp.CallToolRequest, in 
 func (s *Server) handleAbort(_ context.Context, _ *sdkmcp.CallToolRequest, in abortInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.AbortTask(in.TaskID, in.Reason)
 	return result(env, err)
@@ -683,7 +706,7 @@ func (s *Server) handleReadEvidence(_ context.Context, _ *sdkmcp.CallToolRequest
 func (s *Server) handleRecallCases(ctx context.Context, _ *sdkmcp.CallToolRequest, in recallCasesInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
-		return result(nil, err)
+		return envelopeErrorResult(err)
 	}
 	env, err := k.RecallCasesEnvelope(ctx, in.Query, in.Repo, in.Limit)
 	return result(env, err)
@@ -710,6 +733,23 @@ func toSurfaces(ss []string) []domain.Surface {
 	return out
 }
 
+func toAcceptanceCriteria(criteria []acceptanceCriterionArg) []domain.AcceptanceCriterion {
+	out := make([]domain.AcceptanceCriterion, 0, len(criteria))
+	for _, criterion := range criteria {
+		out = append(out, domain.AcceptanceCriterion{ID: criterion.ID, Statement: criterion.Statement})
+	}
+	return out
+}
+
+// envelopeErrorResult preserves the shared lifecycle result contract when a
+// failure occurs before the kernel can return its own envelope. In particular,
+// clients that consume only structuredContent still receive the same error as
+// clients that read the JSON text compatibility block.
+func envelopeErrorResult(err error) (*sdkmcp.CallToolResult, any, error) {
+	message := err.Error()
+	return result(domain.Envelope{Summary: message, Error: message}, err)
+}
+
 func result(v any, err error) (*sdkmcp.CallToolResult, any, error) {
 	structured, ok, nonzero := envelopeResultState(v)
 	if err != nil && (!structured || !nonzero) {
@@ -733,8 +773,8 @@ func result(v any, err error) (*sdkmcp.CallToolResult, any, error) {
 // useful recovery context, but MCP still needs IsError=true so clients that do
 // not inspect the nested `ok` field cannot mistake a rejected mutation for a
 // success. nonzero lets result preserve a populated envelope alongside a Go
-// error while retaining the concise plain-text fallback for failures that have
-// no structured value at all (for example kernel construction errors).
+// error while retaining the concise plain-text fallback for tools whose
+// documented result is not the shared lifecycle envelope.
 func envelopeResultState(v any) (structured, ok, nonzero bool) {
 	switch value := v.(type) {
 	case domain.Envelope:

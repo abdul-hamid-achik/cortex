@@ -23,9 +23,15 @@ var openCmd = &cobra.Command{
 		actor, _ := cmd.Flags().GetString("actor")
 		parent, _ := cmd.Flags().GetString("parent")
 		key, _ := cmd.Flags().GetString("idempotency-key")
+		criterionFlags, _ := cmd.Flags().GetStringArray("criterion")
+		criteria, err := parseAcceptanceCriteria(criterionFlags)
+		if err != nil {
+			return err
+		}
 		env, err := k.OpenTask(cmd.Context(), kernel.OpenInput{StartInput: kernel.StartInput{
 			Goal: joinArgs(args), Mode: domain.Mode(mode), Risk: risk, Surfaces: toSurfaces(surfaces),
 			Actor: actor, ParentTaskID: parent, IdempotencyKey: key,
+			AcceptanceCriteria: criteria,
 		}})
 		if err != nil {
 			return err
@@ -41,5 +47,6 @@ func init() {
 	openCmd.Flags().String("actor", "", "stable person or agent identifier")
 	openCmd.Flags().String("parent", "", "parent task ID for delegated work")
 	openCmd.Flags().String("idempotency-key", "", "stable retry key; an exact match returns the existing task, even after completion")
+	openCmd.Flags().StringArray("criterion", nil, "immutable acceptance criterion as id=statement (repeatable)")
 	rootCmd.AddCommand(openCmd)
 }

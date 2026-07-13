@@ -15,7 +15,7 @@ import (
 var routeCmd = &cobra.Command{
 	Use:   "route [question]",
 	Short: "Show the routing matrix or resolve which tools cortex routes a question to",
-	Long: `Print the ordered SPEC §7.1 routing matrix, or resolve it for one question.
+	Long: `Print the ordered routing matrix, or resolve it for one question.
 Pass --json for machine output; --surface (repeatable) overrides detected surfaces
 for a resolved question (code, browser, terminal, artifact, secret).`,
 	Args: cobra.MaximumNArgs(1),

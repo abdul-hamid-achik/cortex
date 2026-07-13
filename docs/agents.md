@@ -10,8 +10,9 @@ Work through the task workflow. Cortex enforces the discipline; you supply the j
 
 1. **Open retry-safely.** Prefer `cortex_open_task`. Supply a stable, non-secret `actor` and an
    `idempotencyKey` when a harness may retry after losing a response. Without a key, Cortex resumes
-   the newest active case matching normalized goal, mode, workspace, and branch. Use
-   `cortex_start_task` only when you deliberately need a fresh case.
+   the newest active case matching normalized goal, mode, workspace, branch, and acceptance
+   contract. When the goal already has explicit success rules, register `acceptanceCriteria`; they
+   are immutable. Use `cortex_start_task` only when you deliberately need a fresh case.
 2. **Treat search output as candidates, not proof.** `cortex_investigate` records vecgrep/codemap
    results as evidence with a confidence band. A `low`/`medium` hit is a lead, not a conclusion.
 3. **Before editing, plan.** `cortex_plan` requires a testable hypothesis **with a disproof
@@ -24,14 +25,17 @@ Work through the task workflow. Cortex enforces the discipline; you supply the j
 5. **Prove exact claims with the right verifier.** Prefer `claimSpecs`: every statement declares a
    `surface` and required exact `contract` such as a spec path or configured check; the verifier
    may default from the surface. A claim with no matching run is `not_run`, never passed. Receipts
-   bind to HEAD plus the dirty-tree digest; edit again and `cortex_status` marks them stale.
+   bind to HEAD plus the dirty-tree digest; edit again and `cortex_status` marks them stale. A
+   registered acceptance criterion additionally requires the same claim ID and exact statement;
+   read the bounded `claimProofs` manifest instead of inferring proof from prose.
    Repository-configured command checks are arbitrary local code and run only when the trusted
    launcher set `CORTEX_APPROVE_COMMANDS=1`; without it Cortex records `blocked`.
 6. **Stay in the boundary.** Cortex compares your diff to the declared boundary and reports scope
    drift. If scope genuinely grew, expand the plan — don't let it drift silently.
 7. **Preserve evidence and state uncertainty.** `cortex_remember` completes the task and writes a
    durable memory. Normal completion requires the canonical assessment to be `verified`; explicit
-   `verificationNotPossible` / `acceptFailed` acknowledgments preserve non-green outcomes.
+   `verificationNotPossible` / `acceptFailed` acknowledgments preserve non-green outcomes for
+   legacy tasks but never bypass a registered acceptance contract.
 8. **Never request or expose secret values.** Use `tvault` capability checks and scoped execution
    only.
 
@@ -79,16 +83,18 @@ retry-safe open a `new`/`orienting` case.
 - `cortex_handoff` returns current state and coordination metadata (revision, actor, linkage,
   lease), the plan, hypotheses, the 20 most recent evidence facts, current verifier runs and named
   claims still bound to the same workspace state, decisions, and executable actions. Raw tool
-  output is intentionally excluded. The complete JSON packet has a 128 KiB hard ceiling and
-  progressively trims older/nonessential detail while retaining task identity, the current pending
-  decision, and a continuation action. Sensitive evidence and receipts are omitted; a sensitive
+  output is intentionally excluded. General JSON packets have a 128 KiB hard ceiling. Complete
+  verified packets instead fit their actual primary JSON within 90 KiB, trimming non-proof detail
+  before proof and retaining every non-sensitive named claim plus its referenced verifier batches;
+  if the closure cannot fit, all receipts are omitted with an explicit warning. Sensitive evidence
+  and receipts are omitted; a sensitive
   pending decision keeps only its ID/status plus an omission warning. Pass `workspace` for
   repo-local/custom case stores.
 
 ## Interpreting verification
 
 All task views use the same assessment: `verified` only when some current proof passed and every
-required verifier and named claim is satisfied; `partial` when some proof passed but gaps remain;
+required verifier, named claim, and registered criterion is satisfied; `partial` when some proof passed but gaps remain;
 `failed` when a current verifier or named claim failed; `unverified` when no adequate proof passed.
 An intentional no-diff change must set `noOpAcknowledged`; that only permits verification to run —
 it does not create a pass.

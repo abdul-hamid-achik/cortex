@@ -489,7 +489,7 @@ func TestGlyphContractHashMismatchIsActionable(t *testing.T) {
 		t.Errorf("errored diagnostic should become a fact, got: %s", claims)
 	}
 	// Keeping the markErrored substring is what the kernel maps to inconclusive
-	// (SPEC §11.4) — asserting it here proves the mapping without importing kernel.
+	// Asserting it here proves the mapping without importing kernel.
 	joined := strings.Join(res.Warnings, " | ")
 	if !strings.Contains(joined, "re-stamp") || !strings.Contains(joined, markErrored) {
 		t.Errorf("hash-mismatch warning should say re-stamp and stay errored, got: %s", joined)
@@ -619,7 +619,7 @@ func TestCodemapReviewRiskBand(t *testing.T) {
 	}
 }
 
-// TestCodemapReviewExportedSymbolEscalation guards the SPEC §13.3 public-
+// TestCodemapReviewExportedSymbolEscalation guards the public-
 // contract escalation: an indexed review with an exported changed symbol warns
 // that the diff touches a public-contract surface.
 func TestCodemapReviewExportedSymbolEscalation(t *testing.T) {
@@ -627,15 +627,15 @@ func TestCodemapReviewExportedSymbolEscalation(t *testing.T) {
 	  "changed_symbols":[{"symbol":"HandleCallback"},{"symbol":"helper"}],"covering_tests":[],"call_graph":"resolved"}`
 	res, _ := (&Codemap{tool: fakeTool(exported, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
 	joined := strings.Join(res.Warnings, " ")
-	if !strings.Contains(joined, "exported symbol") || !strings.Contains(joined, "SPEC §13.3") {
-		t.Errorf("an exported changed symbol should trigger the §13.3 escalation warning, got: %s", joined)
+	if !strings.Contains(joined, "exported symbol") || !strings.Contains(joined, "public-contract change") {
+		t.Errorf("an exported changed symbol should trigger the public-contract escalation warning, got: %s", joined)
 	}
 	// Only-private symbols (leading lowercase/underscore) do NOT trigger it.
 	priv := `{"indexed":true,"is_repo":true,"changed_files":[{"path":"a.go","status":"M","symbols":1}],
 	  "changed_symbols":[{"symbol":"helper"},{"symbol":"_internal"}],"covering_tests":[],"call_graph":"resolved"}`
 	r2, _ := (&Codemap{tool: fakeTool(priv, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
 	if strings.Contains(strings.Join(r2.Warnings, " "), "exported symbol") {
-		t.Errorf("non-exported symbols must not trigger the §13.3 escalation, got: %v", r2.Warnings)
+		t.Errorf("non-exported symbols must not trigger the public-contract escalation, got: %v", r2.Warnings)
 	}
 	// An unindexed review has no changed_symbols, so no escalation.
 	unindexed := `{"indexed":false,"is_repo":true,"changed_files":[{"path":"a.go","status":"M"}],"changed_symbols":[],"note":"not indexed"}`

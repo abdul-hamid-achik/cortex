@@ -24,6 +24,26 @@ func TestStructuredActionsPrioritizeRememberOnceVerified(t *testing.T) {
 	}
 }
 
+func TestStructuredActionsPrioritizePlanningAfterFirstInvestigation(t *testing.T) {
+	c := &domain.CaseFile{
+		ID: "task_investigate", Mode: domain.ModeChange, Status: domain.PhaseInvestigating,
+		Workspace: domain.Workspace{Root: "/tmp/repo"},
+	}
+	actions := structuredNextForCase(c)
+	if len(actions) != 2 || actions[0].Tool != "cortex_investigate" || actions[1].Tool != "cortex_plan" {
+		t.Fatalf("fresh investigation actions = %+v, want investigate then plan", actions)
+	}
+
+	c.InvestigationRounds = 1
+	actions = structuredNextForCase(c)
+	if len(actions) != 2 || actions[0].Tool != "cortex_plan" || actions[1].Tool != "cortex_investigate" {
+		t.Fatalf("post-investigation actions = %+v, want plan then optional investigation", actions)
+	}
+	if actions[0].Arguments["workspace"] != c.Workspace.Root || len(actions[0].Inputs) != 3 {
+		t.Fatalf("prioritized plan action lost its portable inputs: %+v", actions[0])
+	}
+}
+
 func TestStructuredActionsRepairFailedOrUnownedChange(t *testing.T) {
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	caseFile := &domain.CaseFile{

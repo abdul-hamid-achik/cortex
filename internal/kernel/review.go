@@ -24,7 +24,7 @@ type ReviewInput struct {
 // creates a ModeReview case, gathers structural + semantic context, runs the
 // verifiers over base…HEAD (structural review + auto-selected behavioral specs),
 // and completes with a verdict whose every claim is backed by a receipt.
-func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, error) {
+func (k *Kernel) Review(ctx context.Context, in ReviewInput) (out domain.Envelope, retErr error) {
 	surfaces, err := normalizeSurfaces(in.Surfaces)
 	if err != nil {
 		return errEnvelope("", err.Error()), nil
@@ -57,7 +57,20 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 	}
 	// Leave the working tree as we found it when we checked out a different ref.
 	if restore != "" {
-		defer func() { _ = k.git.Checkout(context.Background(), k.cfg.Workspace, restore) }()
+		defer func() {
+			if err := k.git.Checkout(context.Background(), k.cfg.Workspace, restore); err != nil {
+				message := k.red.String(fmt.Sprintf("review finished but could not restore workspace to %q: %v", restore, err))
+				priorSummary := out.Summary
+				out.OK = false
+				out.Summary = message
+				out.Error = message
+				out.Warnings = append(out.Warnings, message)
+				if priorSummary != "" {
+					out.Warnings = append(out.Warnings, "review result before restoration failure: "+priorSummary)
+				}
+				out.Warnings = dedupeStr(out.Warnings)
+			}
+		}()
 	}
 	// The review diffs base…HEAD (HEAD is now the resolved head). A bad base ref
 	// is a hard error, not a false "no changes".
@@ -66,7 +79,7 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 		return errEnvelope("", "could not compute the review diff: "+cerr.Error()), nil
 	}
 	if len(changed) == 0 {
-		return domain.Envelope{OK: true, Summary: fmt.Sprintf("no changes to review between %s and %s", clipStr(base, 12), head)}, nil
+		return domain.Envelope{OK: true, Summary: k.red.String(fmt.Sprintf("no changes to review between %s and %s", clipStr(base, 12), head))}, nil
 	}
 
 	goal := fmt.Sprintf("review %s (%s changed)", head, pluralizeGeneric(len(changed), "file", "files"))
@@ -77,20 +90,32 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 	}
 	id := start.TaskID
 	warns = append(warns, start.Warnings...)
+	degraded := start.Degraded
 
 	// Gather structural + semantic context for the diff (also recalls prior
 	// memories on the touched code).
-	_, _ = k.Investigate(ctx, InvestigateInput{TaskID: id, Question: "review the changes to " + strings.Join(clipList(changed, 5), ", "), Surfaces: surfaces})
+	investigated, investigateErr := k.Investigate(ctx, InvestigateInput{TaskID: id, Question: "review the changes to " + strings.Join(clipList(changed, 5), ", "), Surfaces: surfaces})
+	warns = append(warns, investigated.Warnings...)
+	degraded = degraded || investigated.Degraded
+	if investigateErr != nil || !investigated.OK {
+		investigated.Warnings = dedupeStr(warns)
+		investigated.Degraded = degraded
+		return investigated, investigateErr
+	}
 
 	// A review's "plan" frames what must hold: it is falsifiable by the very
 	// verifiers cortex will run. The boundary is the diff's file set.
-	plan, _ := k.Plan(PlanInput{TaskID: id,
+	plan, planErr := k.Plan(PlanInput{TaskID: id,
 		Hypotheses:     []HypothesisInput{{Statement: fmt.Sprintf("the change on %s is correct and adequately verified", head), Confidence: "medium", DisproveBy: "structural review of the diff plus the behavioral specs that cover it"}},
 		ChangeBoundary: domain.ChangeBoundary{Files: changed, Reason: "the reviewed diff"},
 		Verification:   reviewVerifiers(surfaces),
 		Uncertainty:    fmt.Sprintf("reviewing %s across %s", pluralizeGeneric(len(changed), "file", "files"), joinSurfaces(surfaces))})
-	if !plan.OK {
-		return plan, nil
+	warns = append(warns, plan.Warnings...)
+	degraded = degraded || plan.Degraded
+	if planErr != nil || !plan.OK {
+		plan.Warnings = dedupeStr(warns)
+		plan.Degraded = degraded
+		return plan, planErr
 	}
 
 	// Verify the diff (base-scoped): structural review + auto-selected specs. The
@@ -98,16 +123,32 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 	// replaces) so each declared surface keeps a claim that forces an honest
 	// not_run receipt when its verifier didn't run.
 	claims := dedupeStr(append(reviewClaims(surfaces), in.Claims...))
-	vr, _ := k.Verify(ctx, VerifyInput{TaskID: id, Claims: claims, ChangedFiles: changed})
+	vr, verifyErr := k.Verify(ctx, VerifyInput{TaskID: id, Claims: claims, ChangedFiles: changed})
 	warns = append(warns, vr.Warnings...)
+	degraded = degraded || vr.Degraded
+	if verifyErr != nil || !vr.OK {
+		vr.Warnings = dedupeStr(warns)
+		vr.Degraded = degraded
+		return vr, verifyErr
+	}
 
 	// Derive the verdict from the receipts AGAINST the required-verifier set, so
-	// APPROVE can't fire while a declared surface's verifier never ran (SPEC §14.2).
-	c2, _ := k.store.Load(id)
-	receipts, _ := k.store.Verifications(id)
-	assessment := assessVerification(c2.VerificationRequired, receipts)
+	// APPROVE can't fire while a declared surface's verifier never ran.
+	c2, loadErr := k.store.Load(id)
+	if loadErr != nil {
+		failure := errEnvelope(id, loadErr.Error())
+		failure.Warnings, failure.Degraded = dedupeStr(warns), degraded
+		return failure, nil
+	}
+	receipts, receiptsErr := k.store.Verifications(id)
+	if receiptsErr != nil {
+		failure := errEnvelope(id, receiptsErr.Error())
+		failure.Warnings, failure.Degraded = dedupeStr(warns), degraded
+		return failure, nil
+	}
+	assessment := assessCaseVerification(c2, receipts)
 	verdict, _ := reviewVerdict(receipts, c2.VerificationRequired)
-	outcome := fmt.Sprintf("REVIEW %s: %s (%s changed, base %s)", verdict, head, pluralizeGeneric(len(changed), "file", "files"), clipStr(base, 12))
+	outcome := k.red.String(fmt.Sprintf("REVIEW %s: %s (%s changed, base %s)", verdict, head, pluralizeGeneric(len(changed), "file", "files"), clipStr(base, 12)))
 	// Partial/unverified reviews need the explicit incomplete-verification
 	// acknowledgement. A REQUEST CHANGES verdict rests on a verifier that ran and
 	// FAILED, so it uses accept_failed instead.
@@ -115,14 +156,22 @@ func (k *Kernel) Review(ctx context.Context, in ReviewInput) (domain.Envelope, e
 	// A REQUEST CHANGES review rests on failed verdicts — accept those so the case
 	// can complete with an honest failed outcome. Mixed pass+fail is still failed.
 	acceptFailed := assessment.Outcome == VerificationFailed
-	rem, _ := k.Remember(ctx, RememberInput{
+	rem, rememberErr := k.Remember(ctx, RememberInput{
 		TaskID: id, Outcome: outcome, Tags: []string{"review"},
 		VerificationNotPossible: notPossible, AcceptFailed: acceptFailed,
 	})
+	warns = append(warns, rem.Warnings...)
+	degraded = degraded || rem.Degraded
+	if rememberErr != nil || !rem.OK {
+		rem.Warnings = dedupeStr(warns)
+		rem.Degraded = degraded
+		return rem, rememberErr
+	}
 
 	env := rem
 	env.Summary = outcome
-	env.Warnings = dedupeStr(append(warns, rem.Warnings...))
+	env.Warnings = dedupeStr(warns)
+	env.Degraded = degraded
 	env.NextActions = append([]string{
 		"read the evidence-backed review: cortex status " + id + " --detail full",
 	}, rem.NextActions...)
@@ -213,7 +262,7 @@ func reviewClaims(surfaces []domain.Surface) []string {
 // reviewVerdict turns the receipts into a verdict, gated on the required-verifier
 // set: any failure → request changes; every required verifier passed AND
 // something actually passed → approve; otherwise → needs verification (a required
-// verifier that never ran must never read as approved — SPEC §14.2).
+// verifier that never ran must never read as approved.
 func reviewVerdict(receipts []domain.VerificationRecord, required []string) (verdict string, fullyVerified bool) {
 	assessment := assessVerification(required, receipts)
 	switch assessment.Outcome {

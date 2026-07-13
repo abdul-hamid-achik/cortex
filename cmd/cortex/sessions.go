@@ -21,10 +21,12 @@ var sessionsCmd = &cobra.Command{
 	Short:   "List Cortex sessions across every repository (the central XDG audit view)",
 	Long: "List every session under the central state tree ($XDG_STATE_HOME/cortex/sessions), " +
 		"newest first — one place to audit and monitor all your Cortex work regardless of which " +
-		"repo it belongs to. Filter with --repo (substring) and --active (in-flight only). " +
+		"repo it belongs to. Filter with --repo (substring), --active (in-flight only), and " +
+		"--query (case-insensitive AND terms across identity, goal, state, and outcome). " +
 		"Sessions pinned repo-local via cases_dir aren't shown here; use `cortex list` in that repo.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		repo, _ := cmd.Flags().GetString("repo")
+		query, _ := cmd.Flags().GetString("query")
 		active, _ := cmd.Flags().GetBool("active")
 		staleOnly, _ := cmd.Flags().GetBool("stale")
 		staleAfter, _ := cmd.Flags().GetDuration("stale-after")
@@ -34,7 +36,7 @@ var sessionsCmd = &cobra.Command{
 		if archived {
 			lister, root = kernel.ArchivedSessions, config.ArchiveRoot()
 		}
-		sessions, err := lister(kernel.SessionFilter{Repo: repo, ActiveOnly: active})
+		sessions, err := lister(kernel.SessionFilter{Repo: repo, ActiveOnly: active, Query: query})
 		if err != nil {
 			return err
 		}
@@ -55,13 +57,21 @@ var sessionsCmd = &cobra.Command{
 		if jsonMode(cmd) {
 			return emitJSON(sessions)
 		}
-		renderSessions(sessions, now, staleAfter, root)
+		emptyMessage := "no sessions yet — open one with `cortex open \"<goal>\"`"
+		switch {
+		case archived:
+			emptyMessage = "no archived sessions"
+		case query != "" || repo != "" || active:
+			emptyMessage = "no sessions match the current filters"
+		}
+		renderSessions(sessions, now, staleAfter, root, emptyMessage)
 		return nil
 	},
 }
 
 func init() {
 	sessionsCmd.Flags().String("repo", "", "only sessions whose repository or slug contains this substring")
+	sessionsCmd.Flags().String("query", "", "search session ID, goal, status, mode, repository, or workspace (all tokens must match)")
 	sessionsCmd.Flags().Bool("active", false, "only in-flight (non-terminal) sessions")
 	sessionsCmd.Flags().Bool("stale", false, "only in-flight sessions untouched beyond --stale-after")
 	sessionsCmd.Flags().Duration("stale-after", 24*time.Hour, "how long before an in-flight session is flagged stale")
@@ -69,11 +79,11 @@ func init() {
 	rootCmd.AddCommand(sessionsCmd)
 }
 
-func renderSessions(sessions []kernel.SessionSummary, now time.Time, staleAfter time.Duration, root string) {
+func renderSessions(sessions []kernel.SessionSummary, now time.Time, staleAfter time.Duration, root, emptyMessage string) {
 	w := os.Stdout
 	pln(w, paint(styMuted, "sessions in "+root))
 	if len(sessions) == 0 {
-		pln(w, paint(styMuted, "no sessions yet — start one with `cortex start \"<goal>\"`"))
+		pln(w, paint(styMuted, emptyMessage))
 		return
 	}
 	repoW := len("REPO")

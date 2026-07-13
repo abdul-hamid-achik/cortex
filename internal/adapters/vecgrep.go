@@ -8,13 +8,12 @@ import (
 )
 
 // Vecgrep adapts the vecgrep CLI for semantic/keyword discovery and cross-
-// session memory (SPEC §11.3, §12.3). Unlike codemap it uses `-f json` (an enum
+// session memory. Unlike codemap it uses `-f json` (an enum
 // flag, not a boolean) and `-n` for the limit. vecgrep has no `doctor`
 // subcommand — health is probed via `vecgrep --version`.
 type Vecgrep struct{ tool }
 
-// NewVecgrep builds a vecgrep adapter. Timeout is the SPEC §17.2 code_search
-// budget (15s).
+// NewVecgrep builds a vecgrep adapter with the 15-second code-search budget.
 func NewVecgrep() *Vecgrep { return &Vecgrep{tool: newTool("vecgrep", 15*time.Second)} }
 
 func (v *Vecgrep) Name() string { return "vecgrep" }
@@ -242,7 +241,7 @@ func (v *Vecgrep) memoryRecall(ctx context.Context, dir, query string, tags []st
 	}, nil
 }
 
-// Remember stores a durable memory (used by the persist phase, SPEC §15). It is
+// Remember stores a durable memory used by the persist phase. It is
 // a direct method rather than an Execute op because it is a write, not a query.
 func (v *Vecgrep) Remember(ctx context.Context, dir, content string, tags []string, importance float64) error {
 	if !binExists(v.bin) {
@@ -252,7 +251,7 @@ func (v *Vecgrep) Remember(ctx context.Context, dir, content string, tags []stri
 	if len(tags) > 0 {
 		args = append(args, "--tags", joinComma(tags))
 	}
-	// Storing a memory is a write — no automatic retry (SPEC §17.3).
+	// Storing a memory is a write — no automatic retry.
 	_, _, _, err := v.execOnce(ctx, dir, args...)
 	return err
 }

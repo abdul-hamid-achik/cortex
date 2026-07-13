@@ -111,7 +111,7 @@ func defaultRecallDB() string {
 	return filepath.Join(DataHome(), "cases.veclite")
 }
 
-// RecallConfig configures cross-case disproof recall (SPEC §15.4). Defaults
+// RecallConfig configures cross-case disproof recall. Defaults
 // are sensible for a local ollama + veclite setup; every field is overridable.
 type RecallConfig struct {
 	Enabled    bool

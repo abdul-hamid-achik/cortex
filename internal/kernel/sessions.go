@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/config"
@@ -16,8 +17,12 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/store/redact"
 )
 
+// MaxSessionQueryBytes bounds non-interactive CLI/MCP input before Cortex
+// walks the central session tree. Studio applies a smaller interactive cap.
+const MaxSessionQueryBytes = 4 << 10
+
 // SessionSummary is one session in the global, cross-workspace index — enough to
-// audit at a glance (SPEC §8.1, §18.1) without opening the case file.
+// audit at a glance without opening the case file.
 type SessionSummary struct {
 	ID                  string              `json:"id"`
 	Goal                string              `json:"goal"`
@@ -38,6 +43,7 @@ type SessionSummary struct {
 type SessionFilter struct {
 	Repo       string // match against slug or repository (substring); "" = all
 	ActiveOnly bool   // only non-terminal (in-flight) sessions
+	Query      string // case-insensitive AND-token match across session identity and status fields
 }
 
 type revisionLookup struct {
@@ -68,6 +74,9 @@ func ArchivedSessions(filter SessionFilter) ([]SessionSummary, error) {
 }
 
 func allSessionsIn(root string, filter SessionFilter) ([]SessionSummary, error) {
+	if !utf8.ValidString(filter.Query) || len(filter.Query) > MaxSessionQueryBytes {
+		return nil, fmt.Errorf("session query must be UTF-8 and at most %d bytes", MaxSessionQueryBytes)
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -103,11 +112,41 @@ func allSessionsIn(root string, filter SessionFilter) ([]SessionSummary, error) 
 			if filter.Repo != "" && !strings.Contains(s.Slug, filter.Repo) && !strings.Contains(s.Repository, filter.Repo) {
 				continue
 			}
+			if !sessionMatchesQuery(s, filter.Query) {
+				continue
+			}
 			out = append(out, s)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, nil
+}
+
+// sessionMatchesQuery provides one search contract for the CLI, MCP, and
+// Studio surfaces. Whitespace-separated tokens are ANDed so a query such as
+// "billing planned" can combine repository and phase without introducing a
+// surface-specific query language.
+func sessionMatchesQuery(s SessionSummary, query string) bool {
+	tokens := strings.Fields(strings.ToLower(query))
+	if len(tokens) == 0 {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		s.ID,
+		s.Goal,
+		string(s.Phase),
+		string(s.Mode),
+		s.Repository,
+		s.Workspace,
+		s.Slug,
+		string(s.VerificationOutcome),
+	}, "\x00"))
+	for _, token := range tokens {
+		if !strings.Contains(haystack, token) {
+			return false
+		}
+	}
+	return true
 }
 
 // SessionDetail is a fully-loaded session (case + ledgers) for a detail view.
@@ -155,7 +194,7 @@ func summarizeSession(c *domain.CaseFile, slug string, store *casefs.Store, git 
 		}
 		receipts, _ = verificationReceiptsAtRevision(receipts, lookup.revision, lookup.err)
 	}
-	assessment := assessVerification(c.VerificationRequired, receipts)
+	assessment := assessCaseVerification(c, receipts)
 	verifiedRequired := len(assessment.SatisfiedRequired)
 	// The compact N/M count must not look green when a current named claim is
 	// non-passing or failed, even if all verifier labels happened to run.

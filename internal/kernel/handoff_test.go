@@ -264,3 +264,195 @@ func TestBuildHandoffOmitsSensitiveRecordsButKeepsDecisionIdentity(t *testing.T)
 		}
 	}
 }
+
+func TestCompletionHandoffPreservesSixtyFourClaimMultiBatchProofClosure(t *testing.T) {
+	ledger := completionProofLedger(4, 16, func(batch, claim int) string {
+		return fmt.Sprintf("criterion %02d-%02d is satisfied", batch, claim)
+	})
+	projection := projectHandoffReceipts(domain.PhaseComplete, VerificationVerified, ledger)
+	if projection.sensitiveOmitted != 0 || len(projection.warnings) != 0 {
+		t.Fatalf("unexpected proof projection omissions: %+v", projection)
+	}
+	if got, want := len(projection.receipts), 4*2+64; got != want {
+		t.Fatalf("proof closure retained %d receipts, want %d", got, want)
+	}
+	assertEveryClaimHasVerifierBatch(t, projection.receipts)
+
+	handoff := Handoff{
+		SchemaVersion: 1, TaskID: "task_local_agent", Revision: 77,
+		Goal:  strings.Repeat("large transfer context ", 8_000),
+		Phase: domain.PhaseComplete, Mode: domain.ModeChange, Risk: "medium",
+		Workspace:    domain.Workspace{Root: "/tmp/local-agent", Repository: "local-agent", Branch: "main"},
+		Verification: VerificationAssessment{Outcome: VerificationVerified, SatisfiedRequired: []string{strings.Repeat("requirement", 2_000)}},
+		Receipts:     projection.receipts,
+		Evidence:     []domain.FactView{{ID: "ev_large", Claim: strings.Repeat("evidence", 20_000)}},
+	}
+	bounded := boundHandoff(handoff)
+	if len(bounded.Receipts) != len(projection.receipts) {
+		t.Fatalf("completion bounding split proof closure: retained %d of %d receipts", len(bounded.Receipts), len(projection.receipts))
+	}
+	assertEveryClaimHasVerifierBatch(t, bounded.Receipts)
+	if bounded.Plan != nil || len(bounded.Evidence) != 0 || bounded.Goal != "" {
+		t.Fatalf("non-proof transfer detail survived before proof was preserved: %+v", bounded)
+	}
+	if !strings.Contains(strings.Join(bounded.Warnings, " "), "local-agent result budget") {
+		t.Fatalf("completion projection did not disclose bounding: %v", bounded.Warnings)
+	}
+	primary, err := handoffPrimaryJSON(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(primary) > maxCompletionHandoffBytes {
+		t.Fatalf("pretty primary JSON is %d bytes, limit %d", len(primary), maxCompletionHandoffBytes)
+	}
+	for _, receipt := range bounded.Receipts {
+		if receipt.EffectivePurpose() == domain.VerificationPurposeNamedClaim && !strings.HasSuffix(receipt.Claim, "is satisfied") {
+			t.Fatalf("named claim was clipped: %q", receipt.Claim)
+		}
+	}
+	if len(handoff.Receipts) != 72 || handoff.Goal == "" || len(handoff.Evidence) == 0 {
+		t.Fatal("completion bounding mutated the caller's projection")
+	}
+}
+
+func TestCompletionHandoffOmitsOversizeProofClosureAtomically(t *testing.T) {
+	ledger := completionProofLedger(2, 32, func(batch, claim int) string {
+		return fmt.Sprintf("criterion-%d-%d-%s", batch, claim, strings.Repeat("界", 1_350))
+	})
+	projection := projectHandoffReceipts(domain.PhaseComplete, VerificationVerified, ledger)
+	if len(projection.receipts) != 68 {
+		t.Fatalf("unbounded proof closure = %d receipts, want 68", len(projection.receipts))
+	}
+
+	bounded := boundHandoff(Handoff{
+		SchemaVersion: 1, TaskID: "task_oversize_proof", Revision: 19,
+		Phase: domain.PhaseComplete, Mode: domain.ModeChange,
+		Workspace:    domain.Workspace{Repository: "local-agent"},
+		Verification: VerificationAssessment{Outcome: VerificationVerified},
+		Receipts:     projection.receipts,
+	})
+	if len(bounded.Receipts) != 0 {
+		t.Fatalf("oversize proof was partially retained: %d receipts", len(bounded.Receipts))
+	}
+	if !strings.Contains(strings.Join(bounded.Warnings, " "), "proof receipts omitted atomically") {
+		t.Fatalf("atomic proof omission was not explicit: %v", bounded.Warnings)
+	}
+	primary, err := handoffPrimaryJSON(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(primary) > maxCompletionHandoffBytes {
+		t.Fatalf("overflow fallback primary JSON is %d bytes, limit %d", len(primary), maxCompletionHandoffBytes)
+	}
+	if len(projection.receipts) != 68 {
+		t.Fatal("atomic proof bounding mutated its input closure")
+	}
+}
+
+func TestCompletionProofClosureOmitsSensitiveBatchesAndDependentClaims(t *testing.T) {
+	ledger := []domain.VerificationRecord{
+		proofRun("run_safe", "batch_safe", false),
+		proofClaim("claim_safe", "batch_safe", "criterion_safe", "safe criterion", false),
+		proofRun("run_private", "batch_private", true),
+		proofClaim("claim_dependent", "batch_private", "criterion_dependent", "dependent criterion", false),
+		proofRun("run_mixed", "batch_mixed", false),
+		proofClaim("claim_mixed", "batch_mixed", "criterion_mixed", "mixed safe criterion", false),
+		proofClaim("claim_secret", "batch_mixed", "criterion_secret", "private criterion text", true),
+	}
+	projection := projectHandoffReceipts(domain.PhaseComplete, VerificationVerified, ledger)
+	if projection.sensitiveOmitted != 2 {
+		t.Fatalf("sensitive receipt count = %d, want 2", projection.sensitiveOmitted)
+	}
+	if len(projection.receipts) != 4 {
+		t.Fatalf("safe proof projection = %+v, want two closed batches", projection.receipts)
+	}
+	assertEveryClaimHasVerifierBatch(t, projection.receipts)
+	encoded, err := json.Marshal(projection.receipts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{"run_private", "claim_dependent", "dependent criterion", "private criterion text"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("sensitive or orphaned proof %q survived: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(strings.Join(projection.warnings, " "), "dependent named-claim") {
+		t.Fatalf("dependent proof omission was silent: %v", projection.warnings)
+	}
+}
+
+func TestNonterminalHandoffRetainsGenericReceiptBounding(t *testing.T) {
+	ledger := completionProofLedger(4, 16, func(batch, claim int) string {
+		return fmt.Sprintf("criterion %d-%d", batch, claim)
+	})
+	projection := projectHandoffReceipts(domain.PhaseVerifying, VerificationVerified, ledger)
+	if len(projection.receipts) != 66 {
+		// Generic behavior retains the two latest-batch verifier runs plus all
+		// same-state named claims; it does not expand older verifier batches.
+		t.Fatalf("nonterminal receipt projection = %d, want 66", len(projection.receipts))
+	}
+	bounded := boundHandoff(Handoff{
+		SchemaVersion: 1, TaskID: "task_nonterminal", Phase: domain.PhaseVerifying,
+		Verification: VerificationAssessment{Outcome: VerificationVerified}, Receipts: projection.receipts,
+	})
+	if len(bounded.Receipts) != handoffBudgets[0].receipts {
+		t.Fatalf("generic handoff retained %d receipts, want existing bound %d", len(bounded.Receipts), handoffBudgets[0].receipts)
+	}
+	if bounded.Receipts[0].ID != projection.receipts[len(projection.receipts)-handoffBudgets[0].receipts].ID {
+		t.Fatal("generic handoff no longer keeps the newest bounded receipt window")
+	}
+}
+
+func completionProofLedger(batchCount, claimsPerBatch int, claimText func(batch, claim int) string) []domain.VerificationRecord {
+	receipts := make([]domain.VerificationRecord, 0, batchCount*(claimsPerBatch+2))
+	for batch := 0; batch < batchCount; batch++ {
+		batchID := fmt.Sprintf("batch_%02d", batch)
+		receipts = append(receipts,
+			proofRun(fmt.Sprintf("run_%02d_code", batch), batchID, false),
+			proofRun(fmt.Sprintf("run_%02d_terminal", batch), batchID, false),
+		)
+		for claim := 0; claim < claimsPerBatch; claim++ {
+			receipts = append(receipts, proofClaim(
+				fmt.Sprintf("claim_%02d_%02d", batch, claim), batchID,
+				fmt.Sprintf("criterion_%02d_%02d", batch, claim), claimText(batch, claim), false,
+			))
+		}
+	}
+	return receipts
+}
+
+func proofRun(id, batchID string, sensitive bool) domain.VerificationRecord {
+	return domain.VerificationRecord{
+		ID: id, BatchID: batchID, Claim: "verifier run " + id,
+		Surface: domain.SurfaceCode, Purpose: domain.VerificationPurposeVerifierRun,
+		Tool: "go-test", Status: domain.VerifyPassed, Evidence: []string{"ev_" + id},
+		Sensitive: sensitive, Revision: "commit_current", DirtyDigest: "sha256:dirty_current",
+		Binding: domain.VerificationBound, Timestamp: time.Unix(10, 0).UTC(),
+	}
+}
+
+func proofClaim(id, batchID, claimID, claim string, sensitive bool) domain.VerificationRecord {
+	return domain.VerificationRecord{
+		ID: id, BatchID: batchID, ClaimID: claimID, Claim: claim,
+		Surface: domain.SurfaceCode, Purpose: domain.VerificationPurposeNamedClaim,
+		Status: domain.VerifyPassed, Sensitive: sensitive,
+		Revision: "commit_current", DirtyDigest: "sha256:dirty_current",
+		Binding: domain.VerificationBound, Timestamp: time.Unix(10, 0).UTC(),
+	}
+}
+
+func assertEveryClaimHasVerifierBatch(t *testing.T, receipts []domain.VerificationRecord) {
+	t.Helper()
+	verifierBatches := make(map[string]bool)
+	for _, receipt := range receipts {
+		if receipt.EffectivePurpose() == domain.VerificationPurposeVerifierRun {
+			verifierBatches[receipt.BatchID] = true
+		}
+	}
+	for _, receipt := range receipts {
+		if receipt.EffectivePurpose() == domain.VerificationPurposeNamedClaim && !verifierBatches[receipt.BatchID] {
+			t.Fatalf("named claim %s retained without verifier batch %s", receipt.ID, receipt.BatchID)
+		}
+	}
+}

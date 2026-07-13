@@ -92,3 +92,42 @@ func TestRenderSessionViewMarksOnlyTheStaleReceiptID(t *testing.T) {
 		t.Fatalf("same-claim fresh rerun was mislabeled; stale markers=%d:\n%s", got, out.String())
 	}
 }
+
+func TestRenderSessionViewUsesExactProjectionTotals(t *testing.T) {
+	oldColor := useColor
+	useColor = false
+	t.Cleanup(func() { useColor = oldColor })
+
+	receipts := make([]domain.VerificationRecord, 5)
+	evidence := make([]domain.Evidence, 5)
+	timeline := make([]kernel.TimelineEntry, 8)
+	for i := range receipts {
+		receipts[i] = domain.VerificationRecord{Claim: fmt.Sprintf("receipt-%d", i), Status: domain.VerifyPassed}
+		evidence[i] = domain.Evidence{Claim: fmt.Sprintf("evidence-%d", i), Confidence: domain.ConfidenceMedium}
+	}
+	for i := range timeline {
+		timeline[i] = kernel.TimelineEntry{Summary: fmt.Sprintf("timeline-%d", i)}
+	}
+	view := kernel.SessionView{
+		Case:                   &domain.CaseFile{ID: "task_totals", Goal: "show exact totals", Status: domain.PhaseVerifying},
+		VerificationAssessment: kernel.VerificationAssessment{Outcome: kernel.VerificationPartial},
+		Receipts:               receipts,
+		ReceiptTotal:           220,
+		Evidence:               evidence,
+		EvidenceTotal:          250,
+		Timeline:               timeline,
+		TimelineTotal:          300,
+	}
+	var out bytes.Buffer
+	renderSessionViewTo(&out, view)
+	text := out.String()
+	for _, want := range []string{
+		"(220 receipts)", "… 215 older receipts",
+		"Recent Evidence  (250 total)", "… 245 older",
+		"Recent activity  (300 total)", "… 292 older",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("show output missing exact total %q:\n%s", want, text)
+		}
+	}
+}

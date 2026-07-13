@@ -9,6 +9,17 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 )
 
+func modelForSessionView(view kernel.SessionView) model {
+	id := ""
+	if view.Case != nil {
+		id = view.Case.ID
+	}
+	return model{
+		sessions: []kernel.SessionSummary{{ID: id, Slug: view.Slug}},
+		detail:   detail{loaded: true, view: view}, width: 120, height: 40,
+	}
+}
+
 func TestSessionDetailPrioritizesAssessmentDecisionAndNextAction(t *testing.T) {
 	evidence := make([]domain.Evidence, 0, 6)
 	for i := range 6 {
@@ -41,7 +52,7 @@ func TestSessionDetailPrioritizesAssessmentDecisionAndNextAction(t *testing.T) {
 		}},
 	}
 
-	m := model{detail: detail{loaded: true, view: view}, width: 120, height: 40}
+	m := modelForSessionView(view)
 	out := m.renderDetail(88)
 	for _, want := range []string{
 		"~ partial", "missing verifier: browser", "not passing: migration preserves sessions",
@@ -80,8 +91,44 @@ func TestSessionDetailMarksOnlyTheStaleReceiptID(t *testing.T) {
 			{ID: "vr_fresh", Claim: "structural review", Surface: domain.SurfaceCode, Status: domain.VerifyPassed},
 		},
 	}
-	m := model{detail: detail{loaded: true, view: view}, width: 120, height: 40}
+	m := modelForSessionView(view)
 	if got := strings.Count(m.renderDetail(88), "(stale)"); got != 1 {
 		t.Fatalf("same-claim fresh rerun was mislabeled; stale markers=%d", got)
+	}
+}
+
+func TestSessionDetailUsesExactProjectionTotals(t *testing.T) {
+	view := kernel.SessionView{
+		Case:                   &domain.CaseFile{ID: "task_bounded", Goal: "inspect bounded history", Status: domain.PhaseVerifying},
+		VerificationAssessment: kernel.VerificationAssessment{Outcome: kernel.VerificationPartial},
+		Receipts: []domain.VerificationRecord{
+			{ID: "vr_1", Claim: "claim one", Surface: domain.SurfaceCode, Status: domain.VerifyPassed},
+			{ID: "vr_2", Claim: "claim two", Surface: domain.SurfaceCode, Status: domain.VerifyPassed},
+			{ID: "vr_3", Claim: "claim three", Surface: domain.SurfaceCode, Status: domain.VerifyInconclusive},
+			{ID: "vr_4", Claim: "claim four", Surface: domain.SurfaceCode, Status: domain.VerifyBlocked},
+		},
+		ReceiptTotal: 220,
+		Evidence: []domain.Evidence{
+			{Claim: "evidence one", Confidence: domain.ConfidenceHigh},
+			{Claim: "evidence two", Confidence: domain.ConfidenceMedium},
+			{Claim: "evidence three", Confidence: domain.ConfidenceLow},
+			{Claim: "evidence four", Confidence: domain.ConfidenceHigh},
+			{Claim: "evidence five", Confidence: domain.ConfidenceHigh},
+		},
+		EvidenceTotal:      250,
+		ProjectionWarnings: []string{"showing 200 newest of 250 evidence records"},
+	}
+	m := modelForSessionView(view)
+	out := m.renderDetail(88)
+	for _, want := range []string{
+		"(220 receipts)", "… 216 older receipts", "(250 total)", "… 245 older",
+		"showing 200 newest of 250 evidence records",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail did not use canonical total %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "(5 total)") {
+		t.Fatalf("detail exposed retained evidence count as the total:\n%s", out)
 	}
 }

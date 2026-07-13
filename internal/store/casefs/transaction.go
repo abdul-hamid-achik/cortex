@@ -233,6 +233,9 @@ func (s *Store) UpdateHypotheses(c *domain.CaseFile, update HypothesesUpdate) ([
 }
 
 func (s *Store) currentCaseForUpdateUnlocked(expected *domain.CaseFile) (domain.CaseFile, uint64, error) {
+	if err := domain.ValidateAcceptanceCriteria(expected.AcceptanceCriteria); err != nil {
+		return domain.CaseFile{}, 0, err
+	}
 	var current domain.CaseFile
 	if err := readJSON(filepath.Join(s.dir(expected.ID), "case.json"), &current); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -244,6 +247,9 @@ func (s *Store) currentCaseForUpdateUnlocked(expected *domain.CaseFile) (domain.
 	want := effectiveRevision(expected.Revision)
 	if want != actual {
 		return current, actual, &RevisionConflictError{TaskID: expected.ID, Expected: want, Actual: actual}
+	}
+	if !reflect.DeepEqual(current.AcceptanceCriteria, expected.AcceptanceCriteria) {
+		return current, actual, errors.New("acceptance criteria are immutable after case creation")
 	}
 	return current, actual, nil
 }

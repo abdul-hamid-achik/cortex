@@ -1,6 +1,6 @@
 package domain
 
-// LoopStage is one step of the six-step reasoning loop (SPEC §3.1). Several
+// LoopStage is one step of the six-step reasoning loop. Several
 // phases can share a stage — e.g. new and orienting both sit at "orient".
 type LoopStage struct {
 	Label  string

@@ -1,6 +1,6 @@
 package domain
 
-// HypothesisStatus tracks a hypothesis through the investigation (SPEC §9.3).
+// HypothesisStatus tracks a hypothesis through the investigation.
 type HypothesisStatus string
 
 const (
@@ -10,7 +10,7 @@ const (
 	HypConfirmed  HypothesisStatus = "confirmed"
 )
 
-// Disproof names the test that would falsify a hypothesis (SPEC §3.4). A
+// Disproof names the test that would falsify a hypothesis. A
 // hypothesis without a disproof path cannot pass the planning gate.
 type Disproof struct {
 	Kind     string `json:"kind,omitempty"`     // behavioral_run, terminal_run, unit_test, …
@@ -24,7 +24,7 @@ func (d Disproof) Declared() bool {
 	return d.Kind != "" || d.Tool != "" || d.Contract != "" || d.Note != ""
 }
 
-// Hypothesis is a falsifiable proposed explanation (SPEC §8.4).
+// Hypothesis is a falsifiable proposed explanation.
 type Hypothesis struct {
 	ID         string           `json:"id"`
 	Statement  string           `json:"statement"`
@@ -35,7 +35,7 @@ type Hypothesis struct {
 }
 
 // Validate enforces the planning invariant that a hypothesis must state both a
-// claim and how it could be disproved (SPEC §6.3 #1).
+// claim and how it could be disproved.
 func (h Hypothesis) Validate() error {
 	if h.Statement == "" {
 		return errValidation("hypothesis has no statement")

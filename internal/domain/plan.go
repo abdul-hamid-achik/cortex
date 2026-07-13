@@ -2,8 +2,8 @@ package domain
 
 import "strings"
 
-// Plan is the planning-gate payload stored at plan.json (SPEC §10.2
-// cortex_plan). It bundles the hypotheses, the declared change boundary, and
+// Plan is the planning-gate payload stored at plan.json. It bundles the
+// hypotheses, the declared change boundary, and
 // the verification requirements a task commits to before it may enter changing.
 type Plan struct {
 	Hypotheses           []Hypothesis   `json:"hypotheses"`
@@ -27,7 +27,7 @@ func KnownVerificationRequirement(requirement string) bool {
 	}
 }
 
-// Validate enforces the planning gate (SPEC §13.1): at least one hypothesis,
+// Validate enforces the planning gate: at least one hypothesis,
 // each with a disproof path, and an explicit statement of uncertainty.
 func (p Plan) Validate() error {
 	if len(p.Hypotheses) == 0 {

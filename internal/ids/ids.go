@@ -1,6 +1,6 @@
 // Package ids generates stable, time-sortable identifiers for case-file
-// records (tasks, evidence, hypotheses, verifications). The format mirrors the
-// SPEC examples (task_01J9Q5Y8B0M6D2): a short prefix plus a Crockford base32
+// records (tasks, evidence, hypotheses, verifications). The format uses a short
+// prefix (for example, task_01J9Q5Y8B0M6D2) plus a Crockford base32
 // encoding of a 48-bit millisecond timestamp followed by 40 bits of randomness.
 // Lexical order matches creation order, which keeps case files readable.
 package ids

@@ -116,30 +116,7 @@ func (s *Store) HandoffSnapshot(taskID string, limit int) (TaskSnapshot, error) 
 		if snapshot.Hypotheses, err = s.hypothesesUnlocked(taskID); err != nil {
 			return fmt.Errorf("load hypotheses: %w", err)
 		}
-		path := filepath.Join(s.dir(taskID), "evidence.jsonl")
-		err = readJSONL(path, func(line []byte) error {
-			var item domain.Evidence
-			if err := json.Unmarshal(line, &item); err != nil {
-				return err
-			}
-			snapshot.EvidenceTotal++
-			if item.Sensitivity == domain.SensitivitySensitive {
-				snapshot.SensitiveEvidenceOmitted++
-				return nil
-			}
-			snapshot.ShareableEvidenceTotal++
-			if limit == 0 {
-				return nil
-			}
-			if len(snapshot.Evidence) < limit {
-				snapshot.Evidence = append(snapshot.Evidence, item)
-				return nil
-			}
-			copy(snapshot.Evidence, snapshot.Evidence[1:])
-			snapshot.Evidence[len(snapshot.Evidence)-1] = item
-			return nil
-		})
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := s.readRecentShareableEvidence(taskID, limit, &snapshot); err != nil {
 			return fmt.Errorf("load evidence: %w", err)
 		}
 		if snapshot.Verifications, err = s.verificationsUnlocked(taskID); err != nil {
@@ -153,6 +130,73 @@ func (s *Store) HandoffSnapshot(taskID string, limit int) (TaskSnapshot, error) 
 		return nil
 	})
 	return snapshot, err
+}
+
+// CompletionSnapshot reads every document that gates or describes completion
+// under one task lock. Evidence is streamed so a long-running task does not
+// allocate its full append-only ledger; exact totals are retained while only
+// the newest non-sensitive records are returned for summary rendering.
+//
+// Unlike HandoffSnapshot, this projection intentionally excludes the plan,
+// decisions, commands, and phase history. Remember only needs the current case,
+// hypothesis ledger, verification receipts, and bounded evidence projection.
+func (s *Store) CompletionSnapshot(taskID string, evidenceLimit int) (TaskSnapshot, error) {
+	if err := ValidateTaskID(taskID); err != nil {
+		return TaskSnapshot{}, err
+	}
+	if evidenceLimit < 0 {
+		return TaskSnapshot{}, errors.New("completion evidence limit cannot be negative")
+	}
+	var snapshot TaskSnapshot
+	err := s.withTaskLock(taskID, func() error {
+		c, err := s.Load(taskID)
+		if err != nil {
+			return err
+		}
+		snapshot.Case = c
+		if snapshot.Hypotheses, err = s.hypothesesUnlocked(taskID); err != nil {
+			return fmt.Errorf("load hypotheses: %w", err)
+		}
+		if err := s.readRecentShareableEvidence(taskID, evidenceLimit, &snapshot); err != nil {
+			return fmt.Errorf("load evidence: %w", err)
+		}
+		if snapshot.Verifications, err = s.verificationsUnlocked(taskID); err != nil {
+			return fmt.Errorf("load verifications: %w", err)
+		}
+		snapshot.VerificationTotal = len(snapshot.Verifications)
+		return nil
+	})
+	return snapshot, err
+}
+
+func (s *Store) readRecentShareableEvidence(taskID string, limit int, snapshot *TaskSnapshot) error {
+	path := filepath.Join(s.dir(taskID), "evidence.jsonl")
+	err := readJSONL(path, func(line []byte) error {
+		var item domain.Evidence
+		if err := json.Unmarshal(line, &item); err != nil {
+			return err
+		}
+		snapshot.EvidenceTotal++
+		if item.Sensitivity == domain.SensitivitySensitive {
+			snapshot.SensitiveEvidenceOmitted++
+			return nil
+		}
+		snapshot.ShareableEvidenceTotal++
+		if limit == 0 {
+			return nil
+		}
+		if len(snapshot.Evidence) < limit {
+			snapshot.Evidence = append(snapshot.Evidence, item)
+			return nil
+		}
+		copy(snapshot.Evidence, snapshot.Evidence[1:])
+		snapshot.Evidence[len(snapshot.Evidence)-1] = item
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // StatusSnapshot reads only the documents needed by Status and counts evidence

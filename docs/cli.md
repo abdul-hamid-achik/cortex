@@ -33,14 +33,16 @@ retry after a lost response is safe.
 ```bash
 cortex open "Fix post-login checkout redirect" \
   --surface code --surface browser \
-  --actor agent-auth --idempotency-key checkout-redirect
+  --actor agent-auth --idempotency-key checkout-redirect \
+  --criterion 'checkout_return=Login started at checkout returns to checkout'
 ```
 
 An `--idempotency-key` is the strongest identity and returns its existing case even after
 completion. Without one, Cortex resumes the newest active case with the same normalized goal,
-mode, workspace, and current branch. When a new case is created, `--parent` links delegated work
-to a case in the same workspace and both parent and child records are updated. Resuming returns the
-existing metadata unchanged.
+mode, workspace, current branch, and acceptance contract. When a new case is created, `--parent`
+links delegated work to a case in the same workspace and both parent and child records are updated.
+Resuming returns existing metadata unchanged. `--criterion id=statement` registers an immutable
+success rule; the same id and exact statement must later appear in a typed verification claim.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -50,6 +52,7 @@ existing metadata unchanged.
 | `--actor` | — | stable, non-secret person/agent identifier |
 | `--parent` | — | parent task ID for same-workspace delegated work |
 | `--idempotency-key` | — | stable, non-secret retry identity |
+| `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
 
 ### `cortex start <goal>`
 
@@ -65,6 +68,7 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 | `--mode` | `change` | `change` \| `investigate` \| `review` |
 | `--risk` | `medium` | `low` \| `medium` \| `high` |
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
+| `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
 
 ### `cortex investigate <taskId> <question>`
 
@@ -186,7 +190,8 @@ Run the required verifiers, detect scope drift, and write receipts.
 
 ```bash
 cortex verify task_06FK… \
-  --claim "the OAuth callback preserves the return URL" \
+  --claim "Login started at checkout returns to checkout" \
+  --claim-id checkout_return \
   --claim-surface browser \
   --claim-verifier cairntrace \
   --claim-contract specs/cairntrace/checkout_return.yml \
@@ -197,6 +202,7 @@ cortex verify task_06FK… \
 | Flag | Meaning |
 |---|---|
 | `--claim` (repeatable) | a user-facing claim to prove |
+| `--claim-id` (repeatable) | optional stable ID for each claim; required to prove a registered criterion |
 | `--claim-surface` (repeatable) | explicit `code`, `browser`, `terminal`, `artifact`, or `secret` surface; repeat once per claim |
 | `--claim-verifier` (repeatable) | optional exact verifier (`codemap`, `cairntrace`, `glyphrun`, `fcheap`, `tvault`, or `command:<name>`); omit entirely or repeat once per claim |
 | `--claim-contract` (repeatable) | required exact spec path/configured check/capability selector for each typed claim; repeat once per claim |
@@ -210,7 +216,9 @@ cortex verify task_06FK… \
 | `--actor` | active change-lease owner, when leased |
 
 Supplying `--claim-surface` opts into typed claims and requires the matching `--claim-contract`.
-Typed routing is exact: a claim is `not_run` unless that exact verifier/contract ran. Legacy
+When `--claim-id` is used, repeat it once per claim. Typed routing is exact: a claim is `not_run`
+unless that exact verifier/contract ran. A registered criterion additionally requires the same ID
+and byte-for-byte statement. Legacy
 `--claim` without typed flags remains available but infers the surface heuristically.
 
 Repository-configured checks execute only when the process launching Cortex explicitly sets
@@ -232,12 +240,17 @@ cortex remember task_06FK… "returnTo was dropped; fixed and browser-verified" 
 | `--unverified` | explicitly accept a `partial` or `unverified` completion when adequate proof could not be completed |
 | `--accept-failed` | explicitly accept a `failed` completion — records a failed outcome, not a green one |
 
+These acknowledgments preserve legacy tasks honestly; they do not bypass an explicitly registered
+acceptance contract. Every registered criterion needs current bound proof before completion.
+
 ### `cortex status <taskId>`
 
 Phase, unresolved hypotheses, scope drift, missing verification, and (with `--detail full`) tool
 health. JSON includes case `revision`, actor/parent/children, lease, pending decision, structured
 `actions`, and one canonical `verificationOutcome`: `verified`, `partial`, `failed`, or
-`unverified`.
+`unverified`. For registered criteria (and legacy stable named claims), JSON also includes a
+bounded `claimProofs` manifest with exact total/truncation metadata, receipt/batch identity,
+binding, revision/diff digest, and non-sensitive evidence references.
 
 `cortex show` and Studio use one task-locked composite projection. They retain the 200 newest
 evidence, command, and phase ledger records and return exact `evidenceTotal` / `timelineTotal`
@@ -279,8 +292,12 @@ cortex handoff task_06FK… -o handoff.md   # Markdown file
 cortex --json handoff task_06FK…          # structured packet
 ```
 
-Handoff JSON is hard-capped at 128 KiB and excludes sensitive evidence/receipt content. Markdown
-files are created owner-readable/writable only (`0600` on POSIX systems).
+General handoff JSON is hard-capped at 128 KiB and excludes sensitive evidence/receipt content.
+For a complete verified task, Cortex instead budgets the primary JSON at 90 KiB so local-agent's
+96 KiB result ceiling is respected: it preserves every non-sensitive named claim and referenced
+verifier batch, strips non-proof context first, and omits all receipts with an explicit warning if
+the complete proof closure still cannot fit. Markdown files are created owner-readable/writable
+only (`0600` on POSIX systems).
 
 The packet contains current state, revision, actor/parent/children/lease coordination metadata,
 plan, hypotheses, at most 20 recent evidence facts, the latest verifier runs plus named-claim
@@ -331,6 +348,7 @@ cortex sessions                    # everything, everywhere
 cortex sessions --repo billing     # only sessions whose repo/slug matches
 cortex sessions --active           # only in-flight (non-terminal)
 cortex sessions --stale            # in-flight but untouched beyond --stale-after (default 24h)
+cortex sessions --query "billing partial" # case-insensitive AND terms across identity/state
 ```
 
 An in-flight session untouched beyond `--stale-after` renders its age with a `⚠` — a nudge toward
@@ -383,28 +401,33 @@ verification receipts — merged and time-sorted. Central sessions work from any
 
 ### `cortex studio` (`board`, `tui`)
 
-A live, read-only Charm v2 board of every session across every repo: the session list on the left,
-and the selected case's **loop stepper** (`orient→…→preserve`, with a "you are here" marker),
-canonical verification assessment and gaps, pending decision, first structured next action,
-hypotheses, recent evidence, and recent receipts on the right. Auto-refreshes.
+A live, read-only Charm v2 board of every session across every repo. Wide terminals show the
+session list and selected case side by side; narrow terminals stack them at full width. Session
+rows include textual phase labels. The selected case shows the **loop stepper**
+(`orient→…→preserve`, with a "you are here" marker), canonical verification assessment and gaps,
+pending decision, first structured next action, hypotheses, exact evidence/receipt totals, and
+bounded recent records. Auto-refreshes and keeps the matching last good projection visible when a
+refresh fails.
 
 ```bash
 cortex studio               # all sessions, live
 cortex studio --active      # only in-flight
 cortex studio --repo api    # scope to a repo
+cortex studio --query "billing partial" # start with the shared session search
 ```
 
 Studio is interactive and rejects `--json`. Use `cortex sessions --json` for the board index or
 `cortex show <taskId> --json` for one canonical session projection.
 
-Keys: `↑/↓` navigate · `g/G` jump · `a` active-only · `r` refresh · `q` quit.
+Keys: `↑/↓` navigate · `g/G` jump · `Page Up/Page Down` (or `Ctrl-U/Ctrl-D`) scroll detail ·
+`/` edit search · `c` clear search · `a` active-only · `r` refresh · `q` quit.
 
 ### Other
 
 | Command | Purpose |
 |---|---|
 | `cortex resolve <taskId> <hypId> --status … --reason …` | mark a hypothesis confirmed/challenged/rejected (history retained) |
-| `cortex metrics [taskId]` | observability: per-task outcome + evidence trail (incl. **time-in-phase**), or the workspace aggregate (SPEC §18) |
+| `cortex metrics [taskId]` | observability: per-task outcome + evidence trail (incl. **time-in-phase**), or the workspace aggregate |
 | `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
 | `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
 | `cortex config` | resolved workspace/storage paths, budget, recall policy, safe verifier metadata (argv omitted), redaction count, and applied `cortex.yaml` sources |

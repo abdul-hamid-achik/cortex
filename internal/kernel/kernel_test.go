@@ -17,7 +17,7 @@ import (
 )
 
 // fakeAdapter returns canned results, letting the kernel be tested without real
-// downstream tools (SPEC §23.2 uses fixtures/fakes). It captures every Execute
+// downstream tools. It captures every Execute
 // request (race-safe) so routing assertions can inspect what each tool received.
 type fakeAdapter struct {
 	name   string
@@ -294,6 +294,42 @@ func TestScopeDriftDetected(t *testing.T) {
 	}
 }
 
+func TestStatusLeavesScopeUnknownWhenGitCannotReadDiff(t *testing.T) {
+	ws := testRepo(t)
+	k := newTestKernel(t, ws)
+	started, _ := k.StartTask(context.Background(), StartInput{Goal: "report scope honestly"})
+	_, _ = k.Plan(PlanInput{
+		TaskID: started.TaskID,
+		Hypotheses: []HypothesisInput{{
+			Statement: "the bounded edit is sufficient", DisproveBy: "inspect the current diff",
+		}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}},
+		Uncertainty:    "the workspace may become unavailable",
+	})
+	if begun, _ := k.BeginChange(BeginChangeInput{TaskID: started.TaskID, Actor: "agent-a"}); !begun.OK {
+		t.Fatalf("begin change = %+v", begun)
+	}
+	caseFile, err := k.Store().Load(started.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caseFile.Workspace.BaseRef = "missing-review-base"
+	if err := k.Store().Save(caseFile); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := k.Status(context.Background(), started.TaskID, "standard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Scope != nil {
+		t.Fatalf("unreadable diff was reported as a known scope result: %+v", rep.Scope)
+	}
+	if !hasWarning(rep.Warnings, "could not evaluate scope drift") {
+		t.Fatalf("missing scope-evaluation warning: %v", rep.Warnings)
+	}
+}
+
 func TestAbortPreservesEvidence(t *testing.T) {
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
@@ -345,7 +381,7 @@ func TestInvestigationBudget(t *testing.T) {
 }
 
 func TestEvidenceRedactionAtBoundary(t *testing.T) {
-	// SPEC §6.3 #4: no secret value may enter an evidence record. A human/model
+	// No secret value may enter an evidence record. A human/model
 	// reason routed through Resolve must be redacted at the write boundary.
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
@@ -378,7 +414,7 @@ func TestEvidenceRedactionAtBoundary(t *testing.T) {
 }
 
 func TestVerifyPassCountIgnoresClaimText(t *testing.T) {
-	// SPEC §14.2: a claim whose free text contains the word "passed" must NOT be
+	// A claim whose free text contains the word "passed" must NOT be
 	// counted as verified when its verifier did not run.
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Surfaces: []domain.Surface{domain.SurfaceBrowser}})
@@ -396,7 +432,7 @@ func TestVerifyPassCountIgnoresClaimText(t *testing.T) {
 }
 
 func TestVerifyStashesFailedRun(t *testing.T) {
-	// SPEC §12.6 / §25 #6: a failed behavioral run is archived to fcheap and the
+	// A failed behavioral run is archived to fcheap and the
 	// receipt links the durable stash. Needs the real fcheap binary.
 	if _, err := exec.LookPath("fcheap"); err != nil {
 		t.Skip("fcheap not on PATH")
@@ -452,7 +488,7 @@ type fixedApprover struct{ ok bool }
 func (a fixedApprover) Approve(taskID, tool, op string, class domain.ActionClass) bool { return a.ok }
 
 func TestActionGateBlocksExternal(t *testing.T) {
-	// SPEC §16.2 #4: external mutation is blocked without approval, allowed with.
+	// External mutation is blocked without approval and allowed with it.
 	dep := &fakeAdapter{name: "deployer", result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "deployed"}}
 	k := newTestKernel(t, testRepo(t), dep)
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
@@ -468,7 +504,7 @@ func TestActionGateBlocksExternal(t *testing.T) {
 	}
 }
 
-// TestEnvApproverGatesExternal guards the SPEC §16.2 #4 env-gated approver:
+// TestEnvApproverGatesExternal guards the env-gated approver:
 // CORTEX_APPROVE_EXTERNAL=1 lets an external mutation run; unset keeps the deny.
 func TestEnvApproverGatesExternal(t *testing.T) {
 	dep := &fakeAdapter{name: "deployer", result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "deployed"}}
@@ -510,7 +546,7 @@ func TestAuditRecordsActionClass(t *testing.T) {
 }
 
 func TestReceiptSensitivity(t *testing.T) {
-	// SPEC §16.2 #5: a receipt linked to sensitive evidence is labeled sensitive.
+	// A receipt linked to sensitive evidence is labeled sensitive.
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
 	id := env.TaskID
@@ -547,7 +583,7 @@ func TestVideoRefHelpers(t *testing.T) {
 }
 
 func TestInvestigateWithVideoRunsVidtrace(t *testing.T) {
-	// SPEC §19.4: an explicit bug-video bundle triggers a vidtrace investigation.
+	// An explicit bug-video bundle triggers a vidtrace investigation.
 	vt := &fakeAdapter{name: "vidtrace", caps: []adapters.Capability{adapters.CapabilityArtifacts},
 		result: adapters.Result{Status: adapters.StatusAuthoritative,
 			Facts: []adapters.Fact{{Kind: "artifact", Claim: "video failure likely owned by src/checkout.ts:42", Confidence: "low"}}}}
@@ -608,7 +644,7 @@ func TestInvestigateSetsDegradedOnPartialResult(t *testing.T) {
 }
 
 func TestRouteStepsCapsCandidates(t *testing.T) {
-	// SPEC §7.3 max_candidate_files_returned: discovery searches carry the cap.
+	// Discovery searches carry the configured candidate-file cap.
 	steps := routeSteps(domain.Route{First: "vecgrep", FollowUp: "codemap"}, "some vague behavioral query", nil, 5)
 	sawSearch := false
 	for _, s := range steps {
@@ -628,7 +664,7 @@ func TestRouteStepsCapsCandidates(t *testing.T) {
 }
 
 func TestInvestigateFeedsCandidatesIntoCodemap(t *testing.T) {
-	// Causal routing (SPEC §7.1): discovery runs first, then the top
+	// Causal routing runs discovery first, then the top
 	// deduplicated file/symbol candidates are fed into codemap — not the raw
 	// question — and the structural fact records derivedFrom provenance.
 	vecgrep := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
@@ -917,7 +953,7 @@ func TestFileQueryToken(t *testing.T) {
 }
 
 func TestMemoryLineFormat(t *testing.T) {
-	// SPEC §15.3 memory item format.
+	// Canonical memory item format.
 	c := &domain.CaseFile{
 		ID: "task_X", Goal: "fix post-login redirect",
 		Workspace:      domain.Workspace{Repository: "liftclub", CommitBefore: "7e1f4d2"},
@@ -932,7 +968,7 @@ func TestMemoryLineFormat(t *testing.T) {
 			t.Errorf("memory line missing %q\n got: %s", want, m)
 		}
 	}
-	// An unverified completion must NOT be recorded as high confidence (SPEC §8.6).
+	// An unverified completion must NOT be recorded as high confidence.
 	if mm := memoryLine(c, "guessed", recs, memoryConfidence(false)); !strings.Contains(mm, "confidence=medium") {
 		t.Errorf("unverified memory should be medium confidence, got: %s", mm)
 	}
@@ -940,7 +976,7 @@ func TestMemoryLineFormat(t *testing.T) {
 
 func TestRawPersistenceAndRetrieval(t *testing.T) {
 	// A tool call's raw output is stored once, every fact from it points at the
-	// stored blob, and it can be retrieved on demand — redacted (SPEC §10.4).
+	// stored blob, and it can be retrieved on demand — redacted.
 	ws := testRepo(t)
 	secret := "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"
 	vg := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
@@ -989,7 +1025,7 @@ func TestReadArtifactEdgeCases(t *testing.T) {
 }
 
 func TestAnnotateBehaviorGating(t *testing.T) {
-	// SPEC §12.2: annotate only definitive outcomes, and only when the change
+	// Annotate only definitive outcomes, and only when the change
 	// boundary names an owning symbol (reasonable-confidence identification).
 	k := newTestKernel(t, testRepo(t), adapters.NewCodemap())
 	c := &domain.CaseFile{ID: "task_x", Workspace: domain.Workspace{Repository: "x"}}
@@ -1006,7 +1042,7 @@ func TestAnnotateBehaviorGating(t *testing.T) {
 }
 
 func TestVerifyRiskEscalation(t *testing.T) {
-	// SPEC §13.3: a high-risk change with no passing structural review warns.
+	// A high-risk change with no passing structural review warns.
 	// No codemap adapter registered → review is blocked (not passed).
 	ws := testRepo(t)
 	k := newTestKernel(t, ws) // git only; codemap absent → review blocked
@@ -1020,12 +1056,12 @@ func TestVerifyRiskEscalation(t *testing.T) {
 	}
 	res, _ := k.Verify(context.Background(), VerifyInput{TaskID: id})
 	if !hasWarning(res.Warnings, "high-risk change requires a structural diff review") {
-		t.Errorf("expected a §13.3 risk-escalation warning; warnings=%v", res.Warnings)
+		t.Errorf("expected a risk-escalation warning; warnings=%v", res.Warnings)
 	}
 }
 
 func TestVerifyNoDiffRequiresAcknowledgement(t *testing.T) {
-	// SPEC §6.2: a change task cannot enter verifying without a change record or
+	// A change task cannot enter verifying without a change record or
 	// an explicit acknowledgement that the task intentionally made no change.
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Risk: "low"})
@@ -1317,7 +1353,7 @@ func TestMemoryTagsAreRepoPrefixed(t *testing.T) {
 
 func TestCompletionRejectsNotRunOnly(t *testing.T) {
 	// Regression: a task whose only receipt is not_run must NOT complete without
-	// an explicit unverified acknowledgment (SPEC §6.3 #2).
+	// an explicit unverified acknowledgment.
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Mode: domain.ModeInvestigate, Surfaces: []domain.Surface{domain.SurfaceBrowser}})
 	id := env.TaskID
@@ -1412,7 +1448,7 @@ func TestCompletionRequiresAcknowledgementForMissingRequiredVerifier(t *testing.
 	// Regression: a task can pass one required verifier (code) yet leave another
 	// required one (browser) never run, and it used to complete as if fully
 	// verified with NO warning. Completion must surface the unmet requirement
-	// (SPEC §6.2/§14.2).
+	// so the legacy compatibility path remains safe.
 	ws := testRepo(t)
 	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
 		result: adapters.Result{Status: adapters.StatusAuthoritative, Summary: "review ok",
@@ -1599,7 +1635,7 @@ func TestNormalizeRisk(t *testing.T) {
 			t.Errorf("normalizeRisk(%q) = (%q, %t), want (%q, %t)", in, got, ok, want.want, want.ok)
 		}
 	}
-	// A high-risk task started with a non-canonical value still triggers §13.3.
+	// A high-risk task started with a non-canonical value still triggers escalation.
 	ws := testRepo(t)
 	k := newTestKernel(t, ws)
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Risk: "HIGH"})
@@ -1614,7 +1650,7 @@ func TestNormalizeRisk(t *testing.T) {
 	}
 	res, _ := k.Verify(context.Background(), VerifyInput{TaskID: env.TaskID})
 	if !hasWarning(res.Warnings, "high-risk change requires") {
-		t.Errorf("a --risk HIGH task should trigger §13.3 escalation; warnings=%v", res.Warnings)
+		t.Errorf("a --risk HIGH task should trigger escalation; warnings=%v", res.Warnings)
 	}
 }
 
@@ -1830,7 +1866,7 @@ func TestTaskAndWorkspaceMetrics(t *testing.T) {
 		t.Errorf("expected recorded tool calls and evidence, got calls=%d evidence=%d", tm.ToolCalls, tm.EvidenceItems)
 	}
 	if len(tm.ToolContribution) == 0 {
-		t.Error("expected per-tool contribution (§18.2)")
+		t.Error("expected per-tool contribution")
 	}
 	// Aggregate over the workspace.
 	wm, per, err := k.WorkspaceMetrics()
@@ -1896,7 +1932,7 @@ func TestMetricsCallsBeforeEvidenceExcludesOrientation(t *testing.T) {
 }
 
 // TestPlanPersistsTimeoutOverrides verifies the per-task timeout override
-// (SPEC §17.2) is accepted at plan time and written to the case file.
+// is accepted at plan time and written to the case file.
 func TestPlanPersistsTimeoutOverrides(t *testing.T) {
 	k := newTestKernel(t, testRepo(t))
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
@@ -1916,7 +1952,7 @@ func TestPlanPersistsTimeoutOverrides(t *testing.T) {
 }
 
 // TestRunAppliesTimeoutOverride verifies that a per-task timeout override
-// bounds the context passed to the adapter (SPEC §17.2).
+// bounds the context passed to the adapter.
 func TestRunAppliesTimeoutOverride(t *testing.T) {
 	sawDeadline := false
 	probe := &deadlineAdapter{name: "codemap", onExec: func(ctx context.Context) { _, sawDeadline = ctx.Deadline() }}

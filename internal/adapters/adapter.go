@@ -1,6 +1,6 @@
 // Package adapters normalizes each downstream tool (codemap, vecgrep, cairn,
 // glyph, fcheap, tvault, git) behind one interface so the kernel's workflow
-// engine only ever sees a normalized result envelope (SPEC §11). Adapters
+// engine only ever sees a normalized result envelope. Adapters
 // validate input, apply timeouts, redact secrets, and mark whether a result is
 // authoritative, partial, or unavailable — they never fabricate a missing
 // tool's output.
@@ -8,7 +8,7 @@ package adapters
 
 import "context"
 
-// Capability is a coarse role an adapter fills (SPEC §11.2).
+// Capability is a coarse role an adapter fills.
 type Capability string
 
 const (
@@ -21,7 +21,7 @@ const (
 	CapabilityRecall    Capability = "recall"    // veclite cross-case disproof recall
 )
 
-// Status reports how much trust a result carries (SPEC §11.4).
+// Status reports how much trust a result carries.
 type Status string
 
 const (
@@ -30,7 +30,7 @@ const (
 	StatusUnavailable   Status = "unavailable"
 	StatusError         Status = "error"
 	// StatusBlocked means the action was refused by policy before executing
-	// (e.g. an external mutation with no approval; SPEC §16.2 #4).
+	// (e.g. an external mutation with no approval).
 	StatusBlocked Status = "blocked"
 )
 
@@ -118,7 +118,7 @@ type ArtifactRef struct {
 // Verdict is a behavioral run's structured pass/fail/errored outcome, carried
 // separately from Status because a run that FAILED still executed authoritatively
 // (the tool worked and reported a failure). It lets the kernel classify a run
-// without string-matching warning text (SPEC §11.4). Empty for non-behavioral
+// without string-matching warning text. Empty for non-behavioral
 // results.
 type Verdict string
 
@@ -128,7 +128,7 @@ const (
 	VerdictErrored Verdict = "errored" // ambiguous/infra error — NOT a behavioral failure
 )
 
-// Result is the normalized output of an adapter operation (SPEC §11.2).
+// Result is the normalized output of an adapter operation.
 type Result struct {
 	Tool      string
 	Operation string
@@ -142,11 +142,11 @@ type Result struct {
 	// runs (empty otherwise). The kernel reads it instead of scanning Warnings.
 	Verdict Verdict
 	// Raw is the redacted raw tool output, retained for the case file's evidence
-	// store. It is NOT returned to the model by default (SPEC §10.4).
+	// store. It is NOT returned to the model by default.
 	Raw string
 }
 
-// Adapter normalizes one downstream tool (SPEC §11.2).
+// Adapter normalizes one downstream tool.
 type Adapter interface {
 	Name() string
 	Capabilities() []Capability
@@ -155,7 +155,7 @@ type Adapter interface {
 }
 
 // unavailable builds a degraded result for a missing/unhealthy tool. It records
-// a tool_unavailable fact rather than fabricating output (SPEC §17.1).
+// a tool_unavailable fact rather than fabricating output.
 func unavailable(tool, op, reason string) Result {
 	return Result{
 		Tool:      tool,

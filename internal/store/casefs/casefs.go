@@ -1,9 +1,9 @@
 // Package casefs persists case files to the local filesystem as JSON/JSONL
-// under .cortex/cases/<taskID>/ by default (SPEC §8.1; overridable). It is the kernel's working memory,
+// under .cortex/cases/<taskID>/ by default (overridable). It is the kernel's working memory,
 // not a transcript: append-oriented ledgers (evidence, commands, phases) plus
 // snapshot documents (case, plan, hypotheses, verification, summary).
 //
-// v0.1 uses files, not a database (SPEC §24 #1). The layout is intentionally
+// v0.1 uses files, not a database. The layout is intentionally
 // human-readable so a case can be inspected or hand-edited.
 package casefs
 
@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -121,6 +122,9 @@ func (s *Store) Create(c *domain.CaseFile) error {
 	if err := ValidateTaskID(c.ID); err != nil {
 		return err
 	}
+	if err := domain.ValidateAcceptanceCriteria(c.AcceptanceCriteria); err != nil {
+		return err
+	}
 	return s.withTaskLock(c.ID, func() error {
 		dir := s.dir(c.ID)
 		if _, err := os.Stat(dir); err == nil {
@@ -145,6 +149,9 @@ func (s *Store) Save(c *domain.CaseFile) error {
 	if err := ValidateTaskID(c.ID); err != nil {
 		return err
 	}
+	if err := domain.ValidateAcceptanceCriteria(c.AcceptanceCriteria); err != nil {
+		return err
+	}
 	return s.withTaskLock(c.ID, func() error {
 		var current domain.CaseFile
 		if err := readJSON(filepath.Join(s.dir(c.ID), "case.json"), &current); err != nil {
@@ -157,6 +164,9 @@ func (s *Store) Save(c *domain.CaseFile) error {
 		expected := effectiveRevision(c.Revision)
 		if expected != actual {
 			return &RevisionConflictError{TaskID: c.ID, Expected: expected, Actual: actual}
+		}
+		if !slices.Equal(current.AcceptanceCriteria, c.AcceptanceCriteria) {
+			return errors.New("acceptance criteria are immutable after case creation")
 		}
 
 		next := *c
@@ -196,6 +206,9 @@ func (s *Store) Load(taskID string) (*domain.CaseFile, error) {
 	}
 	if c.ID != taskID {
 		return nil, fmt.Errorf("case directory %s contains mismatched id %q", taskID, c.ID)
+	}
+	if err := domain.ValidateAcceptanceCriteria(c.AcceptanceCriteria); err != nil {
+		return nil, fmt.Errorf("case %s acceptance criteria: %w", taskID, err)
 	}
 	// Legacy v0.1 snapshots had no revision. Treat their implicit first
 	// snapshot as revision one; the next Save materializes revision two.
@@ -358,7 +371,7 @@ func (s *Store) AppendCommand(taskID string, cmd CommandRecord) error {
 }
 
 // Commands returns every audited tool invocation for a task in append order —
-// the source for observability metrics (SPEC §18), which until now was a
+// the source for observability metrics, which until now was a
 // write-only log with no reader.
 func (s *Store) Commands(taskID string) ([]CommandRecord, error) {
 	if err := ValidateTaskID(taskID); err != nil {
@@ -380,7 +393,7 @@ func (s *Store) Commands(taskID string) ([]CommandRecord, error) {
 }
 
 // CommandRecord is an audit entry for a downstream tool invocation. It records
-// capability and result, never secret contents (SPEC §16.2 #7).
+// capability and result, never secret contents.
 type CommandRecord struct {
 	Timestamp   time.Time `json:"timestamp"`
 	Actor       string    `json:"actor,omitempty"`
@@ -691,7 +704,7 @@ func (s *Store) WriteSummary(taskID, md string) error {
 
 // WriteRaw persists a tool call's (redacted) raw output under raw/<rawID>.txt so
 // it can be retrieved on demand without bloating the model-visible envelope
-// (SPEC §10.4). rawID must be a filename-safe token.
+// rawID must be a filename-safe token.
 func (s *Store) WriteRaw(taskID, rawID, content string) error {
 	if len(content) > maxRawFileBytes {
 		return fmt.Errorf("raw output exceeds %d byte limit", maxRawFileBytes)

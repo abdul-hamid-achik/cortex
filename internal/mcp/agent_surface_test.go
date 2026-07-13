@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestMCPAgentInstructionsDescribeExposedLeaseWorkflow(t *testing.T) {
 	if init == nil {
 		t.Fatal("missing initialize result")
 	}
-	for _, want := range []string{"cortex_open_task", "idempotencyKey", "cortex_begin_change", "lease actor", "claimSpecs", "cortex_request_decision", "cortex_read_artifact"} {
+	for _, want := range []string{"cortex_open_task", "idempotencyKey", "acceptanceCriteria", "cortex_begin_change", "lease actor", "claimSpecs", "cortex_request_decision", "cortex_read_artifact"} {
 		if !strings.Contains(init.Instructions, want) {
 			t.Errorf("agent instructions missing %q:\n%s", want, init.Instructions)
 		}
@@ -77,7 +78,7 @@ func TestMCPAgentSurfaceSchemas(t *testing.T) {
 		required   []string
 		properties []string
 	}{
-		{name: "cortex_open_task", required: []string{"goal"}, properties: []string{"actor", "idempotencyKey", "parentTaskId"}},
+		{name: "cortex_open_task", required: []string{"goal"}, properties: []string{"acceptanceCriteria", "actor", "idempotencyKey", "parentTaskId"}},
 		{name: "cortex_plan", required: []string{"hypotheses", "taskId", "uncertainty"}, properties: []string{"files", "symbols", "verification"}},
 		{name: "cortex_begin_change", required: []string{"actor", "taskId"}, properties: []string{"ttl", "workspace"}},
 		{name: "cortex_verify", required: []string{"taskId"}, properties: []string{"actor", "claimSpecs", "noOpAcknowledged"}},
@@ -130,6 +131,9 @@ func TestMCPAgentSurfaceSchemas(t *testing.T) {
 			"taskId": "task_missing", "uncertainty": "unknown",
 			"hypotheses": []any{map[string]any{"statement": "redirect is dropped"}},
 		}, want: "disproveBy"},
+		{tool: "cortex_open_task", args: map[string]any{
+			"goal": "invalid criterion", "acceptanceCriteria": []any{map[string]any{"id": "redirect_works"}},
+		}, want: "statement"},
 	} {
 		res, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: tc.tool, Arguments: tc.args})
 		if err != nil {
@@ -139,6 +143,250 @@ func TestMCPAgentSurfaceSchemas(t *testing.T) {
 			t.Errorf("%s invalid nested input should fail schema validation for %q: error=%t text=%s", tc.tool, tc.want, res.IsError, textOf(res))
 		}
 	}
+}
+
+func TestMCPOpenAcceptanceCriteriaRemainOptionalAndReachStatusProofs(t *testing.T) {
+	cs, ws := connectProfile(t, ProfileAgent)
+	env := callEnvelope(t, cs, "cortex_open_task", map[string]any{
+		"goal": "prove the redirect", "workspace": ws, "idempotencyKey": "mcp-criteria",
+		"acceptanceCriteria": []any{map[string]any{
+			"id": "redirect_works", "statement": "Redirect preserves the return path",
+		}},
+	})
+	taskID, _ := env["taskId"].(string)
+	if taskID == "" {
+		t.Fatalf("open did not return task id: %v", env)
+	}
+	res, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "cortex_status", Arguments: map[string]any{
+		"taskId": taskID, "workspace": ws,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal([]byte(textOf(res)), &status); err != nil {
+		t.Fatalf("status is not JSON: %v (%s)", err, textOf(res))
+	}
+	proofs, _ := status["claimProofs"].([]any)
+	if len(proofs) != 1 {
+		t.Fatalf("claim proofs = %#v", status["claimProofs"])
+	}
+	proof, _ := proofs[0].(map[string]any)
+	if proof["claimId"] != "redirect_works" || proof["status"] != "not_run" {
+		t.Fatalf("claim proof = %#v", proof)
+	}
+}
+
+func TestMCPSessionsQueryUsesSharedANDSearch(t *testing.T) {
+	cs, ws := connectProfile(t, ProfileAll)
+	selected := callEnvelope(t, cs, "cortex_open_task", map[string]any{
+		"goal": "repair billing redirect", "workspace": ws, "idempotencyKey": "sessions-query-selected",
+	})
+	_ = callEnvelope(t, cs, "cortex_open_task", map[string]any{
+		"goal": "refresh documentation", "workspace": ws, "idempotencyKey": "sessions-query-other",
+	})
+	res, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "cortex_sessions", Arguments: map[string]any{
+		"query": "BILLING investigating",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessions []map[string]any
+	if err := json.Unmarshal([]byte(textOf(res)), &sessions); err != nil {
+		t.Fatalf("sessions is not JSON: %v (%s)", err, textOf(res))
+	}
+	if len(sessions) != 1 || sessions[0]["id"] != selected["taskId"] {
+		t.Fatalf("query returned %#v, selected=%v", sessions, selected["taskId"])
+	}
+}
+
+func TestMCPToolsAdvertisePortableMetadataAndEnvelopeSchemas(t *testing.T) {
+	cs, _ := connectProfile(t, ProfileAll)
+	tools := qaListTools(t, cs)
+	readOnly := map[string]bool{
+		"cortex_status": true, "cortex_list_tasks": true, "cortex_sessions": true,
+		"cortex_timeline": true, "cortex_metrics": true, "cortex_overview": true,
+		"cortex_handoff": true, "cortex_read_evidence": true,
+		"cortex_read_artifact": true, "cortex_recall_cases": true,
+	}
+	openWorld := map[string]bool{
+		"cortex_start_task": true, "cortex_open_task": true, "cortex_investigate": true,
+		"cortex_verify": true, "cortex_remember": true, "cortex_resolve": true,
+		"cortex_recall_cases": true,
+	}
+	destructive := map[string]bool{
+		"cortex_plan": true, "cortex_begin_change": true, "cortex_verify": true,
+		"cortex_remember": true, "cortex_archive": true, "cortex_unarchive": true,
+		"cortex_resolve": true, "cortex_request_decision": true,
+		"cortex_answer_decision": true, "cortex_abort_task": true,
+	}
+	for name, tool := range tools {
+		if tool.Title == "" || tool.Annotations == nil || tool.Annotations.Title != tool.Title {
+			t.Errorf("%s has no portable display metadata: title=%q annotations=%+v", name, tool.Title, tool.Annotations)
+			continue
+		}
+		if tool.Annotations.ReadOnlyHint != readOnly[name] {
+			t.Errorf("%s readOnlyHint=%t, want %t", name, tool.Annotations.ReadOnlyHint, readOnly[name])
+		}
+		if tool.Annotations.DestructiveHint == nil || tool.Annotations.OpenWorldHint == nil {
+			t.Errorf("%s must state explicit destructive/open-world hints: %+v", name, tool.Annotations)
+		} else {
+			if *tool.Annotations.OpenWorldHint != openWorld[name] {
+				t.Errorf("%s openWorldHint=%t, want %t", name, *tool.Annotations.OpenWorldHint, openWorld[name])
+			}
+			if *tool.Annotations.DestructiveHint != destructive[name] {
+				t.Errorf("%s destructiveHint=%t, want %t", name, *tool.Annotations.DestructiveHint, destructive[name])
+			}
+		}
+	}
+
+	if tools["cortex_begin_change"].Annotations.IdempotentHint {
+		t.Error("begin-change renews its lease timestamp and must not claim unconditional idempotency")
+	}
+	for _, name := range []string{
+		"cortex_open_task", "cortex_remember", "cortex_archive", "cortex_unarchive", "cortex_resolve",
+		"cortex_request_decision", "cortex_answer_decision", "cortex_abort_task",
+	} {
+		if !tools[name].Annotations.IdempotentHint {
+			t.Errorf("%s is retry-safe and should advertise idempotency", name)
+		}
+	}
+	for _, name := range []string{
+		"cortex_start_task", "cortex_open_task", "cortex_investigate", "cortex_plan",
+		"cortex_begin_change", "cortex_verify", "cortex_remember", "cortex_resolve",
+		"cortex_note", "cortex_request_decision", "cortex_answer_decision",
+		"cortex_abort_task", "cortex_recall_cases",
+	} {
+		tool := tools[name]
+		if tool.OutputSchema == nil {
+			t.Errorf("%s omits the shared envelope output schema", name)
+			continue
+		}
+		schema := qaSchemaMap(t, tool.OutputSchema)
+		required := qaStringSlice(t, schema["required"])
+		for _, field := range []string{"ok", "summary", "rawAvailable"} {
+			found := false
+			for _, candidate := range required {
+				if candidate == field {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s output schema does not require %q: %v", name, field, required)
+			}
+		}
+	}
+}
+
+func TestMCPEnvelopeStructuredContentMatchesTextOnSuccessAndRejection(t *testing.T) {
+	cs, ws := connectProfile(t, ProfileAgent)
+	tests := []struct {
+		name string
+		tool string
+		args map[string]any
+		err  bool
+	}{
+		{name: "success", tool: "cortex_open_task", args: map[string]any{
+			"goal": "portable structured output", "workspace": ws, "idempotencyKey": "structured-output",
+		}},
+		{name: "kernel rejection", tool: "cortex_plan", args: map[string]any{
+			"taskId": "task_missing", "workspace": ws, "uncertainty": "unknown",
+			"files": []any{"callback.go"}, "hypotheses": []any{map[string]any{
+				"statement": "callback is wrong", "disproveBy": "inspect callback",
+			}},
+		}, err: true},
+		{name: "pre-kernel ttl rejection", tool: "cortex_begin_change", args: map[string]any{
+			"taskId": "task_missing", "workspace": ws, "actor": "agent-a", "ttl": "not-a-duration",
+		}, err: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: tt.tool, Arguments: tt.args})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.IsError != tt.err {
+				t.Fatalf("isError=%t, want %t: %s", res.IsError, tt.err, textOf(res))
+			}
+			qaRequireEnvelopeParity(t, res)
+		})
+	}
+}
+
+func TestMCPSharedEnvelopeToolsStructureKernelConstructionErrors(t *testing.T) {
+	cs, _ := connectProfile(t, ProfileAgent)
+	badWorkspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(badWorkspace, "cortex.yaml"), []byte("budget:\n  max_parallel_calls: 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		tool string
+		args map[string]any
+	}{
+		{tool: "cortex_start_task", args: map[string]any{"goal": "start"}},
+		{tool: "cortex_open_task", args: map[string]any{"goal": "open"}},
+		{tool: "cortex_investigate", args: map[string]any{"taskId": "task_missing", "question": "why"}},
+		{tool: "cortex_plan", args: map[string]any{
+			"taskId": "task_missing", "uncertainty": "unknown", "files": []any{"callback.go"},
+			"hypotheses": []any{map[string]any{"statement": "broken", "disproveBy": "inspect"}},
+		}},
+		{tool: "cortex_begin_change", args: map[string]any{"taskId": "task_missing", "actor": "agent-a"}},
+		{tool: "cortex_verify", args: map[string]any{"taskId": "task_missing"}},
+		{tool: "cortex_remember", args: map[string]any{"taskId": "task_missing", "outcome": "done"}},
+		{tool: "cortex_resolve", args: map[string]any{
+			"taskId": "task_missing", "hypothesisId": "hyp_missing", "status": "rejected", "reason": "disproved",
+		}},
+		{tool: "cortex_note", args: map[string]any{"taskId": "task_missing", "claim": "note"}},
+		{tool: "cortex_request_decision", args: map[string]any{
+			"taskId": "task_missing", "question": "choose", "requester": "agent-a",
+			"options": []any{
+				map[string]any{"id": "a", "label": "A", "consequence": "first"},
+				map[string]any{"id": "b", "label": "B", "consequence": "second"},
+			},
+		}},
+		{tool: "cortex_answer_decision", args: map[string]any{"taskId": "task_missing"}},
+		{tool: "cortex_abort_task", args: map[string]any{"taskId": "task_missing", "reason": "stop"}},
+		{tool: "cortex_recall_cases", args: map[string]any{"query": "prior disproof"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			tt.args["workspace"] = badWorkspace
+			res, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: tt.tool, Arguments: tt.args})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.IsError {
+				t.Fatalf("kernel construction failure was reported as success: %s", textOf(res))
+			}
+			env := qaRequireEnvelopeParity(t, res)
+			if env["ok"] != false || !strings.Contains(env["error"].(string), "invalid cortex configuration") {
+				t.Fatalf("kernel construction error lost its envelope: %v", env)
+			}
+		})
+	}
+}
+
+func qaRequireEnvelopeParity(t *testing.T, res *sdkmcp.CallToolResult) map[string]any {
+	t.Helper()
+	if res.StructuredContent == nil {
+		t.Fatal("structuredContent is missing")
+	}
+	var textValue, structuredValue map[string]any
+	if err := json.Unmarshal([]byte(textOf(res)), &textValue); err != nil {
+		t.Fatalf("decode text result: %v", err)
+	}
+	structuredJSON, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("encode structured result: %v", err)
+	}
+	if err := json.Unmarshal(structuredJSON, &structuredValue); err != nil {
+		t.Fatalf("decode structured result: %v (%s)", err, structuredJSON)
+	}
+	if !reflect.DeepEqual(textValue, structuredValue) {
+		t.Fatalf("text and structured results differ:\ntext=%v\nstructured=%v", textValue, structuredValue)
+	}
+	return textValue
 }
 
 func TestMCPOperatorTimelineSchemaAcceptsWorkspaceFallback(t *testing.T) {

@@ -151,7 +151,7 @@ func TestRedactPreservesJSONSeparator(t *testing.T) {
 
 // TestRedactBareValueThreshold guards the false-positive tightening: a short
 // bare config value on a signal-named key is NOT over-masked, while a long
-// bare secret still is (SPEC §16 precision-over-recall).
+// bare secret still is, preserving the precision-over-recall policy.
 func TestRedactBareValueThreshold(t *testing.T) {
 	r := New()
 	short := []string{

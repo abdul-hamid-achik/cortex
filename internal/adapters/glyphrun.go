@@ -8,7 +8,7 @@ import (
 )
 
 // Glyphrun adapts the glyph CLI for terminal/TUI behavior verification
-// (SPEC §11.3, §12.5). glyph uses `--format json` (not `--json`) and that flag
+// glyph uses `--format json` (not `--json`) and that flag
 // must precede subcommand flags; `glyph run <spec> --format json` executes a
 // terminal contract.
 type Glyphrun struct{ tool }
@@ -135,8 +135,8 @@ type runResult struct {
 
 // Behavioral outcome markers embedded in a result's warnings so the kernel can
 // distinguish a genuine behavioral failure from an ambiguous errored run
-// (SPEC §11.4: MUST NOT convert ambiguous output into a high-confidence
-// conclusion). "errored" covers infrastructure/spec/cold-start/hash-mismatch
+// without converting ambiguous output into a high-confidence conclusion.
+// "errored" covers infrastructure/spec/cold-start/hash-mismatch
 // exits — none of which is a clean behavioral verdict.
 const (
 	markFailed  = "verification did NOT pass"
@@ -212,7 +212,7 @@ func behavioralResult(toolName, kind, spec string, code int, stdout, stderr stri
 		warns = append(warns, fmt.Sprintf("%s %s%s (exit %d)", toolName, markFailed, detail, code))
 	case "errored":
 		// Keep the markErrored substring so the kernel still maps this to
-		// inconclusive (SPEC §11.4), but make the specific cause actionable.
+		// inconclusive, but make the specific cause actionable.
 		switch rr.ErrorKind {
 		case "contract_hash_mismatch":
 			warns = append(warns, fmt.Sprintf("%s — the behavior contract changed: stamped %s != computed %s; re-stamp with `glyph spec verify <spec> --stamp` (do NOT treat as a behavioral failure; exit %d)",
@@ -246,7 +246,7 @@ func behavioralResult(toolName, kind, spec string, code int, stdout, stderr stri
 		Facts:     facts,
 		Artifacts: arts,
 		Warnings:  warns,
-		Verdict:   Verdict(outcome), // structured pass/fail/errored (SPEC §11.4)
+		Verdict:   Verdict(outcome), // structured pass/fail/errored
 		Raw:       stdout,
 	}
 }

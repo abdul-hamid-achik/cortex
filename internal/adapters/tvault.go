@@ -8,7 +8,7 @@ import (
 )
 
 // Tvault adapts the tvault CLI as an execution boundary, not a content provider
-// (SPEC §11.3, §12.7). It answers only the permitted model-visible questions —
+// It answers only the permitted model-visible questions —
 // is a project available, which secret NAMES exist, is injection granted — and
 // never emits secret values, previews, or environment dumps.
 type Tvault struct{ tool }
@@ -80,7 +80,7 @@ func (t *Tvault) availability(ctx context.Context, project string) (Result, erro
 	}, nil
 }
 
-// listKeys returns secret KEY NAMES for a project (metadata only, SPEC §12.7).
+// listKeys returns secret KEY NAMES for a project (metadata only).
 func (t *Tvault) listKeys(ctx context.Context, project string) (Result, error) {
 	if project == "" {
 		return Result{Tool: "tvault", Operation: "list_keys", Status: StatusError, Summary: "list_keys needs a project"}, nil
@@ -121,7 +121,7 @@ func (t *Tvault) namesOnly(ctx context.Context, args ...string) (stdout, stderr 
 
 // vaultLocked recognizes tvault ≥0.16's deterministic non-interactive locked
 // signal (exit 3 + {error:vault_locked}) so a locked vault is an honest
-// "unavailable", distinct from a genuine error (SPEC §11.4). The substring scan
+// "unavailable", distinct from a genuine error. The substring scan
 // is gated on a NON-success exit: on a successful listing (exit 0) stdout is the
 // legitimate project/key NAMES, which could themselves contain "vault_locked".
 func vaultLocked(code int, stdout, stderr string) bool {

@@ -10,7 +10,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
 
-// InvestigateInput parameterizes Investigate (SPEC §10.2 cortex_investigate).
+// InvestigateInput parameterizes Investigate.
 type InvestigateInput struct {
 	TaskID   string
 	Question string
@@ -18,14 +18,14 @@ type InvestigateInput struct {
 	Depth    string // quick | standard | deep
 	// Video, when set, is a bug-video bundle path or vidtrace stash id: Cortex
 	// runs vidtrace to turn the recording into timestamped evidence and link the
-	// visible failure to code (SPEC §19.4 investigate-a-bug-video).
+	// visible failure to code.
 	Video string
 }
 
 // Investigate routes a question through the appropriate discovery and
-// structural tools (SPEC §7.1), records the returned evidence, and returns a
+// structural tools, records the returned evidence, and returns a
 // bounded investigation summary. Search results are recorded as candidates, not
-// proof (SPEC §5.2).
+// proof.
 func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.Envelope, error) {
 	c, err := k.store.Load(in.TaskID)
 	if err != nil {
@@ -77,7 +77,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		}
 	}
 
-	// Count this round against the investigation budget (SPEC §7.3). Exceeding it
+	// Count this round against the investigation budget. Exceeding it
 	// is allowed but recorded — the point is to discourage frantic search, not to
 	// hard-block a legitimately deep investigation.
 	c.InvestigationRounds++
@@ -87,7 +87,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		c.Notes = append(c.Notes, "budget: "+note)
 	}
 
-	// Causal routing (SPEC §7.1): discovery (vecgrep/vidtrace) runs first; the
+	// Causal routing runs discovery (vecgrep/vidtrace) first; the
 	// top deduplicated file/symbol candidates are then fed into codemap as a
 	// second structural stage, recording derivedFrom provenance on the
 	// structural evidence (symptom → candidate → structural expansion). An
@@ -107,7 +107,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		// Quick: primary route tool only (no follow-up), still after memory recall.
 		steps = firstRouteStep(steps, route)
 	}
-	// Recall prior durable conclusions for THIS repo first (SPEC §15.1 semantic
+	// Recall prior durable conclusions for THIS repo first (semantic
 	// recall): cortex writes a memory on every completed task, so a related past
 	// case ("returnTo was dropped in HandleCallback…") becomes low-confidence
 	// orientation instead of being re-derived. Scoped by the cortex+repo:<name>
@@ -117,7 +117,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		{tool: "vecgrep", op: "memory_recall", input: map[string]any{
 			"query": in.Question, "tags": memoryTags(c), "limit": candLimit,
 		}},
-		// Cross-case disproof recall (SPEC §15.4): prior rejected/challenged
+		// Cross-case disproof recall includes prior rejected/challenged
 		// hypotheses and definitive receipts, scoped to this repo. A second
 		// unscoped step adds the cross-repo tier. Both are model_inference/low
 		// orientation — candidatesFrom skips model_inference, so they never
@@ -135,7 +135,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 			"connect": true, "limit": candLimit,
 		}}}, steps...)
 	}
-	// Execute stage 1 with bounded parallelism (SPEC §7.3 max_parallel_calls).
+	// Execute stage 1 with bounded parallelism.
 	// The steps are independent adapter calls — step N's result does not feed
 	// step N+1's input here — so they fan out; evidence stamping runs
 	// sequentially after, serializing store writes.
@@ -202,7 +202,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		clipStr(in.Question, 60), route.First, route.FollowUp, pluralizeEv(len(facts)), route.Why)
 	if expanded > 0 {
 		// Stage 2 expanded discovery candidates into structural evidence;
-		// surface the causal-routing provenance count (SPEC §7.1).
+		// surface the causal-routing provenance count.
 		summary = fmt.Sprintf("investigated %q via %s→%s: %s recorded; %d discovery candidate(s) expanded structurally (%s)",
 			clipStr(in.Question, 60), route.First, route.FollowUp, pluralizeEv(len(facts)), expanded, route.Why)
 	}
@@ -231,7 +231,7 @@ type step struct {
 }
 
 // runStepsParallel executes the investigation steps concurrently, bounded by
-// max_parallel_calls (SPEC §7.3). Steps are independent adapter calls, so they
+// max_parallel_calls. Steps are independent adapter calls, so they
 // can fan out; results are returned in the original step order so evidence and
 // warnings stay deterministic. A non-positive budget runs sequentially.
 func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []step) []adapters.Result {
@@ -360,8 +360,8 @@ func firstRouteStep(steps []step, r domain.Route) []step {
 }
 
 // routeSteps expands a Route into concrete adapter operations for the question.
-// Discovery searches are capped at candLimit candidate hits (SPEC §7.3
-// max_candidate_files_returned) so one broad search can't flood the ledger.
+// Discovery searches are capped at candLimit candidate hits so one broad
+// search can't flood the ledger.
 func routeSteps(r domain.Route, question string, surfaces []domain.Surface, candLimit int) []step {
 	if candLimit < 1 {
 		candLimit = 8

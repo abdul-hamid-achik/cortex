@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -16,6 +19,23 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 )
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // testRepo makes a temp git repo the MCP tools can operate on.
 func testRepo(t *testing.T) string {
@@ -41,6 +61,57 @@ func testRepo(t *testing.T) string {
 	cmd.Dir = dir
 	_ = cmd.Run()
 	return dir
+}
+
+func TestMCPStdioSubprocessHandshakeUsesCleanNewlineFraming(t *testing.T) {
+	ws := testRepo(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), stdioHelperEnv+"=1", "CORTEX_TEST_MCP_WORKSPACE="+ws)
+	var stderr synchronizedBuffer
+	cmd.Stderr = &stderr
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "stdio-test", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, &sdkmcp.CommandTransport{Command: cmd, TerminateDuration: 3 * time.Second}, nil)
+	if err != nil {
+		t.Fatalf("stdio handshake: %v (stderr: %s)", err, stderr.String())
+	}
+	cleanupNeeded := true
+	t.Cleanup(func() {
+		if cleanupNeeded {
+			_ = cs.Close()
+		}
+	})
+	tools, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools over stdio: %v (stderr: %s)", err, stderr.String())
+	}
+	if len(tools.Tools) != len(qaAgentTools) {
+		t.Fatalf("stdio tool count=%d, want %d", len(tools.Tools), len(qaAgentTools))
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- cs.Close() }()
+	select {
+	case err := <-closed:
+		cleanupNeeded = false
+		if err != nil {
+			t.Fatalf("clean stdio shutdown: %v (stderr: %s)", err, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		cleanupNeeded = false
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("stdio server did not shut down within 5s after the client closed stdin")
+	}
+	if strings.TrimSpace(stderr.String()) != "" {
+		t.Fatalf("stdio server wrote unexpected diagnostics: %s", stderr.String())
+	}
 }
 
 // connect starts the server over an in-memory transport and returns a client

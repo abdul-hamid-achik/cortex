@@ -17,7 +17,7 @@ import (
 )
 
 // caseRecaller is the subset of the veclite adapter the kernel uses for
-// cross-case disproof recall (SPEC §15.4). *adapters.Veclite satisfies it;
+// cross-case disproof recall. *adapters.Veclite satisfies it;
 // tests inject a fake. Every method is best-effort: a missing adapter or a
 // failed embed is warned-on, never a hard failure that blocks a phase.
 type caseRecaller interface {
@@ -107,7 +107,7 @@ func (k *Kernel) indexResolvedHypothesisResult(ctx context.Context, c *domain.Ca
 
 // indexReceipt redacts and indexes one definitive (passed/failed) verification
 // receipt. Sensitive receipts (VerificationRecord.Sensitive) are skipped
-// entirely (SPEC §16.2 #5) — never archived into the cross-repo store.
+// entirely and never archived into the cross-repo store.
 func (k *Kernel) indexReceipt(ctx context.Context, c *domain.CaseFile, r domain.VerificationRecord) {
 	if k.recaller == nil || r.Sensitive {
 		return

@@ -102,7 +102,7 @@ func TestVecliteIndexCaseUsesExecOnceNoRetry(t *testing.T) {
 	if err == nil {
 		t.Error("expected a failure (countingRunner fails first call)")
 	}
-	// execOnce must run exactly once — a write never retries (SPEC §17.3).
+	// execOnce must run exactly once — a write never retries.
 	// Note: the embed stub call does not go through the runner, so calls counts
 	// only the record-upsert execOnce attempt.
 	if r.calls != 1 {

@@ -127,6 +127,44 @@ func TestCLIStartAndList(t *testing.T) {
 	}
 }
 
+func TestCLIStartAndOpenAcceptanceCriteria(t *testing.T) {
+	ws := cliRepo(t)
+	out, err := runCLI(t, "-C", ws, "--json", "open", "ship redirect",
+		"--idempotency-key", "criteria-cli", "--criterion", "redirect_works=Redirect preserves the return path")
+	if err != nil {
+		t.Fatalf("open with criterion: %v (%s)", err, out)
+	}
+	var env map[string]any
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("open output: %v (%s)", err, out)
+	}
+	taskID, _ := env["taskId"].(string)
+	k, err := kernel.New(config.For(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := k.Store().Load(taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.AcceptanceCriterion{ID: "redirect_works", Statement: "Redirect preserves the return path"}
+	if len(c.AcceptanceCriteria) != 1 || c.AcceptanceCriteria[0] != want {
+		t.Fatalf("criteria = %#v, want %#v", c.AcceptanceCriteria, want)
+	}
+
+	if _, err := runCLI(t, "-C", ws, "start", "bad criterion", "--criterion", "missing-separator"); err == nil {
+		t.Fatal("malformed --criterion should fail")
+	}
+	if _, err := runCLI(t, "-C", ws, "start", "duplicate criteria",
+		"--criterion", "same=first", "--criterion", "same=second"); err == nil {
+		t.Fatal("duplicate --criterion ids should fail")
+	}
+	if _, err := runCLI(t, "-C", ws, "open", "retry wording",
+		"--idempotency-key", "criteria-cli", "--criterion", "redirect_works=Different contract"); err == nil {
+		t.Fatal("idempotent open with a changed acceptance contract should fail")
+	}
+}
+
 func TestCLIReadArtifactUsesPathAndByteBoundFlags(t *testing.T) {
 	ws := cliRepo(t)
 	id := startTask(t, ws)
@@ -666,6 +704,22 @@ func TestCLISessions(t *testing.T) {
 	}
 	if !strings.Contains(out, id) {
 		t.Errorf("sessions --json should include %s, got:\n%s", id, out)
+	}
+	// Query uses the same cross-field, case-insensitive AND-token contract as
+	// Studio and the operator MCP surface.
+	qout, err := runCLI(t, "--json", "sessions", "--query", strings.ToUpper(id)+" REDIRECT")
+	if err != nil {
+		t.Fatalf("sessions --query --json: %v (%s)", err, qout)
+	}
+	if !strings.Contains(qout, id) {
+		t.Errorf("sessions query should find %s by ID and goal, got:\n%s", id, qout)
+	}
+	missing, err := runCLI(t, "--json", "sessions", "--query", id+" no-such-goal-token")
+	if err != nil {
+		t.Fatalf("sessions missing query: %v (%s)", err, missing)
+	}
+	if strings.Contains(missing, id) {
+		t.Errorf("AND-token query should exclude %s, got:\n%s", id, missing)
 	}
 	// Human view renders the repo slug (filtered to this workspace).
 	hout, err := runCLI(t, "sessions", "--repo", filepath.Base(ws))

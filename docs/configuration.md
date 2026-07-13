@@ -27,7 +27,7 @@ cortex config --json   # machine-readable
 Every field is optional; a partial file only overrides what it names.
 
 ```yaml
-# Tool-use budget (SPEC §7.3) — bounds how hard the kernel works per task.
+# Tool-use budget — bounds how hard the kernel works per task.
 budget:
   max_parallel_calls: 3              # concurrent adapter fan-out (e.g. health probes)
   max_investigation_rounds: 3        # investigate calls before a budget nudge
@@ -36,7 +36,7 @@ budget:
   max_candidate_files_returned: 8    # discovery hits per search
   max_auto_retries_per_tool: 1       # read-only retry budget (0 = never retry; mutations never retry)
 
-# Cross-case disproof recall (SPEC §15.4) — the fourth memory layer. Best-effort.
+# Cross-case disproof recall — the fourth memory layer. Best-effort.
 recall:
   enabled: true                     # set false to disable recall entirely
   db_path: ~/.local/share/cortex/cases.veclite   # the veclite index (default: XDG data home)

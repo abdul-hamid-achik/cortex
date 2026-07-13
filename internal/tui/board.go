@@ -1,8 +1,8 @@
 // Package tui is the Cortex studio: a live, read-only Charm v2 (bubbletea) board
-// of every session across every repository — the session list on the left, and
-// the selected case's loop progress, hypotheses, evidence ledger, and
-// verification receipts on the right. It reads the central XDG sessions tree via
-// internal/kernel and auto-refreshes; it never mutates a case.
+// of every session across every repository. It shows a session list and the
+// selected case's loop progress, hypotheses, evidence ledger, and verification
+// receipts in a responsive split or stacked layout. It reads the central XDG
+// sessions tree via internal/kernel and auto-refreshes; it never mutates a case.
 package tui
 
 import (
@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
@@ -25,25 +27,62 @@ const refreshInterval = 2 * time.Second
 // the board flags it as stale (matches the CLI default).
 const staleBoardThreshold = 24 * time.Hour
 
+// splitPaneMinWidth is the smallest terminal width where the list and detail
+// panes remain useful side by side. Narrower terminals stack the panes and give
+// the detail view most of the available height.
+const splitPaneMinWidth = 80
+
+// maxSearchRunes keeps pasted search text cheap to render and bounded inside
+// the terminal. The kernel accepts longer non-interactive queries; this limit
+// applies only to Studio's interactive editor.
+const maxSearchRunes = 128
+
 // Run launches the live board over all sessions matching filter until quit.
 func Run(ctx context.Context, filter kernel.SessionFilter) error {
-	m, err := newModel(filter)
-	if err != nil {
-		return err
-	}
-	_, err = tea.NewProgram(m).Run()
+	m := newModel(filter)
+	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	return err
 }
 
+type boardSource interface {
+	Sessions(kernel.SessionFilter) ([]kernel.SessionSummary, error)
+	Detail(slug, taskID string) (kernel.SessionView, error)
+}
+
+type kernelBoardSource struct{}
+
+func (kernelBoardSource) Sessions(filter kernel.SessionFilter) ([]kernel.SessionSummary, error) {
+	return kernel.AllSessions(filter)
+}
+
+func (kernelBoardSource) Detail(slug, taskID string) (kernel.SessionView, error) {
+	return kernel.LoadSessionView(slug, taskID)
+}
+
 type model struct {
-	filter      kernel.SessionFilter
-	sessions    []kernel.SessionSummary
-	cursor      int
-	detail      detail
-	width       int
-	height      int
-	loadErr     string
-	lastRefresh time.Time
+	filter        kernel.SessionFilter
+	appliedFilter kernel.SessionFilter
+	filterApplied bool
+	source        boardSource
+	sessions      []kernel.SessionSummary
+	cursor        int
+	detail        detail
+	width         int
+	height        int
+	refreshErr    string
+	detailErr     string
+	lastRefresh   time.Time
+	detailOffset  int
+
+	refreshRequest  uint64
+	detailRequest   uint64
+	refreshInFlight bool
+	detailInFlight  bool
+	refreshQueued   bool
+	detailQueued    bool
+	detailTarget    string
+	searchEditing   bool
+	searchDraft     string
 }
 
 // detail is the canonical read-only projection of the selected case. Keeping
@@ -54,103 +93,309 @@ type detail struct {
 	view   kernel.SessionView
 }
 
-// tickMsg drives auto-refresh.
 type tickMsg time.Time
+
+type sessionsLoadedMsg struct {
+	request  uint64
+	filter   kernel.SessionFilter
+	sessions []kernel.SessionSummary
+	err      error
+	at       time.Time
+}
+
+type detailLoadedMsg struct {
+	request uint64
+	taskID  string
+	view    kernel.SessionView
+	err     error
+}
 
 func tick() tea.Cmd {
 	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func newModel(filter kernel.SessionFilter) (model, error) {
-	m := model{filter: filter, width: 100, height: 30}
-	sessions, err := kernel.AllSessions(filter)
-	if err != nil {
-		return model{}, err
-	}
-	m.sessions = sessions
-	m.lastRefresh = time.Now()
-	m.load()
-	return m, nil
+func newModel(filter kernel.SessionFilter) model {
+	return newModelWithSource(filter, kernelBoardSource{})
 }
 
-func (m model) Init() tea.Cmd { return tick() }
+func newModelWithSource(filter kernel.SessionFilter, source boardSource) model {
+	filter.Query = normalizeSearch(filter.Query)
+	return model{
+		filter: filter, source: source, width: 100, height: 30,
+		refreshRequest: 1, refreshInFlight: true,
+		searchDraft: filter.Query,
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	return tea.Batch(m.sessionsCmd(m.refreshRequest, m.filter), tick())
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.clampDetailOffset()
 	case tickMsg:
-		m.refresh()
-		return m, tick()
+		return m, tea.Batch(m.requestRefresh(false), tick())
+	case sessionsLoadedMsg:
+		return m.handleSessionsLoaded(msg)
+	case detailLoadedMsg:
+		return m.handleDetailLoaded(msg)
 	case tea.KeyPressMsg:
+		if m.searchEditing {
+			return m.updateSearch(msg)
+		}
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
 		case "up", "k":
 			if m.cursor > 0 {
-				m.cursor--
-				m.load()
+				return m.selectSession(m.cursor - 1)
 			}
 		case "down", "j":
 			if m.cursor < len(m.sessions)-1 {
-				m.cursor++
-				m.load()
+				return m.selectSession(m.cursor + 1)
 			}
 		case "g", "home":
-			m.cursor = 0
-			m.load()
+			return m.selectSession(0)
 		case "G", "end":
-			m.cursor = max(0, len(m.sessions)-1)
-			m.load()
+			return m.selectSession(max(0, len(m.sessions)-1))
+		case "pgup", "ctrl+u":
+			m.scrollDetail(-1)
+		case "pgdown", "ctrl+d":
+			m.scrollDetail(1)
 		case "a":
 			m.filter.ActiveOnly = !m.filter.ActiveOnly
-			m.refresh()
+			return m, m.requestRefresh(true)
+		case "/":
+			m.searchEditing = true
+			m.searchDraft = m.filter.Query
+		case "c":
+			if m.filter.Query != "" {
+				m.filter.Query = ""
+				m.searchDraft = ""
+				return m, m.requestRefresh(true)
+			}
 		case "r":
-			m.refresh()
+			return m, m.requestRefresh(true)
 		}
 	}
 	return m, nil
 }
 
-// refresh re-reads the sessions tree, preserving the selected session by ID.
-func (m *model) refresh() {
-	selID := ""
-	if m.cursor < len(m.sessions) {
-		selID = m.sessions[m.cursor].ID
-	}
-	sessions, err := kernel.AllSessions(m.filter)
-	if err != nil {
-		m.loadErr = err.Error()
-		return
-	}
-	m.sessions = sessions
-	m.cursor = 0
-	for i, s := range sessions {
-		if s.ID == selID {
-			m.cursor = i
-			break
+func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.searchEditing = false
+		m.searchDraft = m.filter.Query
+		return m, nil
+	case "enter":
+		m.searchEditing = false
+		query := normalizeSearch(m.searchDraft)
+		m.searchDraft = query
+		if query == m.filter.Query {
+			return m, nil
 		}
+		m.filter.Query = query
+		return m, m.requestRefresh(true)
+	case "backspace":
+		m.searchDraft = trimLastRune(m.searchDraft)
+		return m, nil
 	}
-	if m.cursor >= len(m.sessions) {
-		m.cursor = max(0, len(m.sessions)-1)
+	if msg.Text != "" {
+		m.searchDraft = appendSearchText(m.searchDraft, msg.Text)
 	}
-	m.lastRefresh = time.Now()
-	m.load()
+	return m, nil
 }
 
-// load reads the selected session's records from its store.
-func (m *model) load() {
-	m.detail = detail{}
-	if len(m.sessions) == 0 || m.cursor >= len(m.sessions) {
-		return
+func normalizeSearch(value string) string {
+	return strings.Join(strings.Fields(appendSearchText("", value)), " ")
+}
+
+func appendSearchText(current, added string) string {
+	runes := []rune(current)
+	for _, r := range ansi.Strip(added) {
+		if len(runes) >= maxSearchRunes {
+			break
+		}
+		if unicode.IsPrint(r) && !unicode.IsControl(r) {
+			runes = append(runes, r)
+		}
 	}
-	s := m.sessions[m.cursor]
-	d, err := kernel.LoadSessionView(s.Slug, s.ID)
-	if err != nil {
-		m.loadErr = err.Error()
-		return
+	return string(runes)
+}
+
+func quoteSearch(value string) string {
+	return `"` + singleLine(value) + `"`
+}
+
+func trimLastRune(value string) string {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return ""
 	}
-	m.detail = detail{loaded: true, view: d}
+	return string(runes[:len(runes)-1])
+}
+
+func (m model) sessionsCmd(request uint64, filter kernel.SessionFilter) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := m.source.Sessions(filter)
+		return sessionsLoadedMsg{request: request, filter: filter, sessions: sessions, err: err, at: time.Now()}
+	}
+}
+
+func (m model) detailCmd(request uint64, session kernel.SessionSummary) tea.Cmd {
+	return func() tea.Msg {
+		view, err := m.source.Detail(session.Slug, session.ID)
+		return detailLoadedMsg{request: request, taskID: session.ID, view: view, err: err}
+	}
+}
+
+func (m *model) requestRefresh(queueIfBusy bool) tea.Cmd {
+	if m.refreshInFlight {
+		if queueIfBusy {
+			m.refreshQueued = true
+		}
+		return nil
+	}
+	m.refreshRequest++
+	m.refreshInFlight = true
+	return m.sessionsCmd(m.refreshRequest, m.filter)
+}
+
+func (m *model) requestDetail() tea.Cmd {
+	session, ok := m.selectedSession()
+	if !ok {
+		m.detail = detail{}
+		m.detailErr = ""
+		m.detailOffset = 0
+		m.detailQueued = false
+		return nil
+	}
+	if m.detailInFlight {
+		m.detailQueued = m.detailTarget != session.ID
+		return nil
+	}
+	m.detailRequest++
+	m.detailInFlight = true
+	m.detailTarget = session.ID
+	return m.detailCmd(m.detailRequest, session)
+}
+
+func (m model) selectedID() string {
+	if session, ok := m.selectedSession(); ok {
+		return session.ID
+	}
+	return ""
+}
+
+func (m model) selectedSession() (kernel.SessionSummary, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.sessions) {
+		return kernel.SessionSummary{}, false
+	}
+	return m.sessions[m.cursor], true
+}
+
+func (m *model) clearMismatchedDetail(taskID string) {
+	if !m.detail.loaded || m.detail.view.Case == nil || m.detail.view.Case.ID != taskID {
+		m.detail = detail{}
+	}
+}
+
+func (m model) selectSession(cursor int) (tea.Model, tea.Cmd) {
+	oldID := m.selectedID()
+	if len(m.sessions) == 0 {
+		cursor = 0
+	} else {
+		cursor = clamp(cursor, 0, len(m.sessions)-1)
+	}
+	m.cursor = cursor
+	newID := m.selectedID()
+	if newID == oldID {
+		return m, nil
+	}
+	m.detailOffset = 0
+	m.detailErr = ""
+	m.clearMismatchedDetail(newID)
+	return m, m.requestDetail()
+}
+
+func (m model) handleSessionsLoaded(msg sessionsLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.request != m.refreshRequest {
+		return m, nil
+	}
+	m.refreshInFlight = false
+	var detailCmd tea.Cmd
+	if msg.filter == m.filter {
+		if msg.err != nil {
+			m.refreshErr = "refresh failed: " + msg.err.Error()
+		} else {
+			selectedID := m.selectedID()
+			m.sessions = msg.sessions
+			m.cursor = 0
+			for i, session := range m.sessions {
+				if session.ID == selectedID {
+					m.cursor = i
+					break
+				}
+			}
+			newID := m.selectedID()
+			if newID != selectedID {
+				m.detailOffset = 0
+				m.detailErr = ""
+				m.clearMismatchedDetail(newID)
+			}
+			m.refreshErr = ""
+			m.lastRefresh = msg.at
+			m.appliedFilter = msg.filter
+			m.filterApplied = true
+			detailCmd = m.requestDetail()
+		}
+	}
+	var refreshCmd tea.Cmd
+	if m.refreshQueued {
+		m.refreshQueued = false
+		refreshCmd = m.requestRefresh(false)
+	}
+	return m, tea.Batch(detailCmd, refreshCmd)
+}
+
+func (m model) handleDetailLoaded(msg detailLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.request != m.detailRequest || msg.taskID != m.detailTarget {
+		return m, nil
+	}
+	m.detailInFlight = false
+	m.detailTarget = ""
+	selectedID := m.selectedID()
+	if msg.taskID == selectedID {
+		if msg.err != nil {
+			m.detailErr = "session load failed: " + msg.err.Error()
+			m.clearMismatchedDetail(selectedID)
+		} else {
+			sameTask := m.detail.loaded && m.detail.view.Case != nil && msg.view.Case != nil && m.detail.view.Case.ID == msg.view.Case.ID
+			_, oldMaximum := m.detailScrollBounds()
+			atBottom := sameTask && m.detailOffset >= oldMaximum
+			m.detail = detail{loaded: true, view: msg.view}
+			m.detailErr = ""
+			if !sameTask {
+				m.detailOffset = 0
+			} else if atBottom {
+				_, newMaximum := m.detailScrollBounds()
+				m.detailOffset = newMaximum
+			} else {
+				m.clampDetailOffset()
+			}
+		}
+	}
+	var cmd tea.Cmd
+	if m.detailQueued || msg.taskID != selectedID {
+		m.detailQueued = false
+		cmd = m.requestDetail()
+	}
+	return m, cmd
 }
 
 func max(a, b int) int {
@@ -158,6 +403,23 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func clamp(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
 }
 
 // styles (Charm v2 lipgloss).
@@ -181,46 +443,177 @@ func (m model) View() tea.View {
 	return v
 }
 
+type boardLayout struct {
+	width, height             int
+	bodyHeight                int
+	listWidth, listHeight     int
+	detailWidth, detailHeight int
+	narrow                    bool
+	showError                 bool
+}
+
+func (m model) boardLayout() boardLayout {
+	l := boardLayout{width: max(1, m.width), height: max(1, m.height)}
+	headerHeight := 1
+	helpHeight := 0
+	if l.height >= 2 {
+		helpHeight = 1
+	}
+	if m.errorText() != "" && l.height >= 3 {
+		l.showError = true
+		headerHeight++
+	}
+	l.bodyHeight = max(0, l.height-headerHeight-helpHeight)
+	l.narrow = l.width < splitPaneMinWidth
+	if l.narrow {
+		l.listWidth, l.detailWidth = l.width, l.width
+		if l.bodyHeight < 6 {
+			// At extremely short heights the selected case is more useful than
+			// two empty border frames. The header still reports the session count.
+			l.detailHeight = l.bodyHeight
+			return l
+		}
+		l.listHeight = clamp(l.bodyHeight/3, 3, 7)
+		l.detailHeight = l.bodyHeight - l.listHeight
+		return l
+	}
+	l.listWidth = clamp(l.width/3, 28, 42)
+	l.detailWidth = l.width - l.listWidth
+	l.listHeight, l.detailHeight = l.bodyHeight, l.bodyHeight
+	return l
+}
+
 func (m model) render() string {
+	l := m.boardLayout()
 	stale := 0
 	for _, s := range m.sessions {
 		if s.StaleSince(time.Now(), staleBoardThreshold) {
 			stale++
 		}
 	}
-	sub := fmt.Sprintf("  —  %d sessions · auto %s", len(m.sessions), refreshInterval)
-	if m.filter.ActiveOnly {
+	displayedFilter := m.filter
+	if m.filterApplied {
+		displayedFilter = m.appliedFilter
+	}
+	sub := "  —  loading sessions"
+	if !m.filterApplied && !m.refreshInFlight && m.refreshErr != "" {
+		sub = "  —  sessions unavailable"
+	}
+	if m.filterApplied {
+		if len(m.sessions) == 0 {
+			sub = "  —  0 sessions"
+		} else {
+			sub = fmt.Sprintf("  —  session %d/%d", m.cursor+1, len(m.sessions))
+		}
+	}
+	if m.filterApplied && m.appliedFilter != m.filter {
+		sub += " · applying filters"
+	}
+	sub += " · auto " + refreshInterval.String()
+	if displayedFilter.ActiveOnly {
 		sub += " · active"
 	}
-	if m.filter.Repo != "" {
-		sub += " · repo~" + m.filter.Repo
+	if displayedFilter.Repo != "" {
+		sub += " · repo~" + singleLine(displayedFilter.Repo)
+	}
+	if displayedFilter.Query != "" {
+		sub += " · search " + quoteSearch(displayedFilter.Query)
+	}
+	if m.refreshInFlight {
+		sub += " · refreshing"
+	}
+	if m.detailInFlight {
+		sub += " · loading detail"
 	}
 	title := tHeader.Render("● Cortex studio") + tDim.Render(sub)
 	if stale > 0 {
 		title += tWarn.Render(fmt.Sprintf("  ⚠ %d stale", stale))
 	}
-	help := tDim.Render("↑/↓ navigate · a active-only · r refresh · q quit")
-
-	listW := 32
-	detailW := m.width - listW - 6
-	if detailW < 30 {
-		detailW = 30
+	title = truncateStyled(title, l.width)
+	helpText := "j/k sessions · PgUp/PgDn detail · / search · a active · r refresh · q quit"
+	if m.filter.Query != "" {
+		helpText = "j/k sessions · PgUp/PgDn detail · / search · c clear · a active · r refresh · q quit"
 	}
-	bodyH := m.height - 4
-	if bodyH < 6 {
-		bodyH = 6
+	if l.narrow {
+		helpText = "j/k sessions · / search · r refresh · q quit · PgUp/PgDn"
+		if m.filter.Query != "" {
+			helpText = "j/k sessions · / edit · c clear · r refresh · q quit"
+		}
+	}
+	if m.searchEditing {
+		helpText = "search · Enter apply · Esc cancel: " + singleLine(m.searchDraft) + "█"
+	}
+	help := tDim.Render(clip(helpText, l.width))
+
+	parts := []string{title}
+	if l.showError {
+		errText := m.errorText()
+		if m.filterApplied && m.appliedFilter != m.filter {
+			errText = "requested filters not applied · " + errText
+		}
+		if !m.lastRefresh.IsZero() {
+			errText += " · showing snapshot from " + m.lastRefresh.Local().Format("15:04:05")
+		}
+		parts = append(parts, tErr.Render(clip("⚠ "+errText, l.width)))
 	}
 
-	list := tListBox.Width(listW).Height(bodyH).Render(m.renderList(bodyH))
-	det := tDetailBox.Width(detailW).Height(bodyH).Render(m.renderDetail(detailW))
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, det)
+	if l.bodyHeight > 0 {
+		var body string
+		if l.narrow {
+			panes := make([]string, 0, 2)
+			if l.listHeight > 0 {
+				listContentW := max(1, l.listWidth-tListBox.GetHorizontalFrameSize())
+				listContentH := max(0, l.listHeight-tListBox.GetVerticalFrameSize())
+				panes = append(panes, tListBox.Width(l.listWidth).Height(l.listHeight).Render(m.renderList(listContentH, listContentW)))
+			}
+			if l.detailHeight > 0 {
+				detailContentW := max(1, l.detailWidth-tDetailBox.GetHorizontalFrameSize())
+				detailContentH := max(0, l.detailHeight-tDetailBox.GetVerticalFrameSize())
+				panes = append(panes, tDetailBox.Width(l.detailWidth).Height(l.detailHeight).Render(m.renderDetailViewport(detailContentW, detailContentH)))
+			}
+			body = lipgloss.JoinVertical(lipgloss.Left, panes...)
+		} else {
+			listContentW := max(1, l.listWidth-tListBox.GetHorizontalFrameSize())
+			listContentH := max(0, l.listHeight-tListBox.GetVerticalFrameSize())
+			detailContentW := max(1, l.detailWidth-tDetailBox.GetHorizontalFrameSize())
+			detailContentH := max(0, l.detailHeight-tDetailBox.GetVerticalFrameSize())
+			list := tListBox.Width(l.listWidth).Height(l.listHeight).Render(m.renderList(listContentH, listContentW))
+			det := tDetailBox.Width(l.detailWidth).Height(l.detailHeight).Render(m.renderDetailViewport(detailContentW, detailContentH))
+			body = lipgloss.JoinHorizontal(lipgloss.Top, list, det)
+		}
+		parts = append(parts, body)
+	}
+	if l.height >= 2 {
+		parts = append(parts, help)
+	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, title, body, help)
+	return fitBlock(lipgloss.JoinVertical(lipgloss.Left, parts...), l.width, l.height)
 }
 
-func (m model) renderList(h int) string {
+func (m model) renderList(h, w int) string {
+	if h <= 0 {
+		return ""
+	}
 	if len(m.sessions) == 0 {
-		return tDim.Render("no sessions yet\n\nstart one with:\ncortex start \"<goal>\"")
+		lines := []string{"no sessions yet", "", "open one with:", "cortex open \"<goal>\""}
+		if !m.filterApplied && m.refreshInFlight {
+			lines = []string{"loading sessions…"}
+		} else if !m.filterApplied && m.refreshErr != "" {
+			lines = []string{"sessions unavailable", "", "press r to retry"}
+		} else if m.appliedFilter.Query != "" {
+			lines = []string{"no sessions match " + quoteSearch(m.appliedFilter.Query), "press / edit · c clear"}
+		} else if m.appliedFilter.ActiveOnly {
+			lines = []string{"no active sessions", "", "press a to show all"}
+		} else if m.appliedFilter.Repo != "" {
+			lines = []string{"no sessions for repo", singleLine(m.appliedFilter.Repo)}
+		}
+		if len(lines) > h {
+			lines = lines[:h]
+		}
+		for i := range lines {
+			lines[i] = clip(lines[i], w)
+		}
+		return tDim.Render(strings.Join(lines, "\n"))
 	}
 	// Window the list around the cursor so long lists scroll into view.
 	now := time.Now()
@@ -230,49 +623,105 @@ func (m model) renderList(h int) string {
 	}
 	var b strings.Builder
 	for i := start; i < len(m.sessions) && i < start+h; i++ {
-		s := m.sessions[i]
-		suffix := ""
-		if s.StaleSince(now, staleBoardThreshold) {
-			suffix = " " + tWarn.Render("⚠") // in-flight but untouched — likely forgotten
-		}
-		// Both prefixes are two cells wide ("▸ " and "● ") so the slug/goal columns
-		// stay aligned as the cursor moves between rows.
-		if i == m.cursor {
-			b.WriteString(tSel.Render("▸ "+clip(s.Slug, 10)+" "+clip(s.Goal, 13)) + suffix)
-		} else {
-			b.WriteString(phaseColor(s.Phase).Render("●") + " " +
-				clip(s.Slug, 10) + " " + tDim.Render(clip(s.Goal, 13)) + suffix)
-		}
+		b.WriteString(renderSessionRow(m.sessions[i], i == m.cursor, w, now))
 		b.WriteString("\n")
 	}
-	return b.String()
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func renderSessionRow(s kernel.SessionSummary, selected bool, w int, now time.Time) string {
+	if w <= 0 {
+		return ""
+	}
+	marker := "● "
+	if selected {
+		marker = "▸ "
+	}
+	phase := phaseLabel(s.Phase)
+	phaseField := fmt.Sprintf("%-7s ", phase)
+	suffix := ""
+	if s.StaleSince(now, staleBoardThreshold) {
+		suffix = " ⚠"
+	}
+	prefixWidth := ansi.StringWidth(marker + phaseField)
+	suffixWidth := ansi.StringWidth(suffix)
+	remaining := max(0, w-prefixWidth-suffixWidth)
+	descriptor := ""
+	if remaining > 0 {
+		slugWidth := 0
+		if remaining >= 12 {
+			slugWidth = min(12, max(6, remaining/3))
+		}
+		if slugWidth > 0 {
+			slug := clip(s.Slug, slugWidth)
+			goalWidth := max(0, remaining-ansi.StringWidth(slug)-1)
+			descriptor = slug
+			if goalWidth > 0 {
+				descriptor += " " + clip(s.Goal, goalWidth)
+			}
+		} else {
+			descriptor = clip(s.Goal, remaining)
+		}
+	}
+	plain := clip(marker+phaseField+descriptor+suffix, w)
+	if selected {
+		return tSel.Render(plain)
+	}
+	prefix := phaseColor(s.Phase).Render(marker + phaseField)
+	rest := descriptor
+	if suffix != "" {
+		rest += tWarn.Render(suffix)
+	}
+	return truncateStyled(prefix+rest, w)
 }
 
 func (m model) renderDetail(w int) string {
-	if !m.detail.loaded {
-		if m.loadErr != "" {
-			return tErr.Render("load error: " + m.loadErr)
+	selectedID := m.selectedID()
+	matching := m.detail.loaded && m.detail.view.Case != nil && m.detail.view.Case.ID == selectedID
+	if !matching {
+		if selectedID == "" {
+			if m.refreshInFlight {
+				return tDim.Render("waiting for sessions…")
+			}
+			return tDim.Render("select a session")
+		}
+		if m.detailInFlight || m.detailQueued {
+			return tDim.Render(clip("loading session "+selectedID+"…", w))
+		}
+		if m.detailErr != "" {
+			return tErr.Render(clip(m.detailErr, w))
 		}
 		return tDim.Render("select a session")
 	}
 	v := m.detail.view
 	c := v.Case
+	if c == nil {
+		return tErr.Render("session projection has no case")
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", tHeader.Render(clip(c.Goal, w-2)))
 	phaseStyle := tPhase
 	if c.Status == domain.PhaseNeedsHumanDecision {
 		phaseStyle = tWarn
 	}
-	fmt.Fprintf(&b, "%s  %s\n", tDim.Render(c.ID), phaseStyle.Render("["+string(c.Status)+"]"))
-	fmt.Fprintf(&b, "%s %s@%s · %s · risk %s\n", tDim.Render("repo"), c.Workspace.Repository, c.Workspace.CommitBefore, c.Mode, c.Risk)
+	phaseText := "[" + clip(string(c.Status), max(1, w-2)) + "]"
+	fmt.Fprintf(&b, "%s  %s\n", tDim.Render(clip(c.ID, max(1, w-18))), phaseStyle.Render(phaseText))
+	meta := fmt.Sprintf("repo %s@%s · %s · risk %s", c.Workspace.Repository, c.Workspace.CommitBefore, c.Mode, c.Risk)
+	fmt.Fprintf(&b, "%s\n", tDim.Render(clip(meta, w)))
 	// The reasoning loop, with "you are here".
 	fmt.Fprintf(&b, "%s\n", loopStepper(c.Status))
 	if c.Status == domain.PhaseNeedsHumanDecision {
-		fmt.Fprintf(&b, "%s\n", tWarn.Render("⚠ paused for human input · an answer resumes "+string(c.PausedFrom)))
+		paused := "⚠ paused for human input · an answer resumes " + string(c.PausedFrom)
+		fmt.Fprintf(&b, "%s\n", tWarn.Render(clip(paused, w)))
 	}
 	b.WriteString("\n")
 
-	b.WriteString(tSection.Render("Verification") + "  " + assessmentMark(v.VerificationAssessment) + "\n")
+	receiptTotal := max(v.ReceiptTotal, len(v.Receipts))
+	verificationHeading := tSection.Render("Verification") + "  " + assessmentMark(v.VerificationAssessment)
+	if receiptTotal > 0 {
+		verificationHeading += "  " + tDim.Render(fmt.Sprintf("(%d receipts)", receiptTotal))
+	}
+	b.WriteString(verificationHeading + "\n")
 	for _, gap := range assessmentGaps(v.VerificationAssessment) {
 		fmt.Fprintf(&b, "  %s %s\n", tWarn.Render("⚠"), clip(gap, w-6))
 	}
@@ -284,8 +733,9 @@ func (m model) renderDetail(w int) string {
 	}
 	if len(v.Receipts) > 0 {
 		start := max(0, len(v.Receipts)-4)
-		if start > 0 {
-			fmt.Fprintf(&b, "  %s\n", tDim.Render(fmt.Sprintf("… %d older receipts", start)))
+		older := max(0, receiptTotal-(len(v.Receipts)-start))
+		if older > 0 {
+			fmt.Fprintf(&b, "  %s\n", tDim.Render(fmt.Sprintf("… %d older receipts", older)))
 		}
 		for _, r := range v.Receipts[start:] {
 			mark, suffix := receiptMark(r.Status), ""
@@ -305,7 +755,8 @@ func (m model) renderDetail(w int) string {
 		b.WriteString(tSection.Render("Decision needed") + "\n")
 		fmt.Fprintf(&b, "  %s %s\n", tWarn.Render("?"), clip(decision.Question, w-6))
 		for _, option := range decision.Options {
-			fmt.Fprintf(&b, "  %s %s — %s\n", tPhase.Render("["+option.ID+"]"), clip(option.Label, 24), clip(option.Consequence, w-36))
+			optionText := fmt.Sprintf("[%s] %s — %s", option.ID, option.Label, option.Consequence)
+			fmt.Fprintf(&b, "  %s\n", tPhase.Render(clip(optionText, w-2)))
 		}
 		b.WriteString("\n")
 	}
@@ -318,8 +769,14 @@ func (m model) renderDetail(w int) string {
 			fmt.Fprintf(&b, "    %s\n", tDim.Render(clip(action.Reason, w-6)))
 		}
 		if len(action.Inputs) > 0 {
-			fmt.Fprintf(&b, "    %s\n", tDim.Render("needs: "+strings.Join(action.Inputs, ", ")))
+			fmt.Fprintf(&b, "    %s\n", tDim.Render(clip("needs: "+strings.Join(action.Inputs, ", "), w-4)))
 		}
+		b.WriteString("\n")
+	}
+	for _, warning := range v.ProjectionWarnings {
+		fmt.Fprintf(&b, "  %s %s\n", tDim.Render("…"), tDim.Render(clip(warning, w-6)))
+	}
+	if len(v.ProjectionWarnings) > 0 {
 		b.WriteString("\n")
 	}
 
@@ -331,15 +788,82 @@ func (m model) renderDetail(w int) string {
 		b.WriteString("\n")
 	}
 
-	fmt.Fprintf(&b, "%s %s\n", tSection.Render("Recent Evidence"), tDim.Render(fmt.Sprintf("(%d total)", len(v.Evidence))))
+	evidenceTotal := max(v.EvidenceTotal, len(v.Evidence))
+	fmt.Fprintf(&b, "%s %s\n", tSection.Render("Recent Evidence"), tDim.Render(fmt.Sprintf("(%d total)", evidenceTotal)))
 	start := max(0, len(v.Evidence)-5)
-	if start > 0 {
-		fmt.Fprintf(&b, "  %s\n", tDim.Render(fmt.Sprintf("… %d older", start)))
+	older := max(0, evidenceTotal-(len(v.Evidence)-start))
+	if older > 0 {
+		fmt.Fprintf(&b, "  %s\n", tDim.Render(fmt.Sprintf("… %d older", older)))
 	}
 	for _, e := range v.Evidence[start:] {
 		fmt.Fprintf(&b, "  %s %s\n", confMark(e.Confidence), clip(e.Claim, w-8))
 	}
-	return b.String()
+	return fitBlockWidth(strings.TrimSuffix(b.String(), "\n"), w)
+}
+
+func (m model) errorText() string {
+	var errors []string
+	if m.refreshErr != "" {
+		errors = append(errors, m.refreshErr)
+	}
+	if m.detailErr != "" {
+		errors = append(errors, m.detailErr)
+	}
+	return strings.Join(errors, " · ")
+}
+
+func (m model) detailDimensions() (width, height int) {
+	l := m.boardLayout()
+	return max(1, l.detailWidth-tDetailBox.GetHorizontalFrameSize()), max(0, l.detailHeight-tDetailBox.GetVerticalFrameSize())
+}
+
+func (m model) detailScrollBounds() (page, maximum int) {
+	w, h := m.detailDimensions()
+	if h <= 0 {
+		return 0, 0
+	}
+	lines := strings.Split(m.renderDetail(w), "\n")
+	page = h
+	if len(lines) > h {
+		page = max(1, h-1) // reserve the last row for the scroll position
+	}
+	return page, max(0, len(lines)-page)
+}
+
+func (m *model) scrollDetail(direction int) {
+	page, maximum := m.detailScrollBounds()
+	if page <= 0 || maximum == 0 {
+		m.detailOffset = 0
+		return
+	}
+	step := max(1, page-1)
+	m.detailOffset = clamp(m.detailOffset+direction*step, 0, maximum)
+}
+
+func (m *model) clampDetailOffset() {
+	_, maximum := m.detailScrollBounds()
+	m.detailOffset = clamp(m.detailOffset, 0, maximum)
+}
+
+func (m model) renderDetailViewport(w, h int) string {
+	if h <= 0 {
+		return ""
+	}
+	lines := strings.Split(m.renderDetail(w), "\n")
+	if len(lines) <= h {
+		return strings.Join(lines, "\n")
+	}
+	page := max(1, h-1)
+	maximum := max(0, len(lines)-page)
+	offset := clamp(m.detailOffset, 0, maximum)
+	end := min(len(lines), offset+page)
+	visible := append([]string(nil), lines[offset:end]...)
+	if h == 1 {
+		return strings.Join(visible, "\n")
+	}
+	position := fmt.Sprintf("lines %d–%d of %d · PgUp/PgDn", offset+1, end, len(lines))
+	visible = append(visible, tDim.Render(clip(position, w)))
+	return strings.Join(visible, "\n")
 }
 
 func containsExact(values []string, want string) bool {
@@ -422,7 +946,7 @@ func loopStepper(p domain.Phase) string {
 	if p == domain.PhaseNeedsHumanDecision {
 		track += "  " + tWarn.Render("⏸ paused · needs human decision")
 	} else if cur < 0 { // blocked / abandoned
-		track += "  " + tErr.Render("■ "+string(p))
+		track += "  " + tErr.Render("■ "+singleLine(string(p)))
 	}
 	return track
 }
@@ -437,6 +961,33 @@ func phaseColor(p domain.Phase) lipgloss.Style {
 		return tErr
 	default:
 		return tPhase
+	}
+}
+
+func phaseLabel(p domain.Phase) string {
+	switch p {
+	case domain.PhaseNew, domain.PhaseOrienting:
+		return "orient"
+	case domain.PhaseInvestigating:
+		return "inv"
+	case domain.PhasePlanned:
+		return "plan"
+	case domain.PhaseChanging:
+		return "change"
+	case domain.PhaseVerifying:
+		return "verify"
+	case domain.PhasePersisting:
+		return "keep"
+	case domain.PhaseComplete:
+		return "done"
+	case domain.PhaseNeedsHumanDecision:
+		return "paused"
+	case domain.PhaseBlocked:
+		return "blocked"
+	case domain.PhaseAbandoned:
+		return "abandon"
+	default:
+		return "unknown"
 	}
 }
 
@@ -478,13 +1029,58 @@ func confMark(c domain.Confidence) string {
 }
 
 func clip(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	r := []rune(s)
 	if n < 1 {
 		n = 1
 	}
-	if len(r) <= n {
-		return s
+	return ansi.Truncate(singleLine(s), n, "…")
+}
+
+// singleLine treats every case-file string as untrusted terminal text. ANSI
+// and OSC sequences are removed before other controls are flattened so a goal,
+// decision, or legacy ledger entry cannot manipulate the operator's terminal.
+func singleLine(s string) string {
+	s = ansi.Strip(s)
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\r', '\t':
+			return ' '
+		default:
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}
+	}, s)
+}
+
+func truncateStyled(s string, width int) string {
+	if width <= 0 {
+		return ""
 	}
-	return string(r[:n]) + "…"
+	return ansi.Truncate(s, width, "…")
+}
+
+func fitBlockWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = truncateStyled(lines[i], width)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func fitBlock(s string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i := range lines {
+		lines[i] = truncateStyled(lines[i], width)
+	}
+	return strings.Join(lines, "\n")
 }

@@ -4,14 +4,14 @@ import (
 	"testing"
 )
 
-// TestEvalHarness runs the §18.3 benchmark. A scenario passes only with a
+// TestEvalHarness runs the benchmark. A scenario passes only with a
 // correct outcome AND an adequate evidence trail; scenarios needing a live
 // backend self-skip. The scorecard is always printed for visibility.
 func TestEvalHarness(t *testing.T) {
 	scores := RunAll(t, Scenarios())
 
 	ran, passed, skipped := 0, 0, 0
-	t.Log("Cortex evaluation scorecard (SPEC §18.3):")
+	t.Log("Cortex evaluation scorecard:")
 	for _, s := range scores {
 		switch {
 		case s.Skipped:

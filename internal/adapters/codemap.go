@@ -10,13 +10,12 @@ import (
 	"time"
 )
 
-// Codemap adapts the codemap CLI for structural code evidence (SPEC §11.3,
-// §12.2): impact/blast-radius, callers, symbol lookup, diff review. codemap
+// Codemap adapts the codemap CLI for structural code evidence: impact and blast
+// radius, callers, symbol lookup, and diff review. codemap
 // uses a boolean `--json` flag and `--top`/`--depth` for limits.
 type Codemap struct{ tool }
 
-// NewCodemap builds a codemap adapter. Timeout is the SPEC §17.2
-// structural_query budget (20s).
+// NewCodemap builds a codemap adapter with a 20-second structural-query budget.
 func NewCodemap() *Codemap { return &Codemap{tool: newTool("codemap", 20*time.Second)} }
 
 func (c *Codemap) Name() string { return "codemap" }
@@ -59,9 +58,9 @@ func (c *Codemap) Execute(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
-// Annotate attaches a behavioral note to a code symbol via `codemap annotate`
-// (SPEC §12.2 structural memory: link a symbol to the behavior proven about
-// it). It is a write, so it uses execOnce (no retry). The source label lets
+// Annotate attaches a behavioral note to a code symbol via `codemap annotate`,
+// linking a symbol to the behavior proven about it. It is a write, so it uses
+// execOnce (no retry). The source label lets
 // codemap group ecosystem annotations (e.g. "cairntrace", "glyphrun").
 func (c *Codemap) Annotate(ctx context.Context, dir, symbol, source, note string) error {
 	if !binExists(c.bin) {
@@ -292,7 +291,7 @@ func (c *Codemap) searchLike(ctx context.Context, dir, op, query string, top int
 	if derr := decodeJSON(stdout, &r); derr != nil {
 		return degraded("codemap", op, stdout, stderr, code), nil
 	}
-	// Search hits are candidates, not proof (SPEC §5.2). find (name) is higher
+	// Search hits are candidates, not proof. find (name) is higher
 	// confidence than semantic (meaning).
 	conf := "medium"
 	if op == "semantic" {
@@ -581,7 +580,7 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 	if len(r.Hotspots) > 0 {
 		warns = append(warns, fmt.Sprintf("change touches %s (high fan-in)", pluralize(len(r.Hotspots), "hotspot")))
 	}
-	// SPEC §13.3 escalation: surface when the diff touches an exported (public-
+	// Escalate when the diff touches an exported (public-
 	// contract) symbol so the change gets the scrutiny an API/permission boundary
 	// change warrants. An exported name starts with an uppercase rune (Go) or an
 	// ASCII letter (TS/JS, where a leading underscore marks private). Only
@@ -594,7 +593,7 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 			}
 		}
 		if exported > 0 {
-			warns = append(warns, fmt.Sprintf("diff touches %s — confirm no API/permission/public-contract change, or add behavioral verification (SPEC §13.3)", pluralize(exported, "exported symbol")))
+			warns = append(warns, fmt.Sprintf("diff touches %s — confirm no API/permission/public-contract change, or add behavioral verification", pluralize(exported, "exported symbol")))
 		}
 	}
 	// A structural review is only authoritative when the project is indexed;
@@ -609,7 +608,7 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 	}
 	facts := []Fact{{Kind: "code_graph", Claim: claim, Confidence: conf}}
 	// Diff-scoped aggregate risk band (codemap ≥0.36). A medium/high band warns
-	// with its own factors so the §13.3 gate is grounded in the actual diff, not
+	// with its own factors so the public-contract gate is grounded in the actual diff, not
 	// just the case file's orient-time risk label. The warning carries a stable
 	// "diff risk: <level>" prefix the kernel can key on.
 	if r.Risk != nil && (r.Risk.Level == "medium" || r.Risk.Level == "high") {
@@ -675,7 +674,7 @@ func noteWarnings(note string, untested bool, symbol string) []string {
 // Conservative: only an uppercase first rune counts (Go public; TS/JS class/
 // PascalCase public). A lowercase name is ambiguous (Go private, TS public) so
 // it is NOT flagged, to avoid false escalation noise on Go unexported helpers.
-// A leading underscore (TS/JS private) never counts. SPEC §13.3.
+// A leading underscore (TS/JS private) never counts.
 func isExportedSymbol(name string) bool {
 	if name == "" {
 		return false

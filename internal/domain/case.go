@@ -13,7 +13,7 @@ import (
 // migration in store/casefs) on any breaking change to the JSON layout.
 const SchemaVersion = 1
 
-// Phase is a task lifecycle state (SPEC §6.1).
+// Phase is a task lifecycle state.
 type Phase string
 
 const (
@@ -54,7 +54,7 @@ func (m Mode) Valid() bool {
 	}
 }
 
-// Surface is a user-visible system layer a change can affect (SPEC §3.6).
+// Surface is a user-visible system layer a change can affect.
 type Surface string
 
 const (
@@ -87,7 +87,7 @@ type Workspace struct {
 	BaseRef string `json:"baseRef,omitempty"`
 }
 
-// ChangeBoundary is the declared set of expected modifications (SPEC §3.5). It
+// ChangeBoundary is the declared set of expected modifications. It
 // is a reasoning guardrail, not a security boundary.
 type ChangeBoundary struct {
 	Files   []string `json:"files,omitempty"`
@@ -100,7 +100,7 @@ func (b ChangeBoundary) Declared() bool {
 	return len(b.Files) > 0 || len(b.Symbols) > 0
 }
 
-// CaseFile is the durable state of one task (SPEC §8.2). It is working memory,
+// CaseFile is the durable state of one task. It is working memory,
 // not a transcript.
 type CaseFile struct {
 	SchemaVersion int `json:"schemaVersion"`
@@ -125,24 +125,28 @@ type CaseFile struct {
 	ChangeLease *ChangeLease `json:"changeLease,omitempty"`
 	// PausedFrom records the exact active phase interrupted by a human decision.
 	// It is set only while Status == needs_human_decision and cleared on resume.
-	PausedFrom     Phase          `json:"pausedFrom,omitempty"`
-	Risk           string         `json:"risk,omitempty"` // low | medium | high
-	Workspace      Workspace      `json:"workspace"`
-	Surfaces       []Surface      `json:"surfaces,omitempty"`
-	ChangeBoundary ChangeBoundary `json:"changeBoundary,omitempty"`
+	PausedFrom Phase     `json:"pausedFrom,omitempty"`
+	Risk       string    `json:"risk,omitempty"` // low | medium | high
+	Workspace  Workspace `json:"workspace"`
+	Surfaces   []Surface `json:"surfaces,omitempty"`
+	// AcceptanceCriteria is an optional immutable success contract supplied at
+	// case creation. Legacy cases omit it and retain their historical named-
+	// claim semantics.
+	AcceptanceCriteria []AcceptanceCriterion `json:"acceptanceCriteria,omitempty"`
+	ChangeBoundary     ChangeBoundary        `json:"changeBoundary,omitempty"`
 	// VerificationRequired names the verifier claims a task must satisfy before
 	// it can be considered complete (populated at plan time).
 	VerificationRequired []string `json:"verificationRequired,omitempty"`
 	// BlockedReason is set when Status is a terminal blocked/abandoned state.
 	BlockedReason string `json:"blockedReason,omitempty"`
 	// InvestigationRounds counts cortex_investigate calls, checked against the
-	// budget to discourage frantic, indiscriminate tool use (SPEC §7.3).
+	// budget to discourage frantic, indiscriminate tool use.
 	InvestigationRounds int `json:"investigationRounds,omitempty"`
 	// Notes carries free-form orientation facts (tool health, git state) and any
-	// recorded reason for exceeding the investigation budget (SPEC §7.3).
+	// recorded reason for exceeding the investigation budget.
 	Notes []string `json:"notes,omitempty"`
 	// TimeoutOverrides maps a tool name to a per-task timeout (e.g. "codemap":
-	// "45s"), written to the case file at plan time (SPEC §17.2). An empty or
+	// "45s"), written to the case file at plan time. An empty or
 	// unparseable value falls back to the adapter's default.
 	TimeoutOverrides map[string]string `json:"timeoutOverrides,omitempty"`
 }
@@ -157,7 +161,7 @@ func (c *CaseFile) HasSurface(s Surface) bool {
 	return false
 }
 
-// transitions is the legal phase graph (SPEC §6.2). A move is allowed only when
+// transitions is the legal phase graph. A move is allowed only when
 // the source phase lists the destination. Terminal states (blocked/abandoned)
 // and the resumable decision wait are handled separately.
 var transitions = map[Phase][]Phase{

@@ -44,7 +44,7 @@ func clip(s string, n int) string {
 }
 
 // firstLine returns the first non-empty, trimmed line of s. Used by version
-// probes and first-line-of-stderr degradation (SPEC §11.4).
+// probes and first-line-of-stderr degradation.
 func firstLine(s string) string {
 	for _, ln := range strings.Split(s, "\n") {
 		if t := strings.TrimSpace(ln); t != "" {

@@ -28,6 +28,8 @@ type VerificationAssessment struct {
 	Outcome           VerificationOutcome `json:"outcome"`
 	SatisfiedRequired []string            `json:"satisfiedRequired,omitempty"`
 	MissingRequired   []string            `json:"missingRequired,omitempty"`
+	SatisfiedCriteria []string            `json:"satisfiedCriteria,omitempty"`
+	MissingCriteria   []string            `json:"missingCriteria,omitempty"`
 	NonPassingClaims  []string            `json:"nonPassingClaims,omitempty"`
 	FailedClaims      []string            `json:"failedClaims,omitempty"`
 }

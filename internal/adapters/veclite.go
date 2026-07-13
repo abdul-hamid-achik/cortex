@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// Veclite adapts the veclite CLI for cross-case disproof recall (SPEC §15.4 —
-// the fourth memory layer). It is CLI-only (never a Go dependency) and
+// Veclite adapts the veclite CLI for cross-case disproof recall, the fourth
+// memory layer. It is CLI-only (never a Go dependency) and
 // best-effort: a missing binary or unreachable ollama degrades to a warning,
 // never a hard failure. Resolved hypotheses (rejected/challenged are the gold)
 // and definitive verification receipts are indexed into a veclite collection;
@@ -159,7 +159,7 @@ func (v *Veclite) ensureSchema(ctx context.Context) error {
 	return v.ensureErr
 }
 
-// IndexRecord is one cross-case record indexed for recall (SPEC §15.4). Embed
+// IndexRecord is one cross-case record indexed for recall. Embed
 // text = statement + "\n" + goal + "\n" + resolved_reason. The kernel redacts
 // every field and skips sensitive records BEFORE building this; the adapter
 // trusts its inputs.
@@ -184,8 +184,8 @@ func (r IndexRecord) embedText() string {
 	return strings.Join([]string{r.Statement, r.Goal, r.ResolvedReason}, "\n")
 }
 
-// IndexCase indexes one record. It is a WRITE — execOnce, never retried
-// (SPEC §17.3). Best-effort: a missing binary or failed embed returns an error
+// IndexCase indexes one record. It is a WRITE — execOnce, never retried.
+// Best-effort: a missing binary or failed embed returns an error
 // the caller warns on; it never blocks the calling phase.
 func (v *Veclite) IndexCase(ctx context.Context, rec IndexRecord) error {
 	if !v.enabled || !binExists(v.bin) {

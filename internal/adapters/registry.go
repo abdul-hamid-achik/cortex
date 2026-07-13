@@ -10,7 +10,7 @@ import (
 type Registry struct {
 	byName      map[string]Adapter
 	order       []string
-	maxParallel int // bound on concurrent adapter calls (SPEC §7.3)
+	maxParallel int // bound on concurrent adapter calls
 }
 
 // NewRegistry builds a registry from a set of adapters (last-wins on name).
@@ -28,7 +28,7 @@ func NewRegistry(as ...Adapter) *Registry {
 	return r
 }
 
-// SetMaxParallel bounds concurrent adapter fan-out (SPEC §7.3 max_parallel_calls).
+// SetMaxParallel bounds concurrent adapter fan-out according to max_parallel_calls.
 // A value < 1 is ignored (keeps the default).
 func (r *Registry) SetMaxParallel(n int) {
 	if n >= 1 {
@@ -37,7 +37,7 @@ func (r *Registry) SetMaxParallel(n int) {
 }
 
 // SetMaxAutoRetries threads budget.max_auto_retries_per_tool into every
-// registered adapter that shells out (SPEC §17.3). Adapters without an exec
+// registered adapter that shells out. Adapters without an exec
 // path (fakes, git-free stubs) are skipped. Negative values are ignored.
 func (r *Registry) SetMaxAutoRetries(n int) {
 	if n < 0 {
@@ -83,14 +83,14 @@ type HealthReport struct {
 }
 
 // Health probes every adapter concurrently with a short per-tool budget and
-// returns a stable, name-sorted report (SPEC §6.2 orienting → tool health known).
+// returns a stable, name-sorted report so orientation has a known tool-health snapshot.
 func (r *Registry) Health(ctx context.Context) []HealthReport {
 	type res struct {
 		name string
 		err  error
 	}
 	ch := make(chan res, len(r.order))
-	// Bound concurrency to max_parallel_calls (SPEC §7.3) so probing many tools
+	// Bound concurrency to max_parallel_calls so probing many tools
 	// doesn't spawn an unbounded burst of subprocesses.
 	sem := make(chan struct{}, max(1, r.maxParallel))
 	for _, name := range r.order {

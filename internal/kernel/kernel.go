@@ -1,6 +1,6 @@
 // Package kernel is Cortex's shared service layer: the phase machine, routing,
 // verification policy, and scope control that turn stateless tool calls into an
-// evidence-driven reasoning loop (SPEC §3.1). Both the CLI and the MCP server
+// evidence-driven reasoning loop. Both the CLI and the MCP server
 // are thin front-ends over this package — never put business logic in those
 // layers (the ecosystem's cmd → service → adapters rule).
 package kernel
@@ -33,7 +33,7 @@ type Kernel struct {
 }
 
 // New builds a kernel for a workspace with a default adapter registry (git,
-// codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault).
+// codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite).
 func New(cfg config.Config) (*Kernel, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid cortex configuration: %w", err)
@@ -59,8 +59,8 @@ func New(cfg config.Config) (*Kernel, error) {
 		adapters.NewVeclite(),
 		adapters.NewCommandVerifier(commandSpecs(cfg.Verifiers)),
 	)
-	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls)         // SPEC §7.3
-	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool) // SPEC §17.3
+	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls)
+	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool)
 	k := &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now}
 	if vl, ok := reg.Get("veclite").(*adapters.Veclite); ok {
 		vl.Configure(adapters.VecliteConfig{
@@ -69,9 +69,9 @@ func New(cfg config.Config) (*Kernel, error) {
 			EmbedURL:   cfg.Recall.EmbedURL,
 			Enabled:    cfg.Recall.Enabled,
 		})
-		k.recaller = vl // cross-case recall surface (SPEC §15.4)
+		k.recaller = vl // cross-case recall surface
 	}
-	// SPEC §16.2 #4: wire an env-gated approver so a harness/CI can allow
+	// Wire an env-gated approver so a harness/CI can allow
 	// external mutations without code changes. Default (unset) keeps the
 	// built-in deny — external actions stay blocked until explicitly approved.
 	if approveExternal() {
@@ -142,7 +142,7 @@ func NewWith(cfg config.Config, store *casefs.Store, reg *adapters.Registry) *Ke
 		})
 		k.recaller = vl
 	}
-	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool) // SPEC §17.3
+	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool)
 	if approveExternal() {
 		k.SetApprover(envApprover{})
 	}
@@ -156,7 +156,7 @@ func (k *Kernel) Store() *casefs.Store { return k.store }
 func (k *Kernel) Registry() *adapters.Registry { return k.reg }
 
 // transition updates an in-memory case to a new phase, enforcing the structural
-// graph (SPEC §6.2). Data-precondition invariants are checked by the caller.
+// graph. Data-precondition invariants are checked by the caller.
 // The caller records phase history only after the corresponding case snapshot
 // commits; appending first can leave a phantom transition after a failed CAS.
 func (k *Kernel) transition(c *domain.CaseFile, to domain.Phase) error {
@@ -195,13 +195,13 @@ func (k *Kernel) stampEvidenceOnce(taskID, stableID, tool string, f adapters.Fac
 
 // storeRaw persists a tool result's redacted raw output once and returns a
 // resolvable rawRef (case://<taskID>/raw/<id>), or "" when there is no raw. The
-// raw is redacted again defensively before it touches disk (SPEC §10.4).
+// raw is redacted again defensively before it touches disk.
 func (k *Kernel) storeRaw(taskID string, res adapters.Result) string {
 	if res.Raw == "" {
 		return ""
 	}
 	rawID := ids.New("raw")
-	// Apply the per-tool raw cap (SPEC §7.3 max_raw_output_bytes_per_tool) here,
+	// Apply the per-tool raw cap here,
 	// at the storage boundary — NOT on the string the adapter parses, which would
 	// corrupt valid-but-large JSON. The cap bounds only what is kept on disk.
 	raw := capRawForStore(k.red.String(res.Raw), k.cfg.Budget.MaxRawOutputBytesPerTool)
@@ -238,7 +238,7 @@ func (k *Kernel) stampEvidenceDerived(taskID, tool string, f adapters.Fact, rawR
 // ordinary investigation and note paths call stampEvidenceDerived above.
 func (k *Kernel) buildEvidenceDerived(taskID, tool string, f adapters.Fact, rawRef string, derivedFrom []string) domain.Evidence {
 	id := ids.New("ev")
-	// Enforce invariant #4 (SPEC §6.3): no secret value enters an evidence
+	// Enforce the invariant that no secret value enters an evidence
 	// record. Adapter facts are parsed from already-redacted tool output, but
 	// human/model-supplied facts (e.g. cortex_resolve reasons) are NOT — so
 	// redact here, at the write boundary, for EVERY source. Flag sensitivity
@@ -306,7 +306,7 @@ func (k *Kernel) currentCommandActor(taskID string) string {
 
 // recordCommand writes a non-sensitive audit entry for a tool invocation,
 // including its action class so the security posture is inspectable
-// (SPEC §16.2 #7 records capability and result, not secret contents).
+// while recording capability and result, not secret contents.
 func (k *Kernel) recordCommand(taskID, tool, op string, class domain.ActionClass, status adapters.Status, started time.Time, note string) {
 	k.recordCommandAs(k.currentCommandActor(taskID), taskID, tool, op, class, status, started, note)
 }
@@ -326,7 +326,7 @@ func (k *Kernel) recordCommandAs(actor, taskID, tool, op string, class domain.Ac
 
 // recordWrite audits a local-mutation write performed via a direct adapter
 // method (fcheap stash, vecgrep memory, codemap annotate) so the audit trail is
-// complete, not just the query path (SPEC §16.2 #7).
+// complete, not just the query path.
 func (k *Kernel) recordWrite(taskID, tool, op string, err error) {
 	k.recordWriteAs(k.currentCommandActor(taskID), taskID, tool, op, err)
 }
@@ -342,8 +342,8 @@ func (k *Kernel) recordWriteAs(actor, taskID, tool, op string, err error) {
 }
 
 // Approver decides whether a mutation-class action may run. A harness injects
-// one to gate external mutation / secret-backed execution — the SPEC §16.2 #4
-// explicit approval integration point.
+// one to gate external mutation / secret-backed execution through an explicit
+// approval integration point.
 type Approver interface {
 	Approve(taskID, tool, op string, class domain.ActionClass) bool
 }
@@ -351,7 +351,7 @@ type Approver interface {
 // SetApprover installs an approval hook (nil restores the built-in policy).
 func (k *Kernel) SetApprover(a Approver) { k.approver = a }
 
-// actionAllowed applies the action-class policy (SPEC §16.3): read-only and
+// actionAllowed applies the action-class policy: read-only and
 // local-mutation run freely within an active task; external mutation and
 // secret-backed execution require an explicit decision — from the injected
 // approver, or the built-in default (deny external; allow secreted only when
@@ -394,7 +394,7 @@ func (k *Kernel) run(ctx context.Context, tool string, req adapters.Request) ada
 		actor = k.currentCommandActor(req.TaskID)
 	}
 	if !k.actionAllowed(req.TaskID, tool, req.Operation, class) {
-		note := fmt.Sprintf("%s.%s (%s) blocked: requires explicit approval (SPEC §16.2)", tool, req.Operation, class)
+		note := fmt.Sprintf("%s.%s (%s) blocked: requires explicit approval", tool, req.Operation, class)
 		k.recordCommandAs(actor, req.TaskID, tool, req.Operation, class, adapters.StatusBlocked, started, note)
 		return adapters.Result{Tool: tool, Operation: req.Operation, Status: adapters.StatusBlocked, Summary: note,
 			Warnings: []string{note}}
@@ -406,7 +406,7 @@ func (k *Kernel) run(ctx context.Context, tool string, req adapters.Request) ada
 		req.Input["dir"] = k.cfg.Workspace
 	}
 	// Apply a per-task timeout override if the case declares one for this tool
-	// (SPEC §17.2). The override bounds the context; the adapter's own timeout
+	// for this task. The override bounds the context; the adapter's own timeout
 	// is the min of its default and this deadline.
 	if req.TaskID != "" {
 		if c, err := k.store.Load(req.TaskID); err == nil {

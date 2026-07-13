@@ -1,7 +1,7 @@
 package domain
 
 // Envelope is the shared outer result schema every Cortex tool returns
-// (SPEC §10.3). Keeping one shape across start/investigate/plan/verify/status
+// Keeping one shape across start/investigate/plan/verify/status
 // lets a weaker model learn the interface once.
 type Envelope struct {
 	OK          bool       `json:"ok"`
@@ -22,7 +22,7 @@ type Envelope struct {
 	// relied on returned a non-authoritative result (partial/unavailable/error) —
 	// e.g. a broken vecgrep index. The facts/summary may still be present but
 	// should be treated as lower-confidence than usual, not as a clean result
-	// (SPEC §11.4; dogfooding 2026-07-07 found this silently buried in warnings).
+	// Dogfooding found that burying this state in warnings made it too easy to miss.
 	Degraded bool `json:"degraded,omitempty"`
 	// Error is set (and OK=false) when a tool call fails in a recoverable way.
 	Error string `json:"error,omitempty"`
@@ -41,7 +41,7 @@ type NextAction struct {
 }
 
 // FactView is the compact, model-facing projection of an Evidence record. Raw
-// output stays out of the envelope to protect the context window (SPEC §10.4).
+// output stays out of the envelope to protect the context window.
 type FactView struct {
 	ID          string       `json:"id"`
 	Claim       string       `json:"claim"`

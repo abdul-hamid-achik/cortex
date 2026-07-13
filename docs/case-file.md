@@ -8,7 +8,7 @@ in one place (repo-local `.cortex/cases` is opt-in via `cases_dir` / `CORTEX_CAS
 
 ```
 $XDG_STATE_HOME/cortex/sessions/<repo>/task_06FK…/
-  case.json          # goal, workspace identity, phase, boundary, required verification
+  case.json          # goal, immutable criteria, workspace, phase, boundary, required verification
   decisions.json     # bounded human questions, options/consequences, and answers
   evidence.jsonl     # append-only ledger of claims (provenance + confidence)
   hypotheses.json    # falsifiable explanations + disproof paths
@@ -54,6 +54,12 @@ review.
     "commitBefore": "7e1f4d2"
   },
   "surfaces": ["code", "browser"],
+  "acceptanceCriteria": [
+    {
+      "id": "checkout_return",
+      "statement": "Login started at checkout returns to checkout"
+    }
+  ],
   "changeBoundary": {
     "files": ["src/auth/callback.ts", "src/auth/return-url.ts"],
     "symbols": ["HandleCallback", "ResolveReturnURL"]
@@ -74,6 +80,12 @@ Actor and parent/child fields are optional coordination metadata. `changeLease` 
 released leases keep a `releasedAt` timestamp for audit and expired/released leases may be replaced.
 While a human decision is pending, `status` is `needs_human_decision` and `pausedFrom` stores the
 exact phase to resume.
+
+`acceptanceCriteria` is optional for backward compatibility and immutable after creation. A case
+may register at most 64 unique stable IDs (128 bytes) with exact statements (4 KiB). Store-level
+compare-and-swap and transaction paths reject later mutation. Verification must produce a current,
+bound named-claim receipt with the same ID and exact statement for every criterion; explicit
+partial/failed completion acknowledgments cannot bypass this contract.
 
 ## `evidence.jsonl`
 
@@ -124,8 +136,8 @@ An array of receipts, each naming the exact claim it supports:
   {
     "id": "vr_06FL…",
     "batchId": "vb_06FJ…",
-    "claimId": "checkout-return",
-    "claim": "After OAuth login from checkout, the browser returns to checkout",
+    "claimId": "checkout_return",
+    "claim": "Login started at checkout returns to checkout",
     "surface": "browser",
     "purpose": "named_claim",
     "contract": "specs/cairntrace/checkout_return.yml",
@@ -151,7 +163,10 @@ are `bound` only when the case, owner, HEAD, and dirty tree remain stable throug
 otherwise definitive results become inconclusive and that latest unbound batch masks older proof.
 Status, metrics, sessions, review, remember, Show, and
 Studio all interpret current receipts through the same `verified | partial | failed | unverified`
-assessment.
+assessment. `cortex status --json` adds a bounded `claimProofs` manifest for these stable claim
+IDs, including statement digests, receipt/batch binding, revision/diff identity, and safe evidence
+references. Full criterion statements remain in `case.json`; the proof projection is sized for
+model transports and reports every omission explicitly.
 
 ## `decisions.json`
 
@@ -209,6 +224,8 @@ bounded, sensitive base64. Results report `encoding`, `sensitive`, `truncated`, 
   free text and collection counts, individual ledger records, and JSON snapshot reads/writes are
   bounded. Status counts evidence as a stream, handoff retains only its newest shareable window,
   and auto-refreshing human views retain bounded recent ledgers plus exact totals in one task-locked
-  snapshot.
+  snapshot. General handoffs stop at 128 KiB; complete verified handoffs reserve 90 KiB for their
+  actual primary JSON and keep the full non-sensitive named-claim/verifier proof closure or omit
+  receipts atomically with a warning.
 - `commands.jsonl` notes include retry attempt counts/final cause when a read-only tool call was
   retried and still failed (transient spawn/transport errors only; exits are data, never replayed).

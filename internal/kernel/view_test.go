@@ -85,6 +85,17 @@ func TestShowSessionBoundsAutoRefreshingLedgersAndReportsTotals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	receipts := make([]domain.VerificationRecord, 0, maxSessionViewLedgerRecords+5)
+	for i := 0; i < maxSessionViewLedgerRecords+5; i++ {
+		receipts = append(receipts, domain.VerificationRecord{
+			ID: fmt.Sprintf("vr_view_%03d", i), BatchID: "vb_bounded_view",
+			Claim: fmt.Sprintf("view receipt %d", i), Status: domain.VerifyInconclusive,
+			Timestamp: time.Now().UTC(),
+		})
+	}
+	if err := k.Store().AppendVerificationBatch(started.TaskID, receipts); err != nil {
+		t.Fatal(err)
+	}
 	view, err := ShowSession(started.TaskID)
 	if err != nil {
 		t.Fatal(err)
@@ -92,5 +103,17 @@ func TestShowSessionBoundsAutoRefreshingLedgersAndReportsTotals(t *testing.T) {
 	wantTotal := len(before) + maxSessionViewLedgerRecords + 5
 	if len(view.Evidence) != maxSessionViewLedgerRecords || view.EvidenceTotal != wantTotal || len(view.ProjectionWarnings) == 0 {
 		t.Fatalf("bounded show = retained %d total %d warnings %v, want %d/%d", len(view.Evidence), view.EvidenceTotal, view.ProjectionWarnings, maxSessionViewLedgerRecords, wantTotal)
+	}
+	if len(view.Receipts) != maxSessionViewLedgerRecords || view.ReceiptTotal != len(receipts) {
+		t.Fatalf("bounded receipts = retained %d total %d, want %d/%d", len(view.Receipts), view.ReceiptTotal, maxSessionViewLedgerRecords, len(receipts))
+	}
+	if view.Receipts[0].ID != "vr_view_005" || view.Receipts[len(view.Receipts)-1].ID != "vr_view_204" {
+		t.Fatalf("bounded receipt window is not the newest set: first=%s last=%s", view.Receipts[0].ID, view.Receipts[len(view.Receipts)-1].ID)
+	}
+	if len(view.Timeline) != maxSessionViewLedgerRecords || view.TimelineTotal <= len(view.Timeline) {
+		t.Fatalf("bounded timeline = retained %d total %d", len(view.Timeline), view.TimelineTotal)
+	}
+	if !hasWarning(view.ProjectionWarnings, "verification receipts") {
+		t.Fatalf("missing receipt-bound warning: %v", view.ProjectionWarnings)
 	}
 }

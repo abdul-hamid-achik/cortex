@@ -6,16 +6,16 @@ the handful of things that are easy to get wrong.
 ## What cortex is
 
 A local-first **agent kernel**: a small runtime between an LLM and the specialist tool ecosystem
-(codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault). It gives a task a durable **case file**
-and forces a reasoning loop — orient → investigate → plan → change → verify → preserve — through
-a **phase machine** with hard invariants. Three surfaces share one kernel: a CLI (`--json` for
-agents), an MCP server (`cortex serve`, 17 agent-profile / 24 all-profile tools), and the
-cross-workspace Studio board (`cortex studio`).
+(codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite). It gives a task a
+durable **case file** and forces a reasoning loop — orient → investigate → plan → change → verify →
+preserve — through a **phase machine** with hard invariants. Three surfaces share one kernel: a CLI
+(`--json` for agents), an MCP server (`cortex serve`, 17 agent-profile / 24 all-profile tools), and
+the cross-workspace Studio board (`cortex studio`).
 
 Surfaces / key files:
 - CLI: `cmd/cortex/` — cobra, split per-command; each `RunE` is thin → `kernelFor()` → `internal/kernel`.
 - Shared service layer (everything routes here): `internal/kernel/` (orient/investigate/plan/verify/persist/status/scope).
-- MCP server (thin, 17 tools): `internal/mcp/server.go`.
+- MCP server (thin, 17-tool agent / 24-tool all profiles): `internal/mcp/server.go`.
 - Studio (read-only): `internal/tui/board.go`.
 - Domain (no internal deps): `internal/domain/` (case + phase machine, evidence, hypothesis, plan, verification, policy, envelope).
 - Adapters (flat, one file per tool): `internal/adapters/`.
@@ -26,7 +26,7 @@ Surfaces / key files:
 - `docs/` → VitePress **product docs**, deployed to **Vercel** (no GitHub Pages).
 - `~/notes/projects/cortex/` → Obsidian vault for **working notes / handoffs**, via the
   `obsidian-cli` skill. **Never** write scratch `.md` into the repo. Repo root `.md` is limited
-  to: README, AGENTS, CLAUDE, SPEC.
+  to: README, AGENTS, CLAUDE, CHANGELOG.
 
 ## Gotchas (learned the hard way)
 
@@ -59,17 +59,25 @@ Surfaces / key files:
 - **Redaction runs at the evidence-record boundary, not only at the adapter.** `stampEvidence`
   redacts every fact's claim/URI before persisting, so human/model-supplied facts (e.g.
   `cortex resolve` reasons) are masked too — adapter output is *already* redacted, but the write
-  boundary is the invariant (SPEC §6.3 #4). The kernel redactor is seeded from
-  `config.RedactLiterals`.
+  boundary is the invariant. The kernel redactor is seeded from `config.RedactLiterals`.
 - **`fcheap save --json` emits the manifest FLAT** (`{"id":…, "tool":…, "files":…}`), not wrapped
   in `{"manifest":{…}}` — parse `id` at the top level (we hit this; the stash link silently fell
   back to the ephemeral runDir until fixed).
 - **Behavioral runs are three-way, not two.** cairn/glyph exit codes distinguish pass (0) / fail
   (1) / errored (2+, incl. contract-hash mismatch). An errored run is `inconclusive` at medium
-  confidence — never a high-confidence FAILED verdict (SPEC §11.4). See `behavioralStatus`.
+  confidence — never a high-confidence FAILED verdict. See `behavioralStatus`.
 - **Adapters degrade, never fabricate.** A missing binary → `Health` returns `ErrToolMissing`;
   `Execute` → `unavailable` with a `tool_unavailable` fact. An unparseable output → `degraded`
   (first line only, kept as raw). Both are honest signals, not errors.
+- **Acceptance criteria are immutable case identity.** `open`/`start` may register up to 64 stable
+  ID + exact-statement pairs. Store saves and transactions reject later mutation; verification
+  must reuse the exact ID/statement, and non-green completion acknowledgments cannot bypass
+  missing criterion proof. Status exposes only a bounded proof manifest; full statements stay in
+  `case.json`.
+- **Complete handoffs must fit local-agent honestly.** General packets retain the 128 KiB cap, but
+  a complete verified packet measures the actual pretty MCP JSON against 90 KiB and keeps every
+  non-sensitive named claim with its verifier-batch closure. If that atomic proof set cannot fit,
+  return no receipts plus the explicit overflow warning—never a partial proof set.
 
 ## Validate your work
 
@@ -81,5 +89,5 @@ temp git repo where git behavior matters.
 ## Related projects
 
 `~/projects/*`: **codemap** (closest convention match — copy it when in doubt), **vecgrep**,
-**cairntrace**, **glyphrun**, **file.cheap**, **tinyvault**, **mcphub**. Cortex composes them;
-it does not replace mcphub.
+**cairntrace**, **glyphrun**, **file.cheap**, **vidtrace**, **tinyvault**, **veclite**, **mcphub**.
+Cortex composes them; it does not replace mcphub.

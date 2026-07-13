@@ -12,7 +12,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
-// TaskMetrics is the per-task observability summary (SPEC §18.1/§18.2): it
+// TaskMetrics is the per-task observability summary: it
 // measures outcomes and the evidence trail, not merely tool-call volume. It is
 // computed from the case file plus the previously write-only audit log.
 type TaskMetrics struct {
@@ -48,7 +48,7 @@ type PhaseDuration struct {
 }
 
 // ToolContribution enriches mcphub's raw call counts with task-level meaning
-// (SPEC §18.2): not "codemap called 8×" but "codemap contributed evidence to N
+// not "codemap called 8×" but "codemap contributed evidence to N
 // hypotheses".
 type ToolContribution struct {
 	Tool                string `json:"tool"`
@@ -143,7 +143,7 @@ func (k *Kernel) TaskMetrics(taskID string) (TaskMetrics, error) {
 			m.ScopeDrifted = true
 		}
 	}
-	// §18.2: how many hypotheses each tool's evidence supports.
+	// Count how many hypotheses each tool's evidence supports.
 	for tool, ids := range evByTool {
 		n := 0
 		for _, h := range hyps {
@@ -162,7 +162,7 @@ func (k *Kernel) TaskMetrics(taskID string) (TaskMetrics, error) {
 			m.UnresolvedHypotheses++
 		}
 	}
-	assessment := assessVerification(c.VerificationRequired, receipts)
+	assessment := assessCaseVerification(c, receipts)
 	for _, r := range currentVerificationReceipts(receipts) {
 		if r.Proven() {
 			m.VerifiedSurfaces = appendUnique(m.VerifiedSurfaces, string(r.Surface))
@@ -216,7 +216,7 @@ func phaseDurations(createdAt time.Time, events []casefs.PhaseEvent, terminal bo
 }
 
 // WorkspaceMetrics aggregates TaskMetrics across every task in the workspace
-// (SPEC §18.1 core metrics). Rates are 0..1.
+// Rates are normalized to 0..1.
 type WorkspaceMetrics struct {
 	Tasks                     int            `json:"tasks"`
 	Completed                 int            `json:"completed"`

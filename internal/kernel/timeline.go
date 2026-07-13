@@ -79,7 +79,7 @@ func locateUnder(root, taskID string) (string, *casefs.Store, error) {
 // Timeline merges a session's phase history, evidence, audited commands, and
 // verification receipts into one time-sorted feed — this is what finally
 // surfaces commands.jsonl, the audit log that until now had no reader outside
-// the metrics path (SPEC §18.1).
+// the metrics path.
 func Timeline(taskID string) ([]TimelineEntry, error) {
 	return TimelineIn("", taskID)
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
 
-// RememberInput parameterizes Remember (SPEC §10.2 cortex_remember).
+// RememberInput parameterizes Remember.
 type RememberInput struct {
 	TaskID                  string
 	Outcome                 string
@@ -25,10 +25,10 @@ type RememberInput struct {
 }
 
 // Remember persists a concise, provenance-rich conclusion to durable memory and
-// completes the task (SPEC §15). It enforces the completion invariant: a task
+// completes the task. It enforces the completion invariant: a task
 // cannot complete without a *passing* verification record, an explicit
 // verification-not-possible acknowledgment, or an explicit accept-failed
-// acknowledgment when only failed verdicts exist (SPEC §6.3 #2, §25 #2/#4).
+// acknowledgment when only failed verdicts exist.
 func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelope, error) {
 	c, err := k.store.Load(in.TaskID)
 	if err != nil {
@@ -53,7 +53,21 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		}
 	}
 
-	receipts, _ := k.store.Verifications(c.ID)
+	// Read every completion-critical document under one task lock before
+	// releasing a lease, moving phase, or writing summary.md. A corrupt
+	// verification, hypothesis, or evidence file must fail closed rather than be
+	// mistaken for an empty collection. Evidence is streamed and only a bounded,
+	// non-sensitive recent set is retained for the human summary.
+	snapshot, err := k.store.CompletionSnapshot(c.ID, maxCompletionSummaryEvidence)
+	if err != nil {
+		return errEnvelope(c.ID, "cannot read completion state: "+err.Error()), err
+	}
+	c = snapshot.Case
+	if c.Status != domain.PhaseVerifying && c.Status != domain.PhasePersisting {
+		return errEnvelope(in.TaskID, fmt.Sprintf("cannot remember in phase %q; call cortex_verify first, then cortex_remember", c.Status)), nil
+	}
+	receipts := snapshot.Verifications
+	hyps := snapshot.Hypotheses
 	var verificationWarnings []string
 	// A receipt tied to an older HEAD/diff proves a prior workspace state, not
 	// the state being completed now. Legacy receipts without dirtyDigest retain
@@ -72,7 +86,13 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	// One canonical assessment drives completion, status, metrics, overview, and
 	// review. A pass on one surface cannot launder a failed/unrun named claim or a
 	// missing required verifier into a verified result.
-	assessment := assessVerification(c.VerificationRequired, receipts)
+	assessment := assessCaseVerification(c, receipts)
+	if len(c.AcceptanceCriteria) > 0 && len(assessment.MissingCriteria) > 0 {
+		return errEnvelope(c.ID, fmt.Sprintf(
+			"cannot complete: %d registered acceptance criterion/criteria lack current bound passing named-claim receipts (%s)",
+			len(assessment.MissingCriteria), strings.Join(clipList(assessment.MissingCriteria, 5), ", "),
+		)), nil
+	}
 	switch assessment.Outcome {
 	case VerificationVerified:
 		// No acknowledgement is needed.
@@ -117,15 +137,23 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	}
 	moves = append(moves, phaseMove{from: from, to: c.Status})
 
-	evidence, _ := k.store.Evidence(c.ID)
-	hyps, _ := k.store.Hypotheses(c.ID)
-	// Redact at this durable write boundary (SPEC §16.3 #4): summary.md is built
+	// Redact at this durable write boundary: summary.md is built
 	// from model/human-supplied goal, outcome, hypothesis, and claim text — none
 	// of which passed the redactor on the way in (evidence claims did, but these
 	// fields did not). Without this, a secret in the outcome ("removed sk_live_…")
 	// lands in summary.md in cleartext even though the sibling vecgrep memory of
 	// the same text is masked at line ~93. (Found in review 2026-07-07.)
-	summary := k.red.String(renderSummary(c, in.Outcome, in.VerificationNotPossible, evidence, hyps, receipts))
+	summary := k.red.String(renderSummary(c, in.Outcome, in.VerificationNotPossible, completionSummaryState{
+		Hypotheses:               hyps,
+		HypothesisTotal:          len(hyps),
+		Receipts:                 receipts,
+		ReceiptTotal:             snapshot.VerificationTotal,
+		Evidence:                 snapshot.Evidence,
+		EvidenceTotal:            snapshot.EvidenceTotal,
+		ShareableEvidenceTotal:   snapshot.ShareableEvidenceTotal,
+		SensitiveEvidenceOmitted: snapshot.SensitiveEvidenceOmitted,
+	}))
+	summary = boundCompletionSummary(summary)
 	// summary.md is idempotent (a plain overwrite), so writing it before Save is
 	// safe on a retry.
 	if err := k.store.WriteSummary(c.ID, summary); err != nil {
@@ -145,20 +173,20 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		k.recordPhase(c.ID, move.from, move.to)
 	}
 
-	// Cross-case disproof recall (SPEC §15.4): index all resolved hypotheses
+	// Cross-case disproof recall indexes all resolved hypotheses
 	// and definitive receipts now that the case is durably complete. The
 	// just-resolved hypothesis was already indexed at resolve time with its
 	// reason; this backfills the rest. Best-effort, background-decoupled.
 	k.indexCaseForRecall(context.Background(), c, hyps, receipts)
 
 	warnings := append([]string(nil), verificationWarnings...)
-	// Durable semantic memory via vecgrep (best-effort; SPEC §15.1 semantic recall).
+	// Durable semantic memory via vecgrep is best-effort.
 	if v, ok := k.reg.Get("vecgrep").(*adapters.Vecgrep); ok {
 		tags := memoryTags(c, in.Tags...)
 		// Redact the memory line at this write boundary too: it is the most durable,
 		// cross-project sink (vecgrep's global store), and its content is built from
-		// model-supplied goal/outcome text (SPEC §15.2 "do not remember secrets",
-		// §16.2). The confidence reflects ACTUAL verification, never a hardcoded high.
+		// model-supplied goal/outcome text. The confidence reflects ACTUAL
+		// verification, never a hardcoded high.
 		mem := k.red.String(memoryLine(c, in.Outcome, receipts, memoryConfidence(fullyVerified)))
 		err := v.Remember(ctx, k.cfg.Workspace, mem, tags, clampImportance(in.Importance))
 		k.recordWrite(c.ID, "vecgrep", "remember", err)
@@ -250,7 +278,7 @@ func countActive(hyps []domain.Hypothesis) int {
 }
 
 // memoryConfidence maps whether a task's required verification fully passed to
-// the confidence band recorded in durable memory (SPEC §8.6: high requires a
+// the confidence band recorded in durable memory (high requires a
 // primary source plus successful relevant verification — never restatement).
 func memoryConfidence(fullyVerified bool) string {
 	if fullyVerified {
@@ -263,7 +291,7 @@ func summaryPath(k *Kernel, taskID string) string {
 	return strings.TrimRight(k.store.Root(), "/") + "/" + taskID + "/summary.md"
 }
 
-// memoryLine renders a durable memory in the SPEC §15.3 format
+// memoryLine renders a durable memory in the canonical structured format
 // (repo/area/symbol/behavior/finding/evidence/confidence/commit) so recalls are
 // grounded and reusable, not just a free-text blob.
 func memoryLine(c *domain.CaseFile, outcome string, receipts []domain.VerificationRecord, confidence string) string {
@@ -305,8 +333,21 @@ func clampImportance(v float64) float64 {
 	return v
 }
 
-// renderSummary produces the human-readable summary.md (SPEC §8.1).
-func renderSummary(c *domain.CaseFile, outcome string, unverified bool, evidence []domain.Evidence, hyps []domain.Hypothesis, receipts []domain.VerificationRecord) string {
+type completionSummaryState struct {
+	Hypotheses               []domain.Hypothesis
+	HypothesisTotal          int
+	Receipts                 []domain.VerificationRecord
+	ReceiptTotal             int
+	Evidence                 []domain.Evidence
+	EvidenceTotal            int
+	ShareableEvidenceTotal   int
+	SensitiveEvidenceOmitted int
+}
+
+// renderSummary produces a bounded human-readable summary.md.
+// Exact totals describe the completion snapshot even when only recent records
+// are rendered. Explicitly sensitive evidence is never copied into the file.
+func renderSummary(c *domain.CaseFile, outcome string, unverified bool, state completionSummaryState) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", c.Goal)
 	fmt.Fprintf(&b, "- **Task:** `%s`\n- **Repository:** %s @ %s (%s)\n- **Mode:** %s · **Risk:** %s · **Status:** %s\n\n",
@@ -314,36 +355,103 @@ func renderSummary(c *domain.CaseFile, outcome string, unverified bool, evidence
 
 	fmt.Fprintf(&b, "## Outcome\n\n%s\n\n", outcome)
 
-	if len(hyps) > 0 {
-		b.WriteString("## Hypotheses\n\n")
+	hyps := recentSummaryItems(state.Hypotheses, maxCompletionSummaryHypotheses)
+	hypOmitted := nonNegative(state.HypothesisTotal - len(hyps))
+	fmt.Fprintf(&b, "## Hypotheses (%d total)\n\n", state.HypothesisTotal)
+	if len(hyps) == 0 {
+		b.WriteString("_No hypotheses were recorded._\n\n")
+	} else {
+		fmt.Fprintf(&b, "_Showing %d most recent; %d omitted._\n\n", len(hyps), hypOmitted)
 		for _, h := range hyps {
-			fmt.Fprintf(&b, "- **%s** (%s, %s) — disprove by: %s\n", h.Statement, h.Confidence, h.Status, firstNonEmptyStr(h.DisproveBy.Note, h.DisproveBy.Contract, "—"))
+			fmt.Fprintf(&b, "- **%s** (%s, %s) — disprove by: %s\n",
+				clipSummaryField(h.Statement, 512), clipSummaryField(string(h.Confidence), 64), clipSummaryField(string(h.Status), 64),
+				clipSummaryField(firstNonEmptyStr(h.DisproveBy.Note, h.DisproveBy.Contract, "—"), 512))
 		}
 		b.WriteString("\n")
 	}
 
-	b.WriteString("## Verification\n\n")
+	shareableReceipts := make([]domain.VerificationRecord, 0, len(state.Receipts))
+	for _, receipt := range state.Receipts {
+		if !receipt.Sensitive {
+			shareableReceipts = append(shareableReceipts, receipt)
+		}
+	}
+	receipts := recentSummaryItems(shareableReceipts, maxCompletionSummaryReceipts)
+	receiptOmitted := nonNegative(state.ReceiptTotal - len(receipts))
+	fmt.Fprintf(&b, "## Verification (%d receipts total)\n\n", state.ReceiptTotal)
 	if len(receipts) == 0 {
-		b.WriteString("_No verification was performed")
+		if state.ReceiptTotal == 0 {
+			b.WriteString("_No verification was performed")
+		} else {
+			fmt.Fprintf(&b, "_No current non-sensitive receipts are shown; %d older, stale, or sensitive receipts omitted", receiptOmitted)
+		}
 		if unverified {
 			b.WriteString(" (explicitly acknowledged as not possible)")
 		}
 		b.WriteString("._\n\n")
 	} else {
+		fmt.Fprintf(&b, "_Showing %d most recent non-sensitive current receipts; %d older, stale, or sensitive receipts omitted._\n\n", len(receipts), receiptOmitted)
 		for _, r := range receipts {
-			fmt.Fprintf(&b, "- [%s] **%s** — %s (%s)\n", r.Status, r.Claim, r.Tool, r.Surface)
+			fmt.Fprintf(&b, "- [%s] **%s** — %s (%s)\n", clipSummaryField(string(r.Status), 64),
+				clipSummaryField(r.Claim, 320), clipSummaryField(r.Tool, 128), clipSummaryField(string(r.Surface), 64))
 		}
 		b.WriteString("\n")
 	}
 
-	fmt.Fprintf(&b, "## Evidence (%d records)\n\n", len(evidence))
+	shareableEvidence := make([]domain.Evidence, 0, len(state.Evidence))
+	for _, item := range state.Evidence {
+		if item.Sensitivity != domain.SensitivitySensitive {
+			shareableEvidence = append(shareableEvidence, item)
+		}
+	}
+	evidence := recentSummaryItems(shareableEvidence, maxCompletionSummaryEvidence)
+	olderEvidenceOmitted := nonNegative(state.ShareableEvidenceTotal - len(evidence))
+	fmt.Fprintf(&b, "## Evidence (%d records total)\n\n", state.EvidenceTotal)
+	fmt.Fprintf(&b, "_Showing %d most recent non-sensitive records; %d older non-sensitive and %d sensitive records omitted._\n\n",
+		len(evidence), olderEvidenceOmitted, state.SensitiveEvidenceOmitted)
 	for _, e := range evidence {
 		loc := ""
 		if e.Location != nil && e.Location.File != "" {
-			loc = " — " + e.Location.File
+			loc = " — " + clipSummaryField(e.Location.File, 240)
 		}
-		fmt.Fprintf(&b, "- `%s` [%s, %s] %s%s\n", e.ID, e.Kind, e.Confidence, clipStr(e.Claim, 120), loc)
+		fmt.Fprintf(&b, "- `%s` [%s, %s] %s%s\n", clipSummaryField(e.ID, 128), clipSummaryField(string(e.Kind), 64),
+			clipSummaryField(string(e.Confidence), 64), clipSummaryField(e.Claim, 320), loc)
 	}
 	b.WriteString("\n_Generated by Cortex._\n")
 	return b.String()
+}
+
+func recentSummaryItems[T any](items []T, limit int) []T {
+	if limit <= 0 {
+		return nil
+	}
+	if len(items) <= limit {
+		return items
+	}
+	return items[len(items)-limit:]
+}
+
+func clipSummaryField(value string, maxBytes int) string {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\n", " ")
+	clipped, truncated := boundedUTF8(value, maxBytes)
+	if truncated {
+		return clipped + "…"
+	}
+	return clipped
+}
+
+func nonNegative(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func boundCompletionSummary(summary string) string {
+	if len(summary) <= maxCompletionSummaryBytes {
+		return summary
+	}
+	const marker = "\n\n_Additional summary content omitted to preserve the completion artifact size bound._\n"
+	clipped, _ := boundedUTF8(summary, maxCompletionSummaryBytes-len(marker))
+	return clipped + marker
 }

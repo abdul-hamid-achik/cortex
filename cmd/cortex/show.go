@@ -60,7 +60,12 @@ func renderSessionViewTo(w io.Writer, v kernel.SessionView) {
 		pln(w, "  "+paint(styWarn, "⚠ paused for human input · an answer resumes "+string(c.PausedFrom)))
 	}
 
-	pln(w, heading("Verification")+"  "+verificationAssessmentLabel(v.VerificationAssessment))
+	receiptTotal := maxInt(v.ReceiptTotal, len(v.Receipts))
+	verificationHeading := heading("Verification") + "  " + verificationAssessmentLabel(v.VerificationAssessment)
+	if receiptTotal > 0 {
+		verificationHeading += paint(styMuted, fmt.Sprintf("  (%d receipts)", receiptTotal))
+	}
+	pln(w, verificationHeading)
 	for _, gap := range verificationAssessmentGaps(v.VerificationAssessment) {
 		pln(w, "  "+paint(styWarn, "⚠ "+clipLine(gap, 104)))
 	}
@@ -72,8 +77,9 @@ func renderSessionViewTo(w io.Writer, v kernel.SessionView) {
 	}
 	if len(v.Receipts) > 0 {
 		start := maxInt(0, len(v.Receipts)-5)
-		if start > 0 {
-			pln(w, paint(styMuted, fmt.Sprintf("  … %d older receipts", start)))
+		older := maxInt(0, receiptTotal-(len(v.Receipts)-start))
+		if older > 0 {
+			pln(w, paint(styMuted, fmt.Sprintf("  … %d older receipts", older)))
 		}
 		for _, r := range v.Receipts[start:] {
 			mark, suffix := receiptMarkCLI(r.Status), ""
@@ -123,8 +129,9 @@ func renderSessionViewTo(w io.Writer, v kernel.SessionView) {
 	}
 	pln(w, heading("Recent Evidence")+paint(styMuted, fmt.Sprintf("  (%d total)", evidenceTotal)))
 	start := maxInt(0, len(v.Evidence)-5)
-	if start > 0 {
-		pln(w, paint(styMuted, fmt.Sprintf("  … %d older", start)))
+	older := maxInt(0, evidenceTotal-(len(v.Evidence)-start))
+	if older > 0 {
+		pln(w, paint(styMuted, fmt.Sprintf("  … %d older", older)))
 	}
 	for _, e := range v.Evidence[start:] {
 		source := e.Source.Tool
@@ -140,10 +147,14 @@ func renderSessionViewTo(w io.Writer, v kernel.SessionView) {
 		}
 	}
 	if len(v.Timeline) > 0 {
-		pln(w, heading("Recent activity"))
+		timelineTotal := maxInt(v.TimelineTotal, len(v.Timeline))
+		pln(w, heading("Recent activity")+paint(styMuted, fmt.Sprintf("  (%d total)", timelineTotal)))
 		start := 0
 		if len(v.Timeline) > 8 {
 			start = len(v.Timeline) - 8
+		}
+		if older := maxInt(0, timelineTotal-(len(v.Timeline)-start)); older > 0 {
+			pln(w, paint(styMuted, fmt.Sprintf("  … %d older", older)))
 		}
 		for _, e := range v.Timeline[start:] {
 			ts := e.Timestamp.Local().Format("15:04:05")

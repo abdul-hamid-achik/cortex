@@ -13,7 +13,7 @@ import (
 
 var metricsCmd = &cobra.Command{
 	Use:   "metrics [taskId]",
-	Short: "Observability: outcome and evidence-trail metrics (SPEC §18), not just tool-call volume",
+	Short: "Observability: outcome and evidence-trail metrics, not just tool-call volume",
 	Long: `Report Cortex's observability metrics. With a taskId, show that task's
 outcome and evidence trail — tool calls, calls before first evidence, evidence
 items, verification coverage by surface, unresolved hypotheses, scope drift,
@@ -91,7 +91,7 @@ func renderTaskMetrics(m kernel.TaskMetrics) {
 	}
 
 	if len(m.ToolContribution) > 0 {
-		pln(w, heading("Tool contribution (§18.2)"))
+		pln(w, heading("Tool contribution"))
 		for _, tc := range m.ToolContribution {
 			pf(w, "  %-11s %d call(s), %d evidence → %d hypothesis(es)", tc.Tool, tc.Calls, tc.EvidenceItems, tc.HypothesesSupported)
 			if tc.Errors > 0 {

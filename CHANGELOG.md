@@ -5,6 +5,54 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-12
+
+### Added
+- **Unified session search** — `sessions --query`, the all-profile `cortex_sessions.query`, and
+  Studio's `/` search use one case-insensitive AND-token contract across task identity, goal,
+  phase, mode, repository/workspace, and verification outcome. Studio keeps navigation responsive
+  while a filter is pending and distinguishes requested, applied, failed, and empty states.
+- **Immutable acceptance criteria and proof manifests** — `open`/`start` accept up to 64 optional
+  `id=statement` criteria (also exposed as typed MCP input). Registered claims must retain the
+  exact statement, every criterion needs current bound proof before a task is verified, and status
+  exposes a compact `claimProofs` manifest that stays below local-agent's result budget.
+- **Completion-safe proof handoffs** — a complete verified handoff carries every non-sensitive
+  named claim together with its referenced verifier-run batches under the actual 90 KiB encoded
+  local-agent limit. Cortex strips non-proof context first and, if the proof closure still cannot
+  fit, omits all receipts atomically with an explicit warning instead of exporting partial proof.
+- MCP tools now publish human titles, standard safety/idempotency/open-world annotations, and a
+  shared lifecycle `outputSchema`. Successes and structured rejections are regression-tested for
+  identical JSON text and `structuredContent`, including a real stdio subprocess handshake.
+- Studio now adapts between split and stacked layouts, scrolls long case detail with
+  Page Up/Page Down or Ctrl-U/Ctrl-D, exposes textual phase labels, and safely truncates untrusted
+  Unicode terminal text by display cells.
+
+### Changed
+- After the first completed investigation, structured continuations prioritize `cortex_plan` while
+  retaining `cortex_investigate` as an explicit second choice. Fresh cases still investigate first.
+- Studio loads session indexes and details asynchronously, coalesces refresh bursts, and rejects
+  stale responses so slow repositories cannot freeze navigation or replace the selected detail.
+- Completion summaries retain exact ledger totals while rendering bounded recent, non-sensitive
+  hypotheses, receipts, and evidence, so every valid maximum-size plan remains completable.
+- Privacy and integration docs now describe Veclite's configurable Ollama embedding call, the
+  optional-tool inventory, root documentation policy, and `cortex doctor --probe` MCP validation.
+
+### Fixed
+- fcheap artifact handling accepts the canonical stash IDs emitted by fcheap v0.29 while retaining
+  the existing validation, ownership, and bounded-preview protections.
+- Studio reports canonical evidence and receipt totals instead of bounded-slice lengths, surfaces
+  projection warnings, keeps a matching last-good snapshot visible on refresh errors, and stays
+  within narrow terminal width and height bounds.
+- Completion now fails closed on corrupt hypothesis, evidence, or verification state before
+  releasing ownership or changing phase; review orchestration also stops on failed lifecycle or
+  projection reads, preserves degraded discovery warnings, and treats branch-restoration failure
+  as an error instead of deriving a clean verdict from incomplete state.
+- Shared-envelope MCP tools preserve structured JSON errors for configuration and TTL failures,
+  and the real stdio regression now checks race-free capture plus bounded clean shutdown.
+- Show/Studio retain only the newest 200 receipts and activity entries while deriving omitted
+  receipt, evidence, and activity counts from exact totals; status leaves scope unknown with an
+  explicit warning when Git cannot evaluate the declared diff.
+
 ## [0.11.0] — 2026-07-11
 
 ### Added
@@ -291,7 +339,7 @@ All notable changes to Cortex are documented here. The format follows
     fallback, and a re-review of a force-pushed PR force-updates the local ref. Verdict honesty is
     mutation-verified.
 
-### Added — plan-time spec selection & observability (SPEC §14/§18)
+### Added — plan-time verification selection and observability
 - **Verify-time auto-selection of covering specs** — when a behavioral surface is declared and a
   diff exists but no explicit spec is supplied, `cortex verify` now asks the verifier which specs
   cover the change (`cairn run --select-only` / `glyph affected-specs`) and runs them, turning a
@@ -299,23 +347,23 @@ All notable changes to Cortex are documented here. The format follows
   to 3 specs/surface, opt out with `--no-auto-specs`; a surface with no covering spec is reported
   honestly. New adapter methods `Cairntrace.SelectSpecs` / `Glyphrun.AffectedSpecs`
   (`internal/kernel/verify.go`).
-- **`cortex metrics` — observability (SPEC §18.1/§18.2)** — the per-call audit log was write-only;
+- **`cortex metrics` — observability** — the per-call audit log was write-only;
   it now has a reader and a metrics engine. `cortex metrics <taskId>` reports outcome + evidence
   trail (tool calls, calls before first evidence, evidence items, verification coverage by surface,
   unresolved hypotheses, scope drift, memory reuse) and each tool's **task-level contribution**
-  ("codemap: 2 calls, 1 evidence → N hypotheses", §18.2). `cortex metrics` (no arg) aggregates across
+  ("codemap: 2 calls, 1 evidence → N hypotheses"). `cortex metrics` (no arg) aggregates across
   the workspace (completion rate, verified-completion rate, mean tools/completed task, drift/
   unresolved/memory-reuse rates). `--json` for both (`internal/kernel/metrics.go`, `cmd/cortex/metrics.go`).
-- **Evaluation harness (SPEC §18.3)** — a runnable benchmark (`internal/eval`, `task eval`) that
-  scores each task type on a **correct outcome AND an adequate evidence trail**. All eight §18.3
+- **Evaluation harness** — a runnable benchmark (`internal/eval`, `task eval`) that
+  scores each task type on a **correct outcome AND an adequate evidence trail**. All eight lifecycle
   categories are authored: three run with no external tooling (known-symbol → verified; stale index
   → honest degradation, no fabricated pass; misleading search → candidate-not-proof); five drive a
   live specialist tool and self-skip when it's absent (vague-UI/browser → an unproven browser claim
   is never reported verified; terminal regression → same via glyph; video → an invalid bundle
   degrades honestly, no fabricated owning-code claim; secret → a secret value never enters the
-  evidence ledger; broad refactor → the §13.3 high-risk gate fires). The scenarios are **verified
+  evidence ledger; broad refactor → the high-risk verification gate fires). The scenarios are **verified
   load-bearing** by mutation (disabling redaction makes the secret scenario fail; disabling the
-  §13.3 gate makes the refactor scenario fail). The harness caught a real gap (below).
+  high-risk gate makes the refactor scenario fail). The harness caught a real gap (below).
 
 ### Fixed
 - **A blocked verification no longer satisfies the completion gate** (found by the eval harness) —
@@ -341,7 +389,7 @@ four more, all fixed with regression tests:
   (`internal/adapters/vecgrep.go`).
 
 ### Added
-- **vidtrace adapter** (SPEC §19.4 "investigate a bug video"): Cortex now composes
+- **vidtrace adapter** (the "investigate a bug video" workflow): Cortex now composes
   [vidtrace](https://github.com/abdul-hamid-achik/vidtrace), turning a screen recording into
   timestamped evidence and linking the visible failure to the code that owns it. A new
   `--video <bundle-or-stash-id>` on `cortex investigate` (and the `video` field on
@@ -408,7 +456,7 @@ real bugs, all now fixed with regression tests:
   was mangled, and a real file named `~foo` was wrongly expanded. It now expands only a leading
   `~`/`~/…` and never touches env vars (`internal/config/config.go`).
 - **Un-normalized risk band** — `--risk HIGH` (or stray whitespace) didn't match the lowercase
-  `high` the §13.3 escalation compares against, so a high-risk change skipped its extra-verification
+  `high` the risk escalation compares against, so a high-risk change skipped its extra-verification
   gate. The risk band is now canonicalized on task start (`internal/kernel/orient.go`).
 
 A third adversarial review (kernel/store/adapters/MCP, each finding independently verified) surfaced
@@ -439,7 +487,7 @@ four more real bugs, all now fixed with regression tests:
 - **Hands-on tutorial** (`docs/tutorial.md`): a pedagogical end-to-end walkthrough that plants a
   real bug and takes it through the full loop (start → investigate → plan → verify → remember),
   explaining *why* each gate exists. Every command and every block of output is copied from an
-  actual run, including the §13.3 high-risk escalation and `not_run`-vs-`passed` receipts.
+  actual run, including high-risk escalation and `not_run`-vs-`passed` receipts.
 - **FAQ** (`docs/faq.md`): ~30 quick answers grouped into getting-started, day-to-day, state &
   secrets, configuration & harnesses, and troubleshooting. Both pages are wired into the VitePress
   nav, sidebar, and homepage hero.
@@ -460,15 +508,15 @@ cortex adapters silently mis-parsing real output; fixed with real-contract regre
   and the docs used a flag mcphub 0.6.0 rejects (`unknown flag: --enabled`; enabled is the default).
   Corrected everywhere to `mcphub add cortex cortex serve`.
 
-The same survey found kernel-internal gaps vs the SPEC, fixed with regression tests:
+The same survey found kernel-internal contract gaps, fixed with regression tests:
 - **Completion could hide unmet required verification** — `remember` completed as long as *any* one
   receipt was non-`not_run`, so a task could pass a code review yet leave a required browser verifier
   never run and complete as if fully verified, with no warning. Completion now reports exactly which
-  required verifiers were not passed (SPEC §6.2/§14.2) — visible, not silent (`internal/kernel/persist.go`).
+  required verifiers were not passed — visible, not silent (`internal/kernel/persist.go`).
 - **Durable memory leaked unredacted, at overstated confidence** — the memory line (built from
   model-supplied goal/outcome) was written to vecgrep's global cross-project store with no redaction
   and a hardcoded `confidence=high`, even for unverified outcomes. It is now redacted at the write
-  boundary and records confidence from actual verification (SPEC §8.6, §15.2, §16.2).
+  boundary and records confidence from actual verification.
 
 ### Documentation
 - **`features.md` in every sibling repo** (codemap, vecgrep, cairntrace, glyphrun, file.cheap,
@@ -491,11 +539,11 @@ real-contract regression test):
 - **codemap: error envelope, call-graph enum, diff risk band** — a `{ok:false,code,hint}` failure
   (corrupt/missing index) is now `unavailable` with the remediation hint, not a confidently-wrong "no
   such symbol"; confidence keys off the stable `call_graph` enum (resolved/name/unresolved); and the
-  diff-scoped `risk` band surfaces to ground the §13.3 gate in the actual change
+  diff-scoped `risk` band surfaces to ground the risk gate in the actual change
   (`internal/adapters/codemap.go`).
 - **glyphrun: `errorKind`/`diagnostic`** — a contract-hash mismatch now tells the agent to re-stamp
   (`glyph spec verify --stamp`) and a spec-parse error says to fix the spec, instead of a bare
-  "errored" (still inconclusive, per §11.4) (`internal/adapters/glyphrun.go`).
+  "errored" (still inconclusive by policy) (`internal/adapters/glyphrun.go`).
 - **fcheap: index-on-save + honest unindexed connect** — `Save` passes `--index` so cortex's own
   archived evidence is searchable (the archive→search loop was silently dead); `connect` reports an
   unindexed codebase honestly (`internal/adapters/fcheap.go`).
@@ -528,24 +576,24 @@ real-contract regression test):
   GoReleaser build config produces a binary.
 
 ### Added
-- **Configuration files** (`cortex.yaml`) and `CORTEX_*` env overrides (SPEC §27 precedence):
+- **Configuration files** (`cortex.yaml`) and `CORTEX_*` env overrides:
   the budget, redaction literals, and case-file directory are now user-configurable — activating
   the override machinery that was wired but previously only settable to defaults. Precedence is
   defaults → global → project `.config` → project root → env. A new `cortex config` command shows
   the resolved values and which files were applied; a malformed file is ignored, not fatal.
 
 ### Security
-- **Action classing + approval integration point** (SPEC §16.2 #3/#4, §16.3): every tool
+- **Action classing + approval integration point**: every tool
   operation is now classified — `read_only` / `local_mutation` / `external_mutation` /
-  `secreted_execution` — and the class is recorded in the command audit trail (§16.2 #7). The
+  `secreted_execution` — and the class is recorded in the command audit trail. The
   kernel gates mutation-class actions through a policy: read-only and local-mutation run freely,
   while **external mutation is refused by default** and secret-backed execution requires the
   tvault capability. A harness can install an `Approver` to grant them — the explicit approval
-  integration point. This completes all seven §16.2 controls.
-- **Artifact sensitivity labels** (SPEC §16.2 #5): a verification receipt is flagged `sensitive`
+  integration point. This completes all seven action controls.
+- **Artifact sensitivity labels**: a verification receipt is flagged `sensitive`
   when any of its linked evidence is sensitive, so a receipt (and its archived artifact) isn't
   shared or stashed carelessly.
-- **Secret redaction at the evidence-record boundary** (SPEC §6.3 invariant #4, §16.2 #1):
+- **Secret redaction at the evidence-record boundary**:
   every evidence claim and source URI is now redacted before it is persisted — not just adapter
   tool output. Human/model-supplied facts (e.g. `cortex resolve` reasons) that previously bypassed
   redaction are now masked, and a record whose text matched a secret shape is flagged
@@ -553,63 +601,63 @@ real-contract regression test):
   secret strings are masked too.
 
 ### Added
-- **Budget enforcement** (SPEC §7.3): the defined budget fields now actually bound behavior —
+- **Budget enforcement**: the defined budget fields now actually bound behavior —
   `max_parallel_calls` bounds the health-probe fan-out with a semaphore (no more unbounded
   subprocess bursts), `max_candidate_files_returned` caps how many discovery hits a single search
   contributes to the ledger, and `max_raw_output_bytes_per_tool` is a per-tool, config-overridable
   output cap (with a 4 MiB memory backstop) instead of a hardcoded constant. Wired from
   `config.Budget` through the registry to every adapter.
-- **Verifier version on receipts** (SPEC §14.3): a verification receipt now records the verifier
+- **Verifier version on receipts**: a verification receipt now records the verifier
   tool's version when known (e.g. `codemap version 0.35.10 …`), captured best-effort at verify
-  time — completing the §14.3 receipt fields. `writeReceipt` was refactored to a struct form for
+  time — completing the receipt metadata. `writeReceipt` was refactored to a struct form for
   readability.
-- **Grounded durable memory** (SPEC §15.3): the memory line written to vecgrep now follows the
-  spec format — `repo / area / symbol / behavior / finding / evidence / confidence / commit` —
+- **Grounded durable memory**: the memory line written to vecgrep follows the structured format
+  `repo / area / symbol / behavior / finding / evidence / confidence / commit` —
   including the owning symbols and any linked fcheap artifact, so cross-session recalls are
   grounded and reusable instead of a free-text blob.
-- **Raw output persistence & retrieval** (SPEC §11.4, §10.4): every tool call's redacted raw
+- **Raw output persistence & retrieval**: every tool call's redacted raw
   output is now stored once under `raw/<id>.txt` in the case dir, and each evidence record's
   `rawRef` points at it — so the compact envelope stays small while the underlying detail is
   retrievable on demand. New `cortex read-artifact <taskId> <ref>` CLI command and
   `cortex_read_artifact` MCP tool (10 tools now) resolve a `case://…/raw/…` reference to its
   content (redacted before storage) or an `fcheap://` reference to retrieval guidance. Raw IDs are
   sanitized so a reference can't escape the case directory.
-- **codemap annotation sink** (SPEC §12.2, §15.1, acceptance §25 #7): after a definitive browser
+- **codemap annotation sink**: after a definitive browser
   or terminal verification, Cortex attaches the proven/failed behavior (with its evidence
   reference) to the code symbols the task declared it would change — the **structural memory**
   layer. It only annotates a declared boundary symbol (reasonable-confidence identification, never
   a guess) and only for pass/fail outcomes (an errored run teaches nothing). Best-effort: a
   codemap failure is a warning, not a hard error.
-- **Risk-based review escalation** (SPEC §13.3): a medium/high-risk change task warns when its
+- **Risk-based review escalation**: a medium/high-risk change task warns when its
   mandatory structural diff review did not pass (e.g. codemap unindexed or unavailable).
-- **Change-record check** (SPEC §6.2): a change task with no detected diff warns before verifying,
+- **Change-record check**: a change task with no detected diff warns before verifying,
   so "nothing changed" can't be silently verified.
-- **fcheap stash-on-failure** (SPEC §12.6, acceptance §25 #6): a failed browser or terminal
+- **fcheap stash-on-failure**: a failed browser or terminal
   verification run bundle is now archived to fcheap and the verification receipt links the durable
   `fcheap://stash/<id>` — closing the "ephemeral runs become memory" loop. Passing runs are not
   archived (low value). Fixed `Fcheap.Save`'s parsing of the flat `fcheap save --json` manifest.
-- **Read-only retry** (SPEC §17.3): read-only idempotent tool queries retry once on a transient
+- **Read-only retry**: read-only idempotent tool queries retry once on a transient
   process/transport failure; mutating ops (fcheap save, vecgrep remember) never retry.
-- **Verification receipt limitations** (SPEC §14.3): receipts now carry a "notes on limitations"
+- **Verification receipt limitations**: receipts now carry a "notes on limitations"
   line explaining why a claim is not a clean pass (not_run / inconclusive / failed).
 
 ### Fixed
-- **Pass-count correctness** (SPEC §14.2): the verified-claim count is computed from structured
+- **Pass-count correctness**: the verified-claim count is computed from structured
   statuses, not by substring-matching "passed" against a string embedding the free-text claim — a
   claim whose text merely contains "passed" is no longer miscounted as verified.
-- **Behavioral-verifier honesty** (SPEC §11.4): an ambiguous *errored* run (infrastructure/spec
+- **Behavioral-verifier honesty**: an ambiguous *errored* run (infrastructure/spec
   error, cold-start gate, contract-hash mismatch) is now classified `inconclusive` at medium
   confidence, not collapsed into a high-confidence FAILED behavioral verdict.
-- **Timeout budgets** (SPEC §17.2): codemap → 20s (structural_query), vecgrep → 15s (code_search).
-- **Routing negative rule** (SPEC §7.2): a known-symbol question no longer schedules a vecgrep
+- **Timeout budgets**: codemap → 20s (structural_query), vecgrep → 15s (code_search).
+- **Routing negative rule**: a known-symbol question no longer schedules a vecgrep
   follow-up — it resolves directly via codemap.
 
 ### Added
 - **Hypothesis resolution** (`cortex resolve` / `cortex_resolve`): mark a hypothesis
   confirmed, challenged, or rejected as evidence accumulates. History is retained and the
   resolution is appended to the evidence ledger with its reason — contradicting evidence never
-  silently overwrites a prior explanation (SPEC §9.3).
-- **Investigation budget guard** (SPEC §7.3): each `cortex investigate` round is counted against
+  silently overwrites a prior explanation.
+- **Investigation budget guard**: each `cortex investigate` round is counted against
   the budget (default 3). Exceeding it is allowed but warns — nudging the agent to form a
   hypothesis and plan rather than search indiscriminately — and the reason is recorded on the
   case. `cortex status` now reports the round count (`rounds N/budget`).

@@ -9,7 +9,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 )
 
-// Scenarios is the §18.3 benchmark set. All eight are authored. Three run with
+// Scenarios is the benchmark set. All eight are authored. Three run with
 // no external tooling (verified outcome, honest degradation, candidate-not-proof);
 // the other five drive a live specialist tool and self-skip via Requires when it
 // is absent. Every scenario scores a correct OUTCOME and an adequate evidence
@@ -28,7 +28,7 @@ func Scenarios() []Scenario {
 	}
 }
 
-// scnKnownSymbol (§18.3 #1): a known-symbol fix must complete VERIFIED with an
+// scnKnownSymbol checks that a known-symbol fix completes VERIFIED with an
 // adequate evidence trail and no scope drift, given a passing structural review.
 func scnKnownSymbol(t *testing.T) []string {
 	env := NewEnv(t, map[string]string{
@@ -57,7 +57,7 @@ func scnKnownSymbol(t *testing.T) []string {
 		f = append(f, "task did not complete: "+string(rem.Phase))
 	}
 
-	// Evidence-trail adequacy (SPEC §18.3: correct outcome AND adequate trail).
+	// Evidence-trail adequacy requires both a correct outcome and adequate proof.
 	m := env.Metrics(id)
 	if m.EvidenceItems == 0 {
 		f = append(f, "no evidence recorded")
@@ -72,7 +72,7 @@ func scnKnownSymbol(t *testing.T) []string {
 	return f
 }
 
-// scnStaleIndex (§18.3 #8): with no indexed structural tool, cortex must DEGRADE
+// scnStaleIndex checks that without an indexed structural tool Cortex degrades
 // honestly — never fabricate a passing verification, and refuse to complete as
 // "verified" without an explicit unverified acknowledgment.
 func scnStaleIndex(t *testing.T) []string {
@@ -107,9 +107,9 @@ func scnStaleIndex(t *testing.T) []string {
 	return f
 }
 
-// scnMisleadingSearch (§18.3 #7): a plausible-but-wrong search hit must be
+// scnMisleadingSearch checks that a plausible-but-wrong search hit is
 // recorded as a low-confidence CANDIDATE and must not, on its own, confirm a
-// hypothesis (candidate ≠ proof, SPEC §5.2).
+// hypothesis (candidate ≠ proof).
 func scnMisleadingSearch(t *testing.T) []string {
 	env := NewEnv(t, map[string]string{
 		"src/real.go":      "package src\nfunc Target(){}\n",
@@ -150,7 +150,7 @@ func scnMisleadingSearch(t *testing.T) []string {
 	return f
 }
 
-// scnBrowser (§18.3 #2): a vague UI bug is a browser-surface change. With no
+// scnBrowser checks that a vague UI bug is treated as a browser-surface change. With no
 // cairn spec covering it, cortex must NOT report the browser surface verified —
 // an unproven browser claim stays unverified, never a fabricated pass.
 func scnBrowser(t *testing.T) []string {
@@ -159,7 +159,7 @@ func scnBrowser(t *testing.T) []string {
 	return browserOrTerminalGuarantee(t, env, domain.SurfaceBrowser, "the login button does nothing when clicked", "the login button redirects to checkout", "browser", "cairntrace_flow")
 }
 
-// scnTerminal (§18.3 #3): a terminal/TUI regression is a terminal-surface change;
+// scnTerminal checks that a terminal/TUI regression is a terminal-surface change;
 // same guarantee via glyph.
 func scnTerminal(t *testing.T) []string {
 	env := NewEnv(t, map[string]string{"cmd/app/main.go": "package main\nfunc main(){}\n"},
@@ -210,7 +210,7 @@ func browserOrTerminalGuarantee(t *testing.T, env *Env, surface domain.Surface, 
 	return f
 }
 
-// scnVideo (§18.3 #5): an old-artifact/video investigation with an invalid bundle
+// scnVideo checks that an old-artifact/video investigation with an invalid bundle
 // must degrade honestly — a partial with the reason, never a fabricated
 // "video failure likely owned by …" code-owner claim.
 func scnVideo(t *testing.T) []string {
@@ -234,9 +234,9 @@ func scnVideo(t *testing.T) []string {
 	return f
 }
 
-// scnSecret (§18.3 #6): a secret-backed task must keep secret VALUES out of the
+// scnSecret checks that a secret-backed task keeps secret VALUES out of the
 // evidence ledger — tvault answers names/capability only, and a secret literal in
-// a human-supplied reason is masked at the write boundary (§16.3 #4).
+// a human-supplied reason is masked at the write boundary.
 func scnSecret(t *testing.T) []string {
 	env := NewEnv(t, map[string]string{"src/pay.go": "package src\nfunc Pay(){}\n"}, adapters.NewTvault())
 	k, ctx := env.Kernel(), env.Ctx()
@@ -268,8 +268,8 @@ func scnSecret(t *testing.T) []string {
 	return f
 }
 
-// scnRefactor (§18.3 #4): a safe refactor with broad impact is high-risk; cortex
-// must NOT wave it through without a passing structural review — the §13.3 gate
+// scnRefactor checks that a safe refactor with broad impact is high-risk; Cortex
+// must NOT wave it through without a passing structural review — the escalation gate
 // fires when the review is inconclusive.
 func scnRefactor(t *testing.T) []string {
 	env := NewEnv(t, map[string]string{"src/core.go": "package src\nfunc Hub(){}\n"}, adapters.NewCodemap())
@@ -284,9 +284,9 @@ func scnRefactor(t *testing.T) []string {
 	env.Write("src/core.go", "package src\nfunc Hub2(){ _ = 1 }\n")
 	vr, _ := k.Verify(ctx, kernel.VerifyInput{TaskID: id, Claims: []string{"the rename is safe"}})
 	// A high-risk change whose structural review didn't pass must be flagged
-	// (SPEC §13.3), never silently accepted.
+	// never silently accepted.
 	if !hasSubstr(vr.Warnings, "high-risk change requires") {
-		f = append(f, "a high-risk refactor with an unpassed review did not trigger the §13.3 escalation")
+		f = append(f, "a high-risk refactor with an unpassed review did not trigger escalation")
 	}
 	if contains(env.Metrics(id).VerifiedSurfaces, "code") {
 		f = append(f, "a code surface with an inconclusive review was reported verified")

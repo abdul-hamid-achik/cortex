@@ -2,14 +2,15 @@
 
 Instructions for AI agents (and humans) working on the **cortex** codebase. This is the
 canonical source-of-truth doc; `CLAUDE.md` defers to it. `README.md` is the public-facing
-intro. `SPEC.md` is the design specification the implementation follows. Design rationale and
-working notes belong in the Obsidian vault at `~/notes/projects/cortex/`, **not** the repo.
+intro. Architecture, behavior, and contributor rules that must remain durable belong here.
+Design rationale and working notes belong in the Obsidian vault at `~/notes/projects/cortex/`,
+**not** the repo.
 
 ## Project Overview
 
 cortex is a local-first, evidence-guided **agent kernel** for software-engineering agents. It
 sits between an LLM and a set of specialist tools (codemap, vecgrep, cairntrace, glyphrun,
-fcheap, tvault) and enforces a stateful reasoning loop:
+fcheap, vidtrace, tvault, veclite) and enforces a stateful reasoning loop:
 
 ```
 orient → investigate → form hypotheses → declare a boundary → change → verify → preserve evidence
@@ -18,7 +19,7 @@ orient → investigate → form hypotheses → declare a boundary → change →
 Cortex does not replace the model's planning or coding ability. It supplies what models are bad
 at preserving across long tool-using tasks: a durable **case file**, explicit **evidence** and
 uncertainty, disciplined **tool routing**, **bounded** changes, and **verification** tied to
-user-visible behavior. See `SPEC.md` for the full design.
+user-visible behavior.
 
 Three surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
 
@@ -44,6 +45,7 @@ cortex/
 ├── internal/
 │   ├── domain/               # core types — NO deps on adapters/store/transport
 │   │   ├── case.go           #   CaseFile + Phase machine (transitions, invariants)
+│   │   ├── acceptance.go     #   optional immutable criteria + transport-independent bounds
 │   │   ├── evidence.go       #   Evidence, EvidenceKind, Confidence, Sensitivity
 │   │   ├── hypothesis.go     #   Hypothesis + Disproof (the disproof-path gate)
 │   │   ├── plan.go           #   Plan + planning-gate validation
@@ -59,8 +61,8 @@ cortex/
 │   │   ├── change.go lease.go #  explicit begin-change + bounded ownership
 │   │   ├── verify.go assessment.go # typed verification + canonical task assessment
 │   │   ├── persist.go        #   Remember (durable memory + summary.md + completion invariant)
-│   │   ├── resolve.go        #   Resolve (confirm/challenge/reject a hypothesis; SPEC §9.3)
-│   │   ├── recall.go         #   Cross-case disproof recall: index hooks + recall (SPEC §15.4)
+│   │   ├── resolve.go        #   Resolve (confirm/challenge/reject a hypothesis)
+│   │   ├── recall.go         #   Cross-case disproof recall: index hooks + recall
 │   │   ├── observe.go decision.go handoff.go actions.go artifact.go # human/agent collaboration + projections
 │   │   ├── status.go         #   Status / AbortTask / ReadEvidence / ListTasks
 │   │   └── scope.go          #   scope-drift detection vs the declared boundary
@@ -84,7 +86,7 @@ cortex/
 ├── specs/                    # glyphrun E2E specs (*.yml)
 ├── .github/workflows/        # ci.yml (test+race+build+lint) · release.yml (goreleaser on tags)
 ├── Taskfile.yml .golangci.yml .goreleaser.yaml
-└── README.md AGENTS.md CLAUDE.md SPEC.md LICENSE
+└── README.md AGENTS.md CLAUDE.md CHANGELOG.md LICENSE
 ```
 
 **Package boundaries are part of the contract.** Dependency direction is one-way:
@@ -98,13 +100,13 @@ The recommended change path is retry-safe and makes change ownership explicit:
 
 | Action | Phase move | Gate the kernel enforces |
 |---|---|---|
-| `open` | new → orienting → investigating, or resume | idempotency key wins; otherwise newest active normalized goal/mode/workspace/branch match resumes |
+| `open` | new → orienting → investigating, or resume | idempotency key wins; otherwise newest active normalized goal/mode/workspace/branch/acceptance-contract match resumes; keyed retries cannot change criteria |
 | `investigate` | (stays investigating) | search output recorded as *candidates*, not proof |
 | `plan` | investigating → planned | every hypothesis has a **disproof path**; change tasks declare a **boundary**; uncertainty stated |
 | `begin-change` | planned → changing | an actor acquires the bounded, expiring lease; competing actors lose the CAS race |
-| `verify` | changing → verifying | typed claim→surface→verifier/contract receipts; leased tasks require the owner actor; no-diff changes require an explicit no-op acknowledgment |
-| `remember` | verifying → persisting → complete | normal completion requires `verified`; `--unverified` / `--accept-failed` preserve non-green outcomes explicitly |
-| `status` / `show` | — | canonical `verified / partial / failed / unverified` assessment, decisions, lease, scope, and structured actions |
+| `verify` | changing → verifying | typed claim→surface→verifier/contract receipts; registered IDs require their exact stored statement; leased tasks require the owner actor; no-diff changes require an explicit no-op acknowledgment |
+| `remember` | verifying → persisting → complete | normal completion requires `verified`; registered criteria always require current bound proof; legacy tasks may preserve non-green outcomes explicitly |
+| `status` / `show` | — | canonical `verified / partial / failed / unverified` assessment, bounded claim-proof manifest, decisions, lease, scope, and structured actions |
 
 These are structural invariants (see `internal/domain/case.go` `transitions`, and the `Validate`
 methods). They are enforced by state, not by prompting — the model can't skip the disproof path
@@ -128,8 +130,10 @@ released or expired lease may be replaced. `cortex note`, `decision
 request|answer|resume`, and `handoff` preserve provenance, bounded human choices, and transfer state
 without treating prose as verification. Structured continuation actions always carry the case
 workspace and render workspace-pinned, shell-safe human commands; begin-change actions also carry
-the explicit 15-minute default TTL. Handoff JSON is hard-capped at 128 KiB while retaining
-transfer-critical identity, pending decisions, and a continuation. Interrupted
+the explicit 15-minute default TTL. General handoff JSON is hard-capped at 128 KiB while retaining
+transfer-critical identity, pending decisions, and a continuation. Complete verified handoffs
+budget the actual primary JSON at 90 KiB and retain the entire non-sensitive named-claim/verifier
+proof closure or omit all receipts atomically with a warning. Interrupted
 orientation and half-committed decision states project retry-safe repair actions. `show`,
 `timeline`, and `handoff` locate central sessions by ID and accept an explicit workspace fallback
 for repo-local/custom case stores.
@@ -159,18 +163,18 @@ task install         # go install ./cmd/cortex
   revision-bound verification.
 - **Task** (`go install github.com/go-task/task/v3/cmd/task@latest`).
 - **Bun** for docs; **glyph** (glyphrun) for E2E specs; **golangci-lint** for lint.
-- Sibling tools (`codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `tvault`, `mcphub`) are
+- Sibling tools (`codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `vidtrace`, `tvault`, `veclite`,
+  `mcphub`) are
   **optional at runtime** — every adapter degrades safely when its binary is absent
   (`Health` returns `ErrToolMissing`; `Execute` returns a `tool_unavailable` fact). Cortex
   never fabricates a missing tool's output.
 
 ## Architecture Notes
 
-### Adapters (SPEC §11)
+### Adapters
 - Flat `internal/adapters` package, one file per tool, sharing the unexported `tool` helper
-  (binary name + fakeable `runner` + `redact.Redactor` + timeout). This deliberately deviates
-  from SPEC §22's per-tool subdirectories so adapters share exec/redact plumbing without
-  exporting internals — the layout is the implementer's call (SPEC §11.1).
+  (binary name + fakeable `runner` + `redact.Redactor` + timeout). The flat layout lets adapters
+  share exec/redact plumbing without exporting internals.
 - **Flag dialects differ and matter.** codemap/fcheap/cairn/tvault use a boolean `--json`;
   **vecgrep uses `-f json` and `-n N`** (not `--json`/`--top`); **glyph uses `--format json`**
   and that flag must **precede** subcommand flags. `cairn`/`glyph` MCP subcommand is bare
@@ -179,16 +183,16 @@ task install         # go install ./cmd/cortex
   **bare JSON arrays**, not wrapped objects.
 - Every adapter returns a normalized `Result{Status, Facts, Artifacts, Warnings, Raw}`. `Status`
   is authoritative | partial | unavailable | error. Raw (redacted) output is retained for the
-  case file but **not** returned to the model by default (SPEC §10.4).
+  case file but **not** returned to the model by default.
 - `tvault` is an execution boundary, not a content provider: it answers only permitted questions
-  (project/key **availability**, capability) and **never** emits secret values (SPEC §12.7).
+  (project/key **availability**, capability) and **never** emits secret values.
 - Repository command verifiers are the exception to external adapter discovery: only exact argv
   arrays declared under `verifiers:` in `cortex.yaml` may run. They use no shell, accept only
   `unit_test|build|lint` on the `code` surface, and fail configuration closed. Configured argv is
   arbitrary local code and remains blocked unless the trusted launcher sets
   `CORTEX_APPROVE_COMMANDS=1`; repository configuration cannot approve itself.
 
-### Storage (SPEC §8, §24 #1)
+### Storage
 - Case files are JSON/JSONL — files, not a DB, in v0.1 — under a **central, XDG-organized** root
   by default: `$XDG_STATE_HOME/cortex/sessions/<repo-slug>/<taskID>/` (path resolution in
   `internal/config/paths.go`, mirroring codemap). This keeps every session across every repo
@@ -211,7 +215,7 @@ task install         # go install ./cmd/cortex
   (`*`) so Cortex's own state never registers as a workspace change. The central XDG default lives
   outside every repo, so no in-repo ignore file is needed.
 
-### Redaction (SPEC §16)
+### Redaction
 - `store/redact` masks secret shapes (AWS/GitHub/Stripe/JWT/bearer/`KEY=secret`) before any
   text reaches model-visible output or a case file. It favors precision — a false positive that
   masks ordinary code is its own failure — and preserves the key name on assignments
@@ -299,11 +303,12 @@ json` output into `Fact`s. Degrade to `unavailable`/`degraded` — never fabrica
 `task check` (fmt + lint + test) → `task build` → `task flows` if specs changed →
 `task docsbuild` when documentation or site assets changed. Keep docs
 discipline: product docs in `docs/` (VitePress), design notes in `~/notes/projects/cortex/`; no
-stray `.md` in the repo root beyond README/AGENTS/CLAUDE/SPEC. Commit/push only when asked.
+stray `.md` in the repo root beyond README/AGENTS/CLAUDE/CHANGELOG. Commit/push only when asked.
 
 ## Related projects (ecosystem)
 
 Siblings under `~/projects`: **codemap** (structural code graph — the closest convention match:
 Go CLI + config + MCP), **vecgrep** (semantic search + memory), **cairntrace** (browser specs),
-**glyphrun** (terminal specs), **file.cheap**/`fcheap` (evidence stash), **tinyvault**/`tvault`
-(secrets), **mcphub** (MCP gateway). Cortex composes all seven; it does not replace mcphub.
+**glyphrun** (terminal specs), **file.cheap**/`fcheap` (evidence stash), **vidtrace** (bug-video
+evidence), **tinyvault**/`tvault` (secrets), **veclite** (cross-case recall), and **mcphub** (MCP
+gateway). Cortex composes them; it does not replace mcphub.

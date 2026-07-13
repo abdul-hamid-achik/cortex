@@ -125,7 +125,7 @@ tasks:
       - glyph run specs/*.yml --format md --progress auto
 
   eval:
-    desc: Run the SPEC §18.3 evaluation harness (outcome + evidence-trail scorecard)
+    desc: Run the evaluation harness (outcome + evidence-trail scorecard)
     cmds:
       - go test ./internal/eval/... -run TestEvalHarness -v
 

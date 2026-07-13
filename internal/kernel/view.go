@@ -71,7 +71,12 @@ func sessionViewFromStore(slug string, store *casefs.Store, taskID string) (Sess
 	if err != nil {
 		return SessionView{}, err
 	}
-	return sessionViewFromSnapshot(slug, snapshot), nil
+	view := sessionViewFromSnapshot(slug, snapshot)
+	// The full current receipt set is retained only for the handoff builder,
+	// which calls sessionViewFromSnapshot directly. Show and Studio expose the
+	// bounded projection and must not keep the full backing collection alive.
+	view.currentReceipts = nil
+	return view, nil
 }
 
 func sessionViewFromSnapshot(slug string, snapshot casefs.TaskSnapshot) SessionView {
@@ -92,7 +97,7 @@ func sessionViewFromSnapshot(slug string, snapshot casefs.TaskSnapshot) SessionV
 		verificationWarnings = append(verificationWarnings, "could not check verification freshness: "+revisionErr.Error())
 	}
 	pd, elapsed := phaseDurations(c.CreatedAt, snapshot.PhaseEvents, c.Status.IsTerminal(), time.Now())
-	assessment := assessVerification(c.VerificationRequired, freshReceipts)
+	assessment := assessCaseVerification(c, freshReceipts)
 	actions := hydrateDecisionActions(c, structuredNextForCaseAt(c, time.Now().UTC(), assessment), snapshot.Decisions)
 	view := SessionView{
 		Slug: slug, Case: c, Plan: snapshot.Plan, Hypotheses: snapshot.Hypotheses, Evidence: snapshot.Evidence,
@@ -110,12 +115,32 @@ func sessionViewFromSnapshot(slug string, snapshot casefs.TaskSnapshot) SessionV
 	if snapshot.EvidenceTotal > len(snapshot.Evidence) {
 		view.ProjectionWarnings = append(view.ProjectionWarnings, fmt.Sprintf("showing %d newest of %d evidence records", len(snapshot.Evidence), snapshot.EvidenceTotal))
 	}
+	redactSessionView(&view)
+	// Handoffs need the complete current set for canonical assessment and their
+	// own sensitivity/size budgets. Capture it after redaction, then bound the
+	// human/model-facing Show and Studio collections independently.
+	view.currentReceipts, _ = verificationReceiptsAtRevision(view.Receipts, currentRevision, revisionErr)
+	view.Receipts = recentViewItems(view.Receipts, maxSessionViewLedgerRecords)
+	view.Timeline = recentViewItems(view.Timeline, maxSessionViewLedgerRecords)
+	if view.ReceiptTotal > len(view.Receipts) {
+		view.ProjectionWarnings = append(view.ProjectionWarnings, fmt.Sprintf("showing %d newest of %d verification receipts", len(view.Receipts), view.ReceiptTotal))
+	}
 	if view.TimelineTotal > len(view.Timeline) {
 		view.ProjectionWarnings = append(view.ProjectionWarnings, fmt.Sprintf("showing bounded recent activity; %d total timeline records remain available through cortex timeline", view.TimelineTotal))
 	}
-	redactSessionView(&view)
-	view.currentReceipts, _ = verificationReceiptsAtRevision(view.Receipts, currentRevision, revisionErr)
 	return view
+}
+
+func recentViewItems[T any](items []T, limit int) []T {
+	if limit <= 0 {
+		return nil
+	}
+	if len(items) <= limit {
+		return items
+	}
+	out := make([]T, limit)
+	copy(out, items[len(items)-limit:])
+	return out
 }
 
 // verificationReceiptDisplayID is stable for new records and keeps legacy

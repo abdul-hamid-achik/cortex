@@ -125,6 +125,18 @@ func TestBoundedSnapshotsStreamEvidenceInsteadOfReturningWholeLedger(t *testing.
 			t.Fatalf("sensitive item retained: %+v", item)
 		}
 	}
+	completion, err := store.CompletionSnapshot(c.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completion.EvidenceTotal != 35 || completion.ShareableEvidenceTotal != 30 || completion.SensitiveEvidenceOmitted != 5 || len(completion.Evidence) != 10 {
+		t.Fatalf("completion counts = total %d shareable %d sensitive %d retained %d", completion.EvidenceTotal, completion.ShareableEvidenceTotal, completion.SensitiveEvidenceOmitted, len(completion.Evidence))
+	}
+	for _, item := range completion.Evidence {
+		if item.Sensitivity == domain.SensitivitySensitive {
+			t.Fatalf("sensitive item retained for completion: %+v", item)
+		}
+	}
 	status, err := store.StatusSnapshot(c.ID)
 	if err != nil || status.EvidenceTotal != 35 || len(status.Evidence) != 0 {
 		t.Fatalf("status snapshot retained ledger: count=%d retained=%d err=%v", status.EvidenceTotal, len(status.Evidence), err)

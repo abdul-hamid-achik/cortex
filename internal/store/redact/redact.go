@@ -1,5 +1,5 @@
 // Package redact removes secret-shaped material from any text before it reaches
-// model-visible output or a case file (SPEC §16). Cortex never stores raw
+// model-visible output or a case file. Cortex never stores raw
 // secrets; this is the last-line filter for tool stderr/stdout that may leak
 // tokens despite tvault's boundary.
 package redact

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// VerificationStatus is the outcome of a verification attempt (SPEC §14.2).
+// VerificationStatus is the outcome of a verification attempt.
 // not_run must never be rendered as passed in a final summary.
 type VerificationStatus string
 
@@ -75,8 +75,8 @@ const (
 	VerificationUnbound VerificationBinding = "unbound"
 )
 
-// VerificationRecord is a structured proof record for a specific claim
-// (SPEC §8.5, §14.3). Every record names the exact claim it supports.
+// VerificationRecord is a structured proof record for a specific claim. Every
+// record names the exact claim it supports.
 type VerificationRecord struct {
 	ID      string  `json:"id"`
 	BatchID string  `json:"batchId,omitempty"`
@@ -94,13 +94,13 @@ type VerificationRecord struct {
 	// capability selector that produced its status.
 	Contract string `json:"contract,omitempty"`
 	Tool     string `json:"tool,omitempty"`
-	// VerifierVersion records the verifier tool's version when known (SPEC §14.3).
+	// VerifierVersion records the verifier tool's version when known.
 	VerifierVersion string             `json:"verifierVersion,omitempty"`
 	Status          VerificationStatus `json:"status"`
 	Evidence        []string           `json:"evidence,omitempty"` // evidence IDs
 	Artifact        string             `json:"artifact,omitempty"` // fcheap://… reference
 	// Sensitive labels the receipt (and its linked artifact) as possibly holding
-	// sensitive material, so it isn't archived or shared carelessly (SPEC §16.2 #5).
+	// sensitive material, so it isn't archived or shared carelessly.
 	Sensitive bool   `json:"sensitive,omitempty"`
 	Revision  string `json:"revision,omitempty"` // full git HEAD the proof pertains to
 	// DirtyDigest binds the proof to the tracked diff + untracked content at
@@ -111,8 +111,7 @@ type VerificationRecord struct {
 	Timestamp   time.Time           `json:"timestamp"`
 }
 
-// Validate enforces the invariant that a verification pass names its claim
-// (SPEC §6.3 #5).
+// Validate enforces the invariant that a verification pass names its claim.
 func (v VerificationRecord) Validate() error {
 	if v.Claim == "" {
 		return errValidation("verification record has no claim")

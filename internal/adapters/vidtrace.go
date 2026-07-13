@@ -9,13 +9,13 @@ import (
 
 // Vidtrace adapts the vidtrace CLI: it turns bug videos into timestamped
 // evidence bundles (frames/OCR/transcript/timeline) and links a visible failure
-// moment to the code that likely owns it (SPEC §19.4 "investigate a bug video").
+// moment to the code that likely owns it.
 // It is the video-specialized companion to fcheap. vidtrace uses Go-style flags
 // (both -flag and --flag are accepted) and emits `--json` as its contract.
 type Vidtrace struct{ tool }
 
 // NewVidtrace builds a vidtrace adapter. Media extraction can be slow, so the
-// timeout is generous — matching the SPEC §17.2 artifact/browser budgets.
+// timeout is generous to accommodate artifact and browser work.
 func NewVidtrace() *Vidtrace { return &Vidtrace{tool: newTool("vidtrace", 180*time.Second)} }
 
 func (v *Vidtrace) Name() string { return "vidtrace" }

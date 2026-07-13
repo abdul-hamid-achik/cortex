@@ -27,25 +27,25 @@ only; both call the same kernel and use the same case files.
 
 | Tool | Profile | Purpose |
 |---|---|---|
-| `cortex_start_task` | `agent`, `all` | deliberately create a fresh case; orient on git identity + tool health |
-| `cortex_open_task` | `agent`, `all` | preferred retry-safe entry: idempotency key returns the same case; otherwise resume newest active normalized goal/mode/workspace/branch match or start once; a newly created case accepts actor and parent linkage |
+| `cortex_start_task` | `agent`, `all` | deliberately create a fresh case; orient on git identity + tool health; optionally register immutable `acceptanceCriteria` |
+| `cortex_open_task` | `agent`, `all` | preferred retry-safe entry: idempotency key returns the same case; otherwise resume newest active normalized goal/mode/workspace/branch/criteria match or start once; a new case accepts criteria, actor, and parent linkage |
 | `cortex_investigate` | `agent`, `all` | route a question causally — bounded discovery (vecgrep/vidtrace) first, top candidates fed into codemap; structural evidence carries `derivedFrom` provenance |
 | `cortex_plan` | `agent`, `all` | the planning gate — hypotheses (with disproof and optional per-hypothesis evidence IDs), boundary, verification plan |
 | `cortex_begin_change` | `agent`, `all` | atomically acquire the actor's expiring change lease and enter `changing`; same-owner retries are safe |
 | `cortex_verify` | `agent`, `all` | run planned verifiers, detect scope drift, and bind typed `claimSpecs` to an exact surface/verifier/contract; leased tasks require the owner actor; intentional no-diff changes require `noOpAcknowledged` |
 | `cortex_remember` | `agent`, `all` | persist the outcome and complete; normal completion requires the canonical assessment to be `verified`, while explicit `verificationNotPossible` / `acceptFailed` acknowledgments preserve non-green outcomes |
-| `cortex_status` | `agent`, `all` | phase, case revision/actor/linkage/lease, pending decision, scope, structured actions, and canonical `verified / partial / failed / unverified` assessment |
+| `cortex_status` | `agent`, `all` | phase, case revision/actor/linkage/lease, pending decision, scope, bounded named-claim proof manifest, structured actions, and canonical `verified / partial / failed / unverified` assessment |
 | `cortex_resolve` | `agent`, `all` | mark a hypothesis confirmed/challenged/rejected as evidence accumulates (history retained) |
 | `cortex_note` | `agent`, `all` | append redacted human/agent/reviewer context as provenance-bearing `human_report`; never satisfies verification alone |
 | `cortex_request_decision` | `agent`, `all` | pause on one bounded human question with at least two options and explicit consequences |
 | `cortex_answer_decision` | `agent`, `all` | record the selected option and resume the exact paused phase; `resume=true` repairs an already-persisted answer after a crash |
-| `cortex_handoff` | `agent`, `all` | transfer packet (128 KiB hard cap): state plus revision/actor/linkage/lease, plan, hypotheses, 20 recent shareable evidence facts, current verifier runs and carried same-state named claims, decisions, assessment, and executable actions; sensitive record content and raw output omitted; optional workspace fallback |
+| `cortex_handoff` | `agent`, `all` | bounded transfer packet: state plus revision/actor/linkage/lease, plan, hypotheses, recent shareable evidence, current verifier runs/named claims, decisions, assessment, and actions; complete verified packets preserve their proof closure under a 90 KiB primary-result budget, while general packets retain the 128 KiB cap; sensitive/raw content omitted |
 | `cortex_abort_task` | `agent`, `all` | stop without deleting evidence (reason required) |
 | `cortex_read_evidence` | `agent`, `all` | full evidence record by ID |
 | `cortex_read_artifact` | `agent`, `all` | bounded preview of a task-owned raw ref or task-referenced fcheap ref; safe relative `path`; 32 KiB default/128 KiB cap; discovery ≤512 entries/100 files; binary refused unless `allowBinary` |
 | `cortex_recall_cases` | `agent`, `all` | recall prior resolved cases (rejected/challenged hypotheses + definitive receipts) related to a query, cross-repo or scoped — prior disproofs to read before re-deriving a theory |
 | `cortex_list_tasks` | `all` | list all tasks in the workspace (newest first) |
-| `cortex_sessions` | `all` | **cross-repo**: every session everywhere — id, goal, phase, repo, verified/required, active, timestamps (filter by `repo`/`active`) |
+| `cortex_sessions` | `all` | **cross-repo**: every session everywhere — id, goal, phase, repo, verified/required, active, timestamps (filter by `repo`/`active`/AND-token `query`) |
 | `cortex_timeline` | `all` | a session's time-sorted activity — phases, evidence, tool calls, receipts; optional workspace fallback finds repo-local/custom cases |
 | `cortex_metrics` | `all` | observability metrics — a task's evidence trail + time-in-phase, or the workspace aggregate |
 | `cortex_overview` | `all` | **cross-repo** rollup — completion/verified rates, mean time to complete, per-repo breakdown |
@@ -61,6 +61,12 @@ Human operators can use the CLI's explicit `cortex lease renew|release` commands
 
 Lifecycle and mutation tools return the same outer envelope, so a weaker model learns the working
 interface once. Read/index/operator tools return their documented structured projections directly.
+
+Tools that return this shared envelope advertise it through MCP `outputSchema` and return the same
+object in both `structuredContent` and a JSON text block for clients that consume either
+representation. Every tool also publishes a human title plus standard read-only, destructive,
+idempotent, and open-world hints. Those annotations improve cross-client approval and display
+behavior; the kernel's phase, lease, and verification gates remain the authority.
 
 ```json
 {
@@ -130,6 +136,16 @@ mcphub sync --write
 
 The `--` separator passes `--profile all` to Cortex instead of parsing it as an mcphub flag.
 
+Verify the registration with a real MCP handshake:
+
+```bash
+cortex doctor --probe
+```
+
+For the default profile, the gateway report should show `registered=true`, `handshake_ok=true`, and
+`tool_count=17`. The check is advisory: unavailable specialist tools still appear separately and
+degrade honestly at runtime.
+
 In `gateway` mode the agent sees only mcphub, which proxies Cortex's tools namespaced as
 `cortex__<tool>`. Recommended lazy pins:
 
@@ -144,6 +160,21 @@ cortex__cortex_status
 
 The raw specialist tools stay discoverable as an expert escape hatch — Cortex makes the *default*
 path sane without preventing expert use.
+
+### local-agent
+
+The compact profile is contract-tested against local-agent's real MCP registry. Its required
+`cortex_open_task`, `cortex_status`, and `cortex_handoff` tools retain their names and required
+fields; the new criteria/proof fields are additive and optional. Run through the normal gateway
+with `mcphub mcp serve --agent local-agent`, or configure a direct MCP server named `cortex` with
+command `cortex` and arguments `serve`. `cortex doctor --probe` should report a successful
+17-tool handshake for the default registration.
+
+local-agent caps a rendered tool result at 96 KiB. Complete verified handoffs therefore measure
+the same indented, HTML-unescaped primary JSON emitted by Cortex and stay at or below 90 KiB. The
+packet keeps all non-sensitive named claims plus every verifier run their batches depend on. If
+that atomic proof closure cannot fit, Cortex returns no receipts and an explicit overflow warning;
+it never presents a clipped proof set as complete.
 
 ## Model instruction contract
 
@@ -167,14 +198,35 @@ For non-trivial engineering work:
 
 ## Typed verification example
 
+`cortex_open_task` and `cortex_start_task` accept an optional immutable criteria array (maximum 64;
+ID maximum 128 bytes; statement maximum 4 KiB):
+
+```json
+{
+  "goal": "Fix post-login checkout redirect",
+  "workspace": "/work/liftclub",
+  "idempotencyKey": "checkout-redirect",
+  "acceptanceCriteria": [
+    {
+      "id": "checkout_return",
+      "statement": "Login started at checkout returns to checkout"
+    }
+  ]
+}
+```
+
+Criteria are normalized once, redacted before persistence, and immutable. An idempotent retry with
+a changed contract is rejected; without a key, different criteria select a different case. To
+satisfy one, verify with the same ID and exact statement:
+
 ```json
 {
   "taskId": "task_06FK…",
   "actor": "agent-auth",
   "claimSpecs": [
     {
-      "id": "checkout-return",
-      "statement": "Login initiated at checkout returns to checkout",
+      "id": "checkout_return",
+      "statement": "Login started at checkout returns to checkout",
       "surface": "browser",
       "verifier": "cairntrace",
       "contract": "specs/checkout-return.yml"
@@ -196,3 +248,9 @@ starts the server with `CORTEX_APPROVE_COMMANDS=1 cortex serve`. Repository conf
 approve itself; without approval Cortex records a `blocked` receipt.
 If an exact contract did not run, the named claim receipt is `not_run`. `noOpAcknowledged: true`
 only acknowledges an intentional no-diff change and does not make either claim pass.
+
+Status exposes `satisfiedCriteria`, `missingCriteria`, and a compact `claimProofs` array. Each proof
+includes the stable claim ID, bounded statement preview plus SHA-256 digest, receipt/batch status
+and binding, current revision/diff digest, and at most two non-sensitive evidence references with
+explicit omission flags. Full criterion statements remain in `case.json`; even the worst valid
+64-criterion status is bounded below the local-agent result ceiling.

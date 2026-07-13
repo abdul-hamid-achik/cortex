@@ -11,7 +11,7 @@ import (
 	"github.com/abdul-hamid-achik/cortex/internal/ids"
 )
 
-// PlanInput parameterizes Plan (SPEC §10.2 cortex_plan). It is a planning gate,
+// PlanInput parameterizes Plan. It is a planning gate,
 // not a code generator.
 type PlanInput struct {
 	TaskID         string
@@ -19,7 +19,7 @@ type PlanInput struct {
 	ChangeBoundary domain.ChangeBoundary
 	Verification   []string
 	Uncertainty    string
-	// TimeoutOverrides maps a tool name to a per-task timeout (SPEC §17.2).
+	// TimeoutOverrides maps a tool name to a per-task timeout.
 	TimeoutOverrides map[string]string
 }
 
@@ -34,7 +34,7 @@ type HypothesisInput struct {
 
 // Plan stores hypotheses, the change boundary, and the verification plan, then
 // gates the transition into a changing/verifying-ready state. It rejects any
-// plan whose hypotheses lack a disproof path (SPEC §6.3 #1, §13.1).
+// plan whose hypotheses lack a disproof path.
 func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 	c, err := k.store.Load(in.TaskID)
 	if err != nil {
@@ -96,14 +96,14 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 		}
 		if err := hyp.Validate(); err != nil {
 			// A rejected plan preserves the investigating phase so the model can
-			// supply a disproof path and retry (SPEC acceptance: plan rejects
+			// supply a disproof path and retry (the planning gate rejects
 			// plans with no disproof path).
 			return errEnvelope(in.TaskID, "plan rejected: "+err.Error()), nil
 		}
 		hyps = append(hyps, hyp)
 	}
 
-	// A change task must declare a boundary before it can mutate (SPEC §13.1).
+	// A change task must declare a boundary before it can mutate.
 	if c.Mode == domain.ModeChange && !boundary.Declared() {
 		return errEnvelope(in.TaskID, "plan rejected: a change task must declare a change boundary (files and/or symbols)"), nil
 	}
@@ -165,14 +165,14 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 		RawAvailable: false,
 	}
 	k.attachStructuredActions(&env, c)
-	// §13.1: a change task should have evidence supporting each hypothesis
+	// A change task should have evidence supporting each hypothesis
 	// before it enters changing. This is surfaced as a warning (not a hard
 	// gate) so a hypothesis can be recorded before formal evidence exists, but
 	// the gap is visible to the model.
 	if c.Mode == domain.ModeChange {
 		for _, h := range hyps {
 			if len(h.Supports) == 0 {
-				env.Warnings = append(env.Warnings, fmt.Sprintf("hypothesis %q has no supporting evidence — investigate to gather evidence before changing (SPEC §13.1)", h.ID))
+				env.Warnings = append(env.Warnings, fmt.Sprintf("hypothesis %q has no supporting evidence — investigate to gather evidence before changing", h.ID))
 			}
 		}
 	}
@@ -321,7 +321,7 @@ func normalizeBoundaryEntries(kind string, entries []string) ([]string, error) {
 }
 
 // defaultVerification derives a verifier list from the task's surfaces when the
-// model doesn't supply one (SPEC §14.1 claim-to-proof mapping).
+// model doesn't supply one, preserving an explicit claim-to-proof mapping.
 func (k *Kernel) defaultVerification(surfaces []domain.Surface) []string {
 	out := []string{"codemap_review"}
 	for _, s := range surfaces {

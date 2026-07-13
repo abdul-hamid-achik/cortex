@@ -12,7 +12,7 @@ import (
 )
 
 // runner executes a CLI tool. It is an interface so tests can inject a fake
-// process without spawning real binaries (SPEC §23.2 adapter contract tests).
+// process without spawning real binaries in adapter contract tests.
 type runner interface {
 	run(ctx context.Context, dir, bin string, args ...string) (stdout, stderr []byte, exitCode int, err error)
 }
@@ -36,7 +36,7 @@ func (execRunner) run(ctx context.Context, dir, bin string, args ...string) ([]b
 		}
 	}
 	// A generous fixed backstop guards against a runaway process. The per-tool
-	// configurable cap (SPEC §7.3 max_raw_output_bytes_per_tool) is NOT applied
+	// configurable max_raw_output_bytes_per_tool cap is NOT applied
 	// here or in execOnce: it bounds the raw *retained for the case file*, so it
 	// is applied when the raw is stored (kernel.storeRaw). Capping the string the
 	// adapter parses would corrupt valid-but-large JSON into an unparseable blob.
@@ -67,7 +67,7 @@ type tool struct {
 	run     runner
 	redact  *redact.Redactor
 	timeout time.Duration
-	retries int // max automatic retries for read-only exec (SPEC §17.3 / budget max_auto_retries_per_tool)
+	retries int // max automatic retries for read-only exec (budget max_auto_retries_per_tool)
 }
 
 func newTool(bin string, timeout time.Duration) tool {
@@ -86,7 +86,7 @@ func (t *tool) SetMaxAutoRetries(n int) {
 
 // exec runs a READ-ONLY idempotent query and returns redacted stdout/stderr.
 // A missing binary yields ErrToolMissing. On a transient process/transport
-// failure it retries up to budget.max_auto_retries_per_tool (SPEC §17.3) —
+// failure it retries up to budget.max_auto_retries_per_tool —
 // safe because query ops are idempotent. A non-zero exit is data, not a
 // transient failure, so it is never retried. Mutating ops (fcheap save,
 // vecgrep memory remember) must call execOnce to avoid a double write.
@@ -111,7 +111,7 @@ func (t tool) exec(ctx context.Context, dir string, args ...string) (stdout, std
 }
 
 // retryableExecErr classifies a failure as transient and safe to retry
-// (SPEC §17.3): the runner itself errored (spawn/pipe/child-timeout) while the
+// when the runner itself errored (spawn/pipe/child-timeout) while the
 // CALLER's context is still live. A non-zero exit never reaches here — execOnce
 // returns it as data with err == nil — so behavioral failures and tool errors
 // are never replayed; only infrastructure failures are.
@@ -140,8 +140,8 @@ func (t tool) execOnce(ctx context.Context, dir string, args ...string) (stdout,
 var ErrToolMissing = errors.New("binary not found on PATH")
 
 // Version returns the tool's version string (first line of `<bin> --version`),
-// or "" when the binary is missing or reports no version (SPEC §14.3 "version
-// if known"). Best-effort — never errors.
+// or "" when the binary is missing or reports no version. Best-effort — never
+// errors.
 func (t tool) Version(ctx context.Context) string {
 	if !binExists(t.bin) {
 		return ""

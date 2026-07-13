@@ -9,7 +9,7 @@ import (
 )
 
 // ScopeReport is the result of comparing observed changes to the declared
-// boundary (SPEC §13.2). Drift does not auto-fail a task; it makes accidental
+// boundary. Drift does not auto-fail a task; it makes accidental
 // expansion visible.
 type ScopeReport struct {
 	Scope           string   `json:"scope"` // within_boundary | drift_detected | no_boundary

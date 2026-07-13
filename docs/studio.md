@@ -11,19 +11,32 @@ cortex studio
 Studio is interactive and rejects `--json`; use `cortex sessions --json` for the board index or
 `cortex show <taskId> --json` for one machine-readable session.
 
-The left pane lists sessions. The right pane uses the canonical session projection: goal and loop
-position, `verified | partial | failed | unverified` assessment and gaps, a pending human decision
-with option consequences, the first structured next action, hypotheses, bounded recent receipts,
-and bounded recent evidence. Its composite read retains at most the 200 newest evidence, command,
-and phase records while reporting exact totals; this keeps two-second refreshes cheap on long-lived
-cases. Studio refreshes the central session store every two seconds.
+On wide terminals, the left pane lists sessions and the right pane shows the selected case. On
+narrow terminals, the same panes stack at full width. Each list row includes a textual phase label,
+so status remains readable without color. The detail pane uses the canonical session projection:
+goal and loop position, `verified | partial | failed | unverified` assessment and gaps, a pending
+human decision with option consequences, the first structured next action, hypotheses, bounded
+recent receipts, and bounded recent evidence. The displayed projection retains at most the 200
+newest receipts and combined activity entries; its composite store read also streams only the 200
+newest evidence, command, and phase records while reporting exact totals. Studio refreshes the
+central session store every two seconds; index and detail reads run in the background, and refresh
+bursts are coalesced so repository scans do not block keyboard navigation. If a refresh fails,
+Studio keeps the matching last good projection visible and reports that the snapshot may be stale.
 
 ## Filter the board
 
 ```bash
 cortex studio --active       # start with in-flight sessions only
 cortex studio --repo billing # match a repository name or slug
+cortex studio --query "billing partial" # AND-search session identity, state, and outcome
 ```
+
+Press `/` to edit the search without leaving the board, `Enter` to apply it, `Esc` to cancel, and
+`c` to clear it. Search is case-insensitive and whitespace-separated terms are ANDed across task
+ID, goal, phase, mode, repository/slug, workspace, and verification outcome—the same contract as
+`cortex sessions --query` and the all-profile MCP sessions tool. While the background read is in
+flight, Studio labels the requested filter separately from the last successfully applied filter;
+a failed search never relabels retained rows as if they matched.
 
 Inside Studio:
 
@@ -31,6 +44,10 @@ Inside Studio:
 |---|---|
 | `↑` / `k`, `↓` / `j` | select the previous or next session |
 | `g`, `G` | jump to the first or last session |
+| `Page Up` / `Page Down`, `Ctrl-U` / `Ctrl-D` | scroll the selected case detail |
+| `/`, then `Enter` | edit and apply session search |
+| `Esc` | cancel search editing |
+| `c` | clear the applied search |
 | `a` | toggle active-only sessions |
 | `r` | refresh immediately |
 | `q`, `Esc`, `Ctrl-C` | quit |

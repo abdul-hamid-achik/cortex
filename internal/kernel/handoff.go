@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -16,6 +17,16 @@ const (
 	// often injected directly into another model's context, so count-only bounds
 	// are insufficient when one durable claim or decision contains a large body.
 	maxHandoffBytes = 128 << 10
+	// maxCompletionHandoffBytes keeps the complete primary JSON document below
+	// local-agent's 96 KiB MCP result cap. The MCP transport pretty-prints this
+	// document before structuredContent is appended, so compact JSON size is not
+	// a sufficient interoperability bound.
+	maxCompletionHandoffBytes = 90 << 10
+)
+
+const (
+	completionHandoffBoundedWarning = "completion handoff stripped non-proof transfer detail to fit the 90 KiB local-agent result budget"
+	completionProofOverflowWarning  = "completion proof receipts omitted atomically because the complete non-sensitive proof closure exceeds the 90 KiB local-agent result budget; treat acceptance proof as unavailable"
 )
 
 type handoffBudget struct {
@@ -77,7 +88,8 @@ func BuildHandoffIn(workspace, taskID string, now time.Time) (Handoff, error) {
 	}
 	v := sessionViewFromSnapshot(slug, snapshot)
 	c := v.Case
-	receipts, omittedReceipts := safeHandoffReceipts(v.currentReceipts)
+	receiptProjection := projectHandoffReceipts(c.Status, v.VerificationAssessment.Outcome, v.currentReceipts)
+	receipts, omittedReceipts := receiptProjection.receipts, receiptProjection.sensitiveOmitted
 	decisions, omittedDecisions, sensitivePending := safeHandoffDecisions(v.Decisions)
 	h := Handoff{
 		SchemaVersion: 1, GeneratedAt: now.UTC(), TaskID: c.ID, Revision: c.Revision, Goal: c.Goal,
@@ -113,6 +125,7 @@ func BuildHandoffIn(workspace, taskID string, now time.Time) (Handoff, error) {
 			omittedEvidence, omittedReceipts, omittedDecisions,
 		))
 	}
+	h.Warnings = append(h.Warnings, receiptProjection.warnings...)
 	if c.Status == domain.PhaseNeedsHumanDecision {
 		h.Warnings = append(h.Warnings, "task is paused for a human decision; answer it before continuing")
 	}
@@ -145,6 +158,154 @@ func safeHandoffReceipts(receipts []domain.VerificationRecord) ([]domain.Verific
 		out = append(out, receipt)
 	}
 	return out, omitted
+}
+
+type handoffReceiptProjection struct {
+	receipts         []domain.VerificationRecord
+	sensitiveOmitted int
+	warnings         []string
+}
+
+func projectHandoffReceipts(phase domain.Phase, outcome VerificationOutcome, receipts []domain.VerificationRecord) handoffReceiptProjection {
+	if phase != domain.PhaseComplete || outcome != VerificationVerified {
+		projected, omitted := safeHandoffReceipts(receipts)
+		return handoffReceiptProjection{receipts: projected, sensitiveOmitted: omitted}
+	}
+	return completionProofClosure(receipts)
+}
+
+// completionProofClosure carries named claims together with every verifier run
+// from the batches those claims reference. A claim without its verifier batch
+// is not proof. Sensitive verifier batches therefore remove their dependent
+// shareable claims as one closure rather than leaving misleading orphan claims.
+func completionProofClosure(receipts []domain.VerificationRecord) handoffReceiptProjection {
+	current := currentVerificationReceipts(receipts)
+	claims := currentNamedClaims(receipts, current)
+	currentRuns := latestReceipts(current, domain.VerificationPurposeVerifierRun)
+
+	type batchState struct {
+		claim domain.VerificationRecord
+		runs  []domain.VerificationRecord
+	}
+	batches := make(map[string]*batchState)
+	sensitive := make(map[string]struct{})
+	markSensitive := func(receipt domain.VerificationRecord) {
+		sensitive[handoffReceiptIdentity(receipt)] = struct{}{}
+	}
+
+	for _, claim := range claims {
+		if claim.Sensitive {
+			markSensitive(claim)
+			continue
+		}
+		if claim.BatchID == "" {
+			continue
+		}
+		if batches[claim.BatchID] == nil {
+			batches[claim.BatchID] = &batchState{claim: claim}
+		}
+	}
+	for _, receipt := range receipts {
+		batch := batches[receipt.BatchID]
+		if batch == nil || receipt.EffectivePurpose() != domain.VerificationPurposeVerifierRun ||
+			!sameProofState(receipt, batch.claim) {
+			continue
+		}
+		batch.runs = append(batch.runs, receipt)
+		if receipt.Sensitive {
+			markSensitive(receipt)
+		}
+	}
+
+	blockedBatches := make(map[string]bool)
+	for id, batch := range batches {
+		if len(batch.runs) == 0 {
+			blockedBatches[id] = true
+			continue
+		}
+		for _, run := range batch.runs {
+			if run.Sensitive {
+				blockedBatches[id] = true
+				break
+			}
+		}
+	}
+
+	includedRuns := make(map[string]struct{})
+	for _, run := range currentRuns {
+		if run.Sensitive {
+			markSensitive(run)
+			continue
+		}
+		if run.BatchID != "" && blockedBatches[run.BatchID] {
+			continue
+		}
+		includedRuns[handoffReceiptIdentity(run)] = struct{}{}
+	}
+	for id, batch := range batches {
+		if blockedBatches[id] {
+			continue
+		}
+		for _, run := range batch.runs {
+			includedRuns[handoffReceiptIdentity(run)] = struct{}{}
+		}
+	}
+
+	projected := make([]domain.VerificationRecord, 0, len(includedRuns)+len(claims))
+	seen := make(map[string]struct{}, len(includedRuns)+len(claims))
+	appendReceipt := func(receipt domain.VerificationRecord) {
+		key := handoffReceiptIdentity(receipt)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		projected = append(projected, receipt)
+	}
+	for _, receipt := range receipts {
+		if _, include := includedRuns[handoffReceiptIdentity(receipt)]; include {
+			appendReceipt(receipt)
+		}
+	}
+
+	dependentOmitted := 0
+	for _, claim := range claims {
+		switch {
+		case claim.Sensitive:
+			// Counted in sensitiveOmitted above.
+		case claim.BatchID == "" || blockedBatches[claim.BatchID]:
+			dependentOmitted++
+		default:
+			appendReceipt(claim)
+		}
+	}
+
+	projection := handoffReceiptProjection{
+		receipts: projected, sensitiveOmitted: len(sensitive),
+	}
+	if dependentOmitted > 0 {
+		projection.warnings = append(projection.warnings, fmt.Sprintf(
+			"completion proof omitted %d dependent named-claim receipt(s) because a complete shareable verifier batch was unavailable; treat those acceptance claims as unproven",
+			dependentOmitted,
+		))
+	}
+	return projection
+}
+
+func sameProofState(a, b domain.VerificationRecord) bool {
+	if a.BatchID != b.BatchID {
+		return false
+	}
+	if a.Revision == "" || a.DirtyDigest == "" || b.Revision == "" || b.DirtyDigest == "" {
+		return true
+	}
+	return a.Revision == b.Revision && a.DirtyDigest == b.DirtyDigest
+}
+
+func handoffReceiptIdentity(receipt domain.VerificationRecord) string {
+	if receipt.ID != "" {
+		return "id:" + receipt.ID
+	}
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s", receipt.BatchID, receipt.EffectivePurpose(), receipt.ClaimID, receipt.Tool, receipt.Surface, receipt.Claim)
 }
 
 func safeHandoffDecisions(decisions []domain.Decision) ([]domain.Decision, int, bool) {
@@ -366,6 +527,13 @@ func boundHandoff(h Handoff) Handoff {
 	if err := json.Unmarshal(original, &out); err != nil {
 		return minimalHandoff(h)
 	}
+	if out.Phase == domain.PhaseComplete && out.Verification.Outcome == VerificationVerified {
+		return boundCompletionHandoff(out)
+	}
+	return boundTransferHandoff(out, len(original))
+}
+
+func boundTransferHandoff(out Handoff, originalSize int) Handoff {
 	changed := false
 	for _, budget := range handoffBudgets {
 		if projectHandoff(&out, budget) {
@@ -373,7 +541,7 @@ func boundHandoff(h Handoff) Handoff {
 		}
 		encoded, err := json.Marshal(out)
 		if err == nil && len(encoded) <= maxHandoffBytes {
-			if changed || len(original) > maxHandoffBytes {
+			if changed || originalSize > maxHandoffBytes {
 				appendHandoffWarning(&out, fmt.Sprintf("handoff content bounded to %d KiB for portable agent transfer", maxHandoffBytes>>10))
 				// The warning itself may cross a near-exact boundary. The next
 				// budget will tighten it; the final profile has ample headroom.
@@ -388,6 +556,84 @@ func boundHandoff(h Handoff) Handoff {
 	out = minimalHandoff(out)
 	appendHandoffWarning(&out, fmt.Sprintf("handoff content bounded to %d KiB for portable agent transfer", maxHandoffBytes>>10))
 	return out
+}
+
+// boundCompletionHandoff gives current acceptance proof strict priority over
+// transfer context. Proof records are never clipped or count-trimmed: either the
+// entire selected closure fits, or every receipt is removed so a consumer such
+// as local-agent must fail closed instead of accepting a partial proof set.
+func boundCompletionHandoff(h Handoff) Handoff {
+	if completionHandoffFits(h) {
+		return h
+	}
+
+	proofOnly := minimalCompletionHandoff(h)
+	appendHandoffWarning(&proofOnly, completionHandoffBoundedWarning)
+	boundCompletionIdentity(&proofOnly)
+	if completionHandoffFits(proofOnly) {
+		return proofOnly
+	}
+
+	proofOnly.Receipts = nil
+	proofOnly.Warnings = []string{completionProofOverflowWarning}
+	boundCompletionIdentity(&proofOnly)
+	if completionHandoffFits(proofOnly) {
+		return proofOnly
+	}
+
+	// Defensive final form: identity fields are already bounded, and all optional
+	// proof/context collections are absent. Keep tightening free text rather than
+	// ever reintroducing a partial receipt closure.
+	proofOnly.Workspace = domain.Workspace{}
+	proofOnly.Actor = ""
+	proofOnly.ParentTaskID = ""
+	proofOnly.Mode = ""
+	proofOnly.Risk = ""
+	return proofOnly
+}
+
+func minimalCompletionHandoff(h Handoff) Handoff {
+	out := Handoff{
+		SchemaVersion: h.SchemaVersion, GeneratedAt: h.GeneratedAt,
+		TaskID: h.TaskID, Revision: h.Revision, Phase: h.Phase,
+		Mode: h.Mode, Risk: h.Risk, Actor: h.Actor, ParentTaskID: h.ParentTaskID,
+		Workspace:    h.Workspace,
+		Verification: VerificationAssessment{Outcome: h.Verification.Outcome},
+		Receipts:     append([]domain.VerificationRecord(nil), h.Receipts...),
+		Warnings:     append([]string(nil), h.Warnings...),
+	}
+	boundCompletionIdentity(&out)
+	return out
+}
+
+func boundCompletionIdentity(h *Handoff) {
+	for _, value := range []*string{
+		&h.TaskID, &h.Risk, &h.Actor, &h.ParentTaskID,
+		&h.Workspace.Root, &h.Workspace.Repository, &h.Workspace.Branch,
+		&h.Workspace.CommitBefore, &h.Workspace.BaseRef,
+	} {
+		clipHandoffString(value, 1024)
+	}
+	// The newest warnings include completion-proof omission/bounding notices.
+	boundStringSlice(&h.Warnings, 8, true, 512)
+}
+
+func completionHandoffFits(h Handoff) bool {
+	encoded, err := handoffPrimaryJSON(h)
+	return err == nil && len(encoded) <= maxCompletionHandoffBytes
+}
+
+// handoffPrimaryJSON mirrors internal/mcp.result: indented JSON with HTML
+// escaping disabled and the encoder's final newline removed.
+func handoffPrimaryJSON(h Handoff) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(h); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buffer.Bytes(), "\n"), nil
 }
 
 func projectHandoff(h *Handoff, budget handoffBudget) bool {
