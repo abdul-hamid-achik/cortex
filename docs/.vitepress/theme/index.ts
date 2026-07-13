@@ -1,3 +1,4 @@
+import { inject } from '@vercel/analytics'
 import DefaultTheme from 'vitepress/theme-without-fonts'
 import '@fontsource-variable/outfit'
 import '@fontsource-variable/jetbrains-mono'
@@ -7,6 +8,8 @@ export default {
   extends: DefaultTheme,
   enhanceApp() {
     if (typeof document === 'undefined') return
+
+    inject()
 
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return

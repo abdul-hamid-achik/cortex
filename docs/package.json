@@ -12,5 +12,8 @@
     "@fontsource-variable/jetbrains-mono": "5.2.8",
     "@fontsource-variable/outfit": "5.2.8",
     "vitepress": "1.6.4"
+  },
+  "dependencies": {
+    "@vercel/analytics": "2.0.1"
   }
 }
