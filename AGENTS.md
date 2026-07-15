@@ -87,7 +87,7 @@ cortex/
 ├── contracts/v1/             # public deterministic JSON/MCP conformance schema + fixtures
 ├── evaluations/              # trusted empirical manifests, repository fixtures, and independent oracles
 ├── specs/                    # glyphrun E2E specs (*.yml)
-├── .github/workflows/        # ci.yml (test+race+build+lint) · release.yml (goreleaser on tags)
+├── .github/workflows/        # ci.yml (test+race+build+lint+docs) · release.yml (goreleaser on tags)
 ├── Taskfile.yml .golangci.yml .goreleaser.yaml
 └── README.md AGENTS.md CLAUDE.md CHANGELOG.md LICENSE
 ```
@@ -279,6 +279,33 @@ task install         # go install ./cmd/cortex
 - Real model/network runs never belong in ordinary unit CI. Deterministic tests validate schemas,
   process bounds, scoring, and failure handling without supporting an empirical uplift claim.
 
+### Documentation and release delivery
+
+- Documentation and tagged releases are independent pipelines. Vercel Git Integration is the only
+  documentation deployment authority: pushes to `main` build the `docs/` Root Directory using
+  `docs/vercel.json` (`bun install --frozen-lockfile`, `bun run build`, output
+  `.vitepress/dist`). CI may test and build docs, but it does not deploy them.
+- `.github/workflows/release.yml` is tag-only. It runs repository checks and GoReleaser to publish
+  GitHub binaries/checksums and Homebrew metadata. It must never build or deploy the docs site, call
+  the Vercel CLI/API, or depend on a documentation-provider deployment succeeding.
+- Public docs intentionally carry no current-version state. The nav item is `Latest release` and
+  follows GitHub's stable `/releases/latest` redirect. Do not add a hardcoded current SemVer,
+  `release-version.*`, `VITEPRESS_VERSION`, a synchronization wrapper under `docs/scripts/`, or any
+  other tag-to-docs version channel.
+- Do not add `vercel link`, `vercel pull`, `vercel build`, or `vercel deploy` to GitHub Actions. Do
+  not commit Vercel tokens or org/project IDs, configure them as GitHub Actions secrets/environment,
+  or set `git.deploymentEnabled: false`. Vercel's local ignored state may retain its normal project
+  mapping. The project Root Directory remains `docs`; linking from inside `docs/` can incorrectly
+  produce `docs/docs`.
+- The release workflow's only manually configured credential is `HOMEBREW_TAP_TOKEN`; GitHub
+  provides its repository-scoped `GITHUB_TOKEN`. For docs changes run `task docstest` and
+  `task docsbuild`, then push `main` and let Git Integration deploy. Full operational details live
+  in `docs/site-deployment.md`.
+- Published tags are immutable. Push a verified `main`, wait for CI, create the next unused
+  annotated SemVer tag, and let the release workflow finish. If a published tag workflow fails,
+  never move or reuse that version; correct the cause and publish the next version. Even if an
+  orphaned failed tag is deleted during cleanup, its version number remains burned.
+
 ### MCP server (`internal/mcp/server.go`)
 - SDK: `github.com/modelcontextprotocol/go-sdk/mcp` (v1.6.1). Build with `sdkmcp.NewServer`,
   register with `sdkmcp.AddTool`, typed input structs using `json:"…,omitempty"` +
@@ -300,10 +327,6 @@ task install         # go install ./cmd/cortex
   piped/`--json` output is plain, so agents never see ANSI escapes. Every non-interactive read
   command supports `--json` for machine output; Studio rejects it and points callers to
   `sessions --json` / `show --json`.
-- Public documentation does not duplicate the current version. Its `Latest release` navigation item
-  follows GitHub's stable `/releases/latest` redirect. Vercel Git Integration owns documentation
-  deployment from `main` using the normal VitePress build; the tag workflow only publishes binaries
-  and Homebrew metadata and does not call Vercel or require Vercel credentials.
 
 ## mcphub registration
 

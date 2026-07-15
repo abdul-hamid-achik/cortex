@@ -231,6 +231,10 @@ Full documentation is published at **[cortexai.tools](https://cortexai.tools)**;
 VitePress source lives in [`docs/`](./docs) and runs locally with `task docs`. Architecture,
 behavior, and contributor guidance live in [`AGENTS.md`](./AGENTS.md).
 
+Documentation deploys automatically from `main` through Vercel Git Integration. Tagged releases
+are a separate pipeline for GitHub binaries and Homebrew metadata. See the
+[deployment contract](./docs/site-deployment.md) for the exact project settings.
+
 ## Status
 
 The kernel, all three surfaces (CLI + MCP + Studio), the adapter suite, case-file coordination,

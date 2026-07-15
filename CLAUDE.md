@@ -6,7 +6,7 @@ the handful of things that are easy to get wrong.
 ## What cortex is
 
 A local-first **agent kernel**: a small runtime between an LLM and the specialist tool ecosystem
-(codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite). It gives a task a
+(Bob, codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite). It gives a task a
 durable **case file** and forces a reasoning loop — orient → investigate → plan → change → verify →
 preserve — through a **phase machine** with hard invariants. Three surfaces share one kernel: a CLI
 (`--json` for agents), an MCP server (`cortex serve`, 17 agent-profile / 24 all-profile tools), and
@@ -27,6 +27,13 @@ Surfaces / key files:
 - `~/notes/projects/cortex/` → Obsidian vault for **working notes / handoffs**, via the
   `obsidian-cli` skill. **Never** write scratch `.md` into the repo. Repo root `.md` is limited
   to: README, AGENTS, CLAUDE, CHANGELOG.
+
+Deployment guardrail: follow the canonical delivery contract in `AGENTS.md`. Vercel Git Integration
+deploys `docs/` automatically from `main`; tag workflows publish GitHub binaries and Homebrew only.
+Keep the docs versionless (`Latest release` → `/releases/latest`). Do not add `docs/scripts/`, a
+release-version file or environment source, Vercel CLI/API calls in GitHub Actions, Vercel
+credentials in tracked files or GitHub Actions, or a disabled Git deployment setting. Validate docs
+with `task docstest` and `task docsbuild`, then push `main`; never deploy them manually.
 
 ## Gotchas (learned the hard way)
 
@@ -88,6 +95,6 @@ temp git repo where git behavior matters.
 
 ## Related projects
 
-`~/projects/*`: **codemap** (closest convention match — copy it when in doubt), **vecgrep**,
+`~/projects/*`: **Bob**, **codemap** (closest convention match — copy it when in doubt), **vecgrep**,
 **cairntrace**, **glyphrun**, **file.cheap**, **vidtrace**, **tinyvault**, **veclite**, **mcphub**.
 Cortex composes them; it does not replace mcphub.
