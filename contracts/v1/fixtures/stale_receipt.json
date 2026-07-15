@@ -1,0 +1,96 @@
+{
+  "contractVersion": 1,
+  "id": "stale_receipt",
+  "generatedBy": "TestPublicConformanceDegradedAndEdgeCases/stale_receipt",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "verifying",
+    "summary": "task $TASK_ID_1 is verifying (repair callback contract)",
+    "warnings": [
+      "1 required verification(s) still missing",
+      "1 verification receipt(s) are stale because HEAD or the dirty diff changed"
+    ],
+    "nextActions": [
+      "cortex verify — rerun verifiers for the current revision/diff",
+      "cortex verify (rerun with specs)",
+      "cortex remember"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_verify",
+        "command": "cortex -C $WORKSPACE verify $TASK_ID_1 --actor agent-a",
+        "reason": "rerun missing or stale verifiers",
+        "arguments": {
+          "actor": "agent-a",
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        }
+      },
+      {
+        "tool": "cortex_remember",
+        "command": "cortex -C $WORKSPACE remember $TASK_ID_1",
+        "reason": "preserve the outcome once verification is adequate",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "outcome"
+        ]
+      }
+    ],
+    "rawAvailable": false,
+    "revision": 6,
+    "actor": "agent-a",
+    "changeLease": {
+      "actor": "agent-a",
+      "acquiredAt": "$TIMESTAMP",
+      "renewedAt": "$TIMESTAMP",
+      "expiresAt": "$TIMESTAMP"
+    },
+    "mode": "change",
+    "risk": "low",
+    "workspace": {
+      "root": "$WORKSPACE",
+      "repository": "$REPOSITORY",
+      "branch": "main",
+      "commitBefore": "$REVISION_OR_DIGEST_1"
+    },
+    "surfaces": [
+      "code"
+    ],
+    "unresolvedHypotheses": [
+      {
+        "id": "$HYPOTHESIS_ID_1",
+        "statement": "the callback implementation violates the contract",
+        "confidence": "low",
+        "status": "active"
+      }
+    ],
+    "verificationRequired": [
+      "codemap_review"
+    ],
+    "verificationOutcome": "unverified",
+    "claimProofTotal": 0,
+    "staleVerification": [
+      "$RECEIPT_ID_1"
+    ],
+    "missingVerification": [
+      "codemap_review"
+    ],
+    "scope": {
+      "scope": "within_boundary",
+      "risk": "low",
+      "changedFiles": [
+        "src/callback.go"
+      ]
+    },
+    "evidenceCount": 2,
+    "investigationRounds": 0,
+    "investigationBudget": 3
+  }
+}

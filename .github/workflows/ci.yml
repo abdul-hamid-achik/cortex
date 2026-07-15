@@ -81,5 +81,8 @@ jobs:
       - name: Install documentation dependencies
         run: bun install --cwd docs --frozen-lockfile
 
+      - name: Test documentation release contract
+        run: bun run --cwd docs test
+
       - name: Build documentation site
         run: bun run --cwd docs build

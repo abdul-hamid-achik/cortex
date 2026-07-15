@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "verify_no_diff_without_ack",
+  "generatedBy": "TestPublicConformanceStructuralRejections/verify_no_diff_without_ack",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "cannot verify change task: no diff/change record detected; make the planned change or explicitly acknowledge an intentional no-op",
+    "rawAvailable": false,
+    "error": "cannot verify change task: no diff/change record detected; make the planned change or explicitly acknowledge an intentional no-op"
+  }
+}

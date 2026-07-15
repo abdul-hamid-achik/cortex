@@ -1,0 +1,71 @@
+{
+  "contractVersion": 1,
+  "id": "pending_decision",
+  "generatedBy": "TestPublicConformanceDegradedAndEdgeCases/pending_decision",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "needs_human_decision",
+    "summary": "task $TASK_ID_1 is needs_human_decision (choose repair)",
+    "actions": [
+      {
+        "tool": "cortex_answer_decision",
+        "command": "cortex -C $WORKSPACE decision answer $TASK_ID_1 $DECISION_ID_1",
+        "reason": "the case is paused until a human chooses one recorded option",
+        "arguments": {
+          "decisionId": "$DECISION_ID_1",
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "answer",
+          "responder"
+        ],
+        "blockedBy": [
+          "pending human decision"
+        ]
+      }
+    ],
+    "rawAvailable": false,
+    "revision": 3,
+    "pausedFrom": "investigating",
+    "pendingDecision": {
+      "id": "$DECISION_ID_1",
+      "question": "Which repair should proceed?",
+      "options": [
+        {
+          "id": "small",
+          "label": "Small repair",
+          "consequence": "Touches one file"
+        },
+        {
+          "id": "broad",
+          "label": "Broad repair",
+          "consequence": "Touches several files"
+        }
+      ],
+      "requester": "agent-a",
+      "requestedAt": "$TIMESTAMP",
+      "status": "pending"
+    },
+    "mode": "change",
+    "risk": "medium",
+    "workspace": {
+      "root": "$WORKSPACE",
+      "repository": "$REPOSITORY",
+      "branch": "main",
+      "commitBefore": "$REVISION_OR_DIGEST_1"
+    },
+    "surfaces": [
+      "code"
+    ],
+    "verificationOutcome": "unverified",
+    "claimProofTotal": 0,
+    "evidenceCount": 1,
+    "investigationRounds": 0,
+    "investigationBudget": 3
+  }
+}

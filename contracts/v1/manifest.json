@@ -1,0 +1,42 @@
+{
+  "contractVersion": 1,
+  "classification": "public conformance corpus",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "groups": {
+    "coreLifecycleSuccess": [
+      "open_task",
+      "investigate",
+      "plan",
+      "begin_change",
+      "verify",
+      "status",
+      "remember",
+      "handoff"
+    ],
+    "structuralRejections": [
+      "plan_missing_disproof",
+      "plan_missing_boundary",
+      "begin_change_lease_conflict",
+      "verify_wrong_actor",
+      "verify_no_diff_without_ack",
+      "verify_missing_exact_contract",
+      "remember_unverified_without_ack",
+      "immutable_acceptance_mismatch"
+    ],
+    "degradedAndEdge": [
+      "tool_unavailable",
+      "blocked_command_verifier",
+      "stale_receipt",
+      "scope_unknown",
+      "pending_decision",
+      "bounded_handoff",
+      "proof_closure_overflow",
+      "unsupported_future_schema"
+    ],
+    "mcpTransport": [
+      "mcp_shared_envelope_success",
+      "mcp_shared_envelope_rejection",
+      "mcp_stdio_handshake"
+    ]
+  }
+}

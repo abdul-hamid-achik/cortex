@@ -1,4 +1,15 @@
 import { defineConfig } from 'vitepress'
+import { releaseLink, resolveReleaseVersion } from './release-version.mts'
+
+export function releaseNavigation(version: string | undefined, requireRelease = false) {
+  const releaseVersion = resolveReleaseVersion(version, requireRelease)
+  return { text: releaseVersion, link: releaseLink(releaseVersion) }
+}
+
+const publicRelease = releaseNavigation(
+  process.env.VITEPRESS_VERSION,
+  process.env.VERCEL_ENV === 'production',
+)
 
 export default defineConfig({
   title: 'Cortex',
@@ -41,10 +52,12 @@ export default defineConfig({
           { text: 'MCP server', link: '/mcp' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Case file', link: '/case-file' },
+          { text: 'Contract fixtures', link: '/contracts' },
+          { text: 'Evaluation', link: '/evaluation' },
           { text: 'FAQ', link: '/faq' },
         ],
       },
-      { text: 'v0.11.0', link: 'https://github.com/abdul-hamid-achik/cortex/releases' },
+      publicRelease,
     ],
     sidebar: [
       {
@@ -72,6 +85,8 @@ export default defineConfig({
           { text: 'For agents', link: '/agents' },
           { text: 'Adapters & ecosystem', link: '/adapters' },
           { text: 'The case file', link: '/case-file' },
+          { text: 'Public contracts', link: '/contracts' },
+          { text: 'Empirical evaluation', link: '/evaluation' },
           { text: 'Documentation deployment', link: '/site-deployment' },
         ],
       },

@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "remember_unverified_without_ack",
+  "generatedBy": "TestPublicConformanceStructuralRejections/remember_unverified_without_ack",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed",
+    "rawAvailable": false,
+    "error": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed"
+  }
+}

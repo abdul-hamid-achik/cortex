@@ -1,0 +1,96 @@
+{
+  "contractVersion": 1,
+  "id": "status",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/status",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "verifying",
+    "summary": "task $TASK_ID_1 is verifying (repair callback contract)",
+    "nextActions": [
+      "cortex remember — preserve the verified outcome"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_remember",
+        "command": "cortex -C $WORKSPACE remember $TASK_ID_1",
+        "reason": "preserve the verified outcome, evidence, and uncertainty",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "outcome"
+        ]
+      }
+    ],
+    "rawAvailable": false,
+    "revision": 7,
+    "actor": "agent-a",
+    "changeLease": {
+      "actor": "agent-a",
+      "acquiredAt": "$TIMESTAMP",
+      "renewedAt": "$TIMESTAMP",
+      "expiresAt": "$TIMESTAMP"
+    },
+    "mode": "change",
+    "risk": "low",
+    "workspace": {
+      "root": "$WORKSPACE",
+      "repository": "$REPOSITORY",
+      "branch": "main",
+      "commitBefore": "$REVISION_OR_DIGEST_1"
+    },
+    "surfaces": [
+      "code"
+    ],
+    "unresolvedHypotheses": [
+      {
+        "id": "$HYPOTHESIS_ID_1",
+        "statement": "the callback implementation violates the contract",
+        "confidence": "low",
+        "status": "active"
+      }
+    ],
+    "verificationRequired": [
+      "codemap_review"
+    ],
+    "verificationDone": [
+      "structural review of the diff",
+      "callback diff is structurally sound"
+    ],
+    "verificationOutcome": "verified",
+    "claimProofs": [
+      {
+        "claimId": "claim_82b6e0b527570fb2",
+        "statement": "callback diff is structurally sound",
+        "statementDigest": "sha256:$REVISION_OR_DIGEST_2",
+        "receiptId": "$RECEIPT_ID_1",
+        "batchId": "$BATCH_ID_1",
+        "status": "passed",
+        "binding": "bound",
+        "evidence": [
+          "case://$TASK_ID_1/verification/$RECEIPT_ID_1",
+          "case://$TASK_ID_1/verification/$RECEIPT_ID_2"
+        ],
+        "revision": "$REVISION_OR_DIGEST_3",
+        "dirtyDigest": "sha256:$REVISION_OR_DIGEST_4",
+        "evidenceRefsOmitted": 1
+      }
+    ],
+    "claimProofTotal": 1,
+    "scope": {
+      "scope": "within_boundary",
+      "risk": "low",
+      "changedFiles": [
+        "src/callback.go"
+      ]
+    },
+    "evidenceCount": 6,
+    "investigationRounds": 1,
+    "investigationBudget": 3
+  }
+}

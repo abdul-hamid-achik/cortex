@@ -1,0 +1,32 @@
+{
+  "contractVersion": 1,
+  "id": "begin_change",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/begin_change",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "changing",
+    "summary": "change begun by agent-a within the declared boundary",
+    "nextActions": [
+      "make edits within the declared boundary",
+      "renew the change lease before it expires",
+      "cortex verify when the change is ready"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_verify",
+        "command": "cortex -C $WORKSPACE verify $TASK_ID_1 --actor agent-a",
+        "reason": "prove the edited workspace and detect scope drift",
+        "arguments": {
+          "actor": "agent-a",
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        }
+      }
+    ],
+    "rawAvailable": false
+  }
+}

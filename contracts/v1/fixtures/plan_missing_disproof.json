@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "plan_missing_disproof",
+  "generatedBy": "TestPublicConformanceStructuralRejections/plan_missing_disproof",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "plan rejected: hypothesis $HYPOTHESIS_ID_1 has no disproof path (set disproveBy)",
+    "rawAvailable": false,
+    "error": "plan rejected: hypothesis $HYPOTHESIS_ID_1 has no disproof path (set disproveBy)"
+  }
+}

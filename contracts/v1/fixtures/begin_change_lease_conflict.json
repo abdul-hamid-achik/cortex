@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "begin_change_lease_conflict",
+  "generatedBy": "TestPublicConformanceStructuralRejections/begin_change_lease_conflict",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "change lease is held by \"agent-a\" until $TIMESTAMP",
+    "rawAvailable": false,
+    "error": "change lease is held by \"agent-a\" until $TIMESTAMP"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "contractVersion": 1,
+  "id": "mcp_stdio_handshake",
+  "generatedBy": "TestMCPStdioSubprocessHandshakeUsesCleanNewlineFraming",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "newline-delimited JSON-RPC over stdio; clean shutdown and empty stderr are required",
+  "payload": {
+    "cleanShutdown": true,
+    "framing": "newline-delimited-json-rpc",
+    "stderr": "",
+    "toolCount": 17,
+    "tools": [
+      "cortex_abort_task",
+      "cortex_answer_decision",
+      "cortex_begin_change",
+      "cortex_handoff",
+      "cortex_investigate",
+      "cortex_note",
+      "cortex_open_task",
+      "cortex_plan",
+      "cortex_read_artifact",
+      "cortex_read_evidence",
+      "cortex_recall_cases",
+      "cortex_remember",
+      "cortex_request_decision",
+      "cortex_resolve",
+      "cortex_start_task",
+      "cortex_status",
+      "cortex_verify"
+    ],
+    "transport": "stdio"
+  }
+}

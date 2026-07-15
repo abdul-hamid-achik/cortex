@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -36,9 +37,18 @@ type HypothesisInput struct {
 // gates the transition into a changing/verifying-ready state. It rejects any
 // plan whose hypotheses lack a disproof path.
 func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
+	return k.PlanContext(context.Background(), in)
+}
+
+// PlanContext is the context-aware planning gate used by CLI and MCP. Plan is
+// retained for compatibility with existing in-process clients and tests.
+func (k *Kernel) PlanContext(ctx context.Context, in PlanInput) (domain.Envelope, error) {
 	c, err := k.store.Load(in.TaskID)
 	if err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil
+	}
+	if c.Workspace.Root != k.cfg.Workspace {
+		return errEnvelope(in.TaskID, "task belongs to a different workspace"), nil
 	}
 	if c.Status != domain.PhaseInvestigating && c.Status != domain.PhasePlanned {
 		return errEnvelope(in.TaskID, fmt.Sprintf("cannot plan in phase %q; investigate first", c.Status)), nil
@@ -130,12 +140,23 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 		return errEnvelope(in.TaskID, "plan rejected: "+err.Error()), nil
 	}
 
+	// Bob is advisory and read-only. Stage its bounded path classifications
+	// before the plan transaction, but do not publish evidence/raw until this
+	// plan wins the optimistic-revision commit below.
+	bobBoundary := k.inspectBobBoundary(ctx, c, boundary.Files)
+	if err := ctx.Err(); err != nil {
+		return errEnvelope(c.ID, "plan canceled before commit: "+err.Error()), err
+	}
+	bobFacts, bobRaws, bobRetentionWarnings := k.stageBobBoundary(c, bobBoundary.captures)
+	bobWarnings := boundedBobWarnings(append(append([]string(nil), bobBoundary.warnings...), bobRetentionWarnings...))
+
 	// Commit the case, plan, and hypothesis snapshots under one revision-guarded
-	// task transaction. A losing concurrent plan cannot overwrite the winner's
-	// companion files before discovering its stale case revision.
+	// task transaction together with Bob's bounded evidence/raw provenance. A
+	// losing concurrent plan cannot leave any companion file behind.
 	c.ChangeBoundary = boundary
 	c.VerificationRequired = verification
 	c.TimeoutOverrides = timeouts
+	k.retainBobBoundaryNotes(c, bobWarnings)
 	from := c.Status
 	if c.Status != domain.PhasePlanned {
 		if !domain.CanTransition(c.Status, domain.PhasePlanned) {
@@ -143,7 +164,7 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 		}
 		c.Status = domain.PhasePlanned
 	}
-	if err := k.store.CommitPlan(c, plan, hyps); err != nil {
+	if err := k.store.CommitPlanBundleContext(ctx, c, plan, hyps, bobFacts, bobRaws); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
 	if from != c.Status {
@@ -165,6 +186,15 @@ func (k *Kernel) Plan(in PlanInput) (domain.Envelope, error) {
 		RawAvailable: false,
 	}
 	k.attachStructuredActions(&env, c)
+	if len(bobBoundary.actions) > 0 {
+		env.Actions = append(k.redactStructuredActions(bobBoundary.actions), env.Actions...)
+	}
+	env.Warnings = append(env.Warnings, k.redactStrings(bobWarnings)...)
+	env.Degraded = bobBoundary.degraded || len(bobRetentionWarnings) > 0
+	env.RawAvailable = hasRawEvidence(bobFacts)
+	for _, fact := range bobFacts {
+		env.Facts = append(env.Facts, domain.ToFactView(fact))
+	}
 	// A change task should have evidence supporting each hypothesis
 	// before it enters changing. This is surfaced as a warning (not a hard
 	// gate) so a hypothesis can be recorded before formal evidence exists, but
@@ -226,6 +256,10 @@ func (k *Kernel) sanitizeBoundary(boundary domain.ChangeBoundary) (domain.Change
 		}
 		boundary.Files[i] = strings.TrimPrefix(cleaned, "./")
 	}
+	// Absolute and relative spellings can collapse to the same canonical path.
+	// Deduplicate after canonicalization so scope checks and Bob call budgets
+	// operate on one path identity.
+	boundary.Files = dedupeStr(boundary.Files)
 	boundary.Reason = k.red.String(boundary.Reason)
 	return boundary, nil
 }

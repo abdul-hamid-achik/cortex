@@ -10,6 +10,7 @@ they **never fabricate** a missing tool's output.
 | Adapter | Binary | Capability | Used for |
 |---|---|---|---|
 | git | `git` | structure | workspace identity + changed-files (scope drift) |
+| Bob | `bob` | repository contract | desired-state orientation + bounded path-ownership warnings |
 | codemap | `codemap` | structure | impact/blast-radius, callers, diff review, behavior annotations |
 | vecgrep | `vecgrep` | discover | semantic/keyword search, similarity, memory |
 | cairntrace | `cairn` | browser | browser behavior verification |
@@ -27,9 +28,15 @@ Every specialist tool is **optional at runtime**. When a binary is absent or unh
 - `Execute()` returns a result with `status: unavailable` and a single `tool_unavailable` fact;
 - verification depending on that surface is marked `blocked`/`not_run`, never invented.
 
-When a tool runs but returns output Cortex can't parse, the result is `partial` (`degraded`): the
-first line of the tool's message becomes a warning and the raw (redacted) output is retained as
-evidence. This keeps Cortex honest under version skew rather than crashing or guessing.
+Bob is additionally gated by the repository: Cortex does not invoke it unless the workspace has a
+`bob.yaml`. If that manifest exists but Bob is missing or its contract is invalid, orientation
+records an explicit degraded warning and corrective action, then the normal Cortex workflow
+continues. A repository without `bob.yaml` has no Bob degradation to report.
+
+When a tool runs but returns output Cortex cannot parse, the adapter reports `partial` only when a
+strict, useful subset remains; otherwise it reports `error`. Bounded redacted raw may be retained
+case-only when it has valid provenance, but malformed output is never promoted into evidence. This
+keeps Cortex honest under version skew rather than crashing or guessing.
 
 Transient spawn/transport failures on read-only queries retry automatically up to
 `budget.max_auto_retries_per_tool` (default 1; 0 disables). A still-failing call reports
@@ -42,6 +49,7 @@ The adapters intentionally speak each tool's real dialect:
 
 | Tool | Machine output | Limit | Health |
 |---|---|---|---|
+| Bob | `--json` (persistent) | compact context + bounded path calls | `bob --json version` |
 | codemap | `--json` (bool) | `--top`, `--depth` | `codemap doctor` |
 | vecgrep | `-f json` (enum) | `-n` | `vecgrep --version` (no `doctor`) |
 | fcheap | `--json` (persistent) | `--limit` | `fcheap doctor` |
@@ -49,6 +57,38 @@ The adapters intentionally speak each tool's real dialect:
 | glyph | `--format json` (precedes sub-flags) | — | `glyph doctor` |
 | tvault | `--json` (persistent) | — | `tvault doctor --json` |
 | veclite | `--json` (persistent) | `--top-k` | `veclite version` (no `doctor`; embeddings via ollama) |
+
+## Bob repository contract
+
+The optional Bob adapter consumes the stable BOB-5 schema published with Bob v0.4.0. It is a
+read-only local CLI integration, not an MCP client. Cortex calls direct argv with no shell:
+
+```text
+bob --json context <absolute-workspace> --profile compact
+bob --json path --workspace <absolute-workspace> -- <relative-path>
+```
+
+At orientation, compact context records the recipe, repository state, and contract/context digest
+as `repository_contract` evidence. During planning, Cortex deduplicates and caps declared file
+paths before classifying them. A Bob-owned, reserved, manifest-controlled, or unsafe path produces
+a warning; a human-owned extension point does not. Cortex preserves the declared boundary and only
+suggests a playbook ID when Bob returned that exact ID.
+
+Direct Bob facts may be `high` confidence because they are authoritative about Bob's desired state
+and whole-file ownership. They do **not** prove application behavior and cannot satisfy browser,
+terminal, code-correctness, artifact, secret, or general completion claims. “Outside Bob
+ownership” likewise means only that Bob does not own the file; it is not a safety or correctness
+verdict.
+
+Bob's CLI envelope and inner schema are decoded strictly. Unknown future schemas, a mismatched
+workspace, invalid state, timeout, or truncated required output degrade explicitly. Raw output is
+bounded and redacted before optional case-file retention, and is never returned to the model by
+default.
+
+Plan responses can emit read-only structured continuations named `bob_path` and `bob_playbook`.
+They carry the exact workspace/path or returned playbook ID for an approved local tool registry;
+they are not Cortex MCP tools. Cortex never calls `bob apply`, recreates Bob's planner, renders
+recipes, manages Bob's lock, or rewrites the plan automatically.
 
 ## Secret safety
 

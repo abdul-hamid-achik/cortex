@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "unsupported_future_schema",
+  "generatedBy": "TestPublicConformanceDegradedAndEdgeCases/unsupported_future_schema",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "unknown future fixture schemas are rejected before payload consumption",
+  "payload": {
+    "error": "unsupported contract fixture version 2; supported version is 1",
+    "input": {
+      "contractVersion": 2,
+      "id": "future"
+    }
+  }
+}

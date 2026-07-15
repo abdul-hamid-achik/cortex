@@ -1,6 +1,7 @@
 package casefs
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +19,8 @@ import (
 // with the new hypotheses snapshot (Resolve uses this for provenance).
 type HypothesesUpdate func(current []domain.Hypothesis) (next []domain.Hypothesis, evidence *domain.Evidence, err error)
 
-// RawRecord is one already-redacted, size-bounded verifier blob staged with a
-// verification commit. ID is the raw_<token> segment used by case:// refs.
+// RawRecord is one already-redacted, size-bounded tool blob staged with an
+// atomic case transaction. ID is the raw_<token> segment used by case:// refs.
 type RawRecord struct {
 	ID      string
 	Content string
@@ -117,12 +118,36 @@ func (s *Store) CommitVerificationBundle(c *domain.CaseFile, evidence []domain.E
 	})
 }
 
-// CommitPlan atomically arbitrates a plan against c.Revision and publishes a
-// mutually consistent case.json, plan.json, and hypotheses.json. Companion
-// files are staged before any target is replaced; case.json is the final commit
-// anchor. A losing writer returns RevisionConflictError without touching any
-// companion snapshot.
+// CommitPlan preserves the historical plan-only API while delegating to the
+// richer atomic bundle used when planning also produces repository-contract
+// evidence and raw provenance.
 func (s *Store) CommitPlan(c *domain.CaseFile, plan domain.Plan, hypotheses []domain.Hypothesis) error {
+	return s.CommitPlanBundle(c, plan, hypotheses, nil, nil)
+}
+
+// CommitPlanBundle atomically arbitrates a plan against c.Revision and
+// publishes a mutually consistent case.json, plan.json, hypotheses.json,
+// evidence ledger, and raw provenance set. Companion files are staged before
+// any target is replaced; case.json is the final commit anchor. Evidence and
+// raw IDs are immutable and write-once: an exact retry is a no-op, while the
+// same ID with different content is rejected. A stale exact retry of an
+// already-published bundle adopts the durable revision; a losing distinct
+// writer returns RevisionConflictError without touching any companion state.
+func (s *Store) CommitPlanBundle(c *domain.CaseFile, plan domain.Plan, hypotheses []domain.Hypothesis, evidence []domain.Evidence, raws []RawRecord) error {
+	return s.CommitPlanBundleContext(context.Background(), c, plan, hypotheses, evidence, raws)
+}
+
+// CommitPlanBundleContext is CommitPlanBundle with cancellation honored until
+// the atomic filesystem publication begins. Once commitStagedFiles starts, it
+// completes or rolls back as one non-cancellable unit so cancellation cannot
+// expose a half-published case.
+func (s *Store) CommitPlanBundleContext(ctx context.Context, c *domain.CaseFile, plan domain.Plan, hypotheses []domain.Hypothesis, evidence []domain.Evidence, raws []RawRecord) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c == nil || c.ID == "" {
 		return errors.New("case has no id")
 	}
@@ -144,19 +169,91 @@ func (s *Store) CommitPlan(c *domain.CaseFile, plan domain.Plan, hypotheses []do
 	if c.Status != domain.PhasePlanned {
 		return errors.New("committed plan case must be in planned phase")
 	}
+	evidenceIDs := make(map[string]bool, len(evidence))
+	for _, item := range evidence {
+		if err := item.Validate(); err != nil {
+			return err
+		}
+		if item.ID == "" || evidenceIDs[item.ID] {
+			return fmt.Errorf("evidence id %s is empty or duplicated", item.ID)
+		}
+		evidenceIDs[item.ID] = true
+	}
+	rawIDs := make(map[string]bool, len(raws))
+	for _, raw := range raws {
+		if err := validateStorageName(raw.ID, "raw id"); err != nil {
+			return err
+		}
+		if rawIDs[raw.ID] {
+			return fmt.Errorf("raw id %s is duplicated", raw.ID)
+		}
+		if len(raw.Content) > maxRawFileBytes {
+			return fmt.Errorf("raw output %s exceeds %d byte limit", raw.ID, maxRawFileBytes)
+		}
+		rawIDs[raw.ID] = true
+	}
 
-	return s.withTaskLock(c.ID, func() error {
-		_, actual, err := s.currentCaseForUpdateUnlocked(c)
+	entered := false
+	err := s.withTaskLock(c.ID, func() error {
+		entered = true
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		current, actual, err := s.currentCaseForUpdateUnlocked(c)
+		if err != nil {
+			if errors.Is(err, ErrRevisionConflict) {
+				committed, checkErr := s.planBundleMatchesUnlocked(current, c, plan, hypotheses, evidence, raws)
+				if checkErr != nil {
+					return checkErr
+				}
+				if committed {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					adoptCaseSnapshot(c, &current)
+					return nil
+				}
+			}
+			return err
+		}
+		committed, err := s.planBundleMatchesUnlocked(current, c, plan, hypotheses, evidence, raws)
 		if err != nil {
 			return err
 		}
+		if committed {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			adoptCaseSnapshot(c, &current)
+			return nil
+		}
 		next := nextCaseSnapshot(c, actual)
-		files, err := s.stageTransactionFiles(c.ID, next.Revision, []transactionValue{
-			{name: "plan.json", value: plan},
-			{name: "hypotheses.json", value: hypotheses},
-			{name: "case.json", value: &next}, // final entry is the commit anchor
-		})
+		values := make([]transactionValue, 0, len(raws)+4)
+		rawValues, err := s.planRawValuesUnlocked(c.ID, raws)
 		if err != nil {
+			return err
+		}
+		values = append(values, rawValues...)
+		if len(evidence) > 0 {
+			ledger, changed, err := s.planEvidenceLedgerUnlocked(c.ID, evidence)
+			if err != nil {
+				return err
+			}
+			if changed {
+				values = append(values, transactionValue{name: "evidence.jsonl", bytes: ledger})
+			}
+		}
+		values = append(values,
+			transactionValue{name: "plan.json", value: plan},
+			transactionValue{name: "hypotheses.json", value: hypotheses},
+			transactionValue{name: "case.json", value: &next}, // final entry is the commit anchor
+		)
+		files, err := s.stageTransactionFiles(c.ID, next.Revision, values)
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			removeStagedFiles(files)
 			return err
 		}
 		if err := s.commitStagedFiles(c.ID, next.Revision, files); err != nil {
@@ -165,6 +262,143 @@ func (s *Store) CommitPlan(c *domain.CaseFile, plan domain.Plan, hypotheses []do
 		adoptCaseSnapshot(c, &next)
 		return nil
 	})
+	if err != nil && !entered && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+func (s *Store) planBundleMatchesUnlocked(current domain.CaseFile, proposed *domain.CaseFile, plan domain.Plan, hypotheses []domain.Hypothesis, evidence []domain.Evidence, raws []RawRecord) (bool, error) {
+	if !equivalentCaseContent(current, *proposed) {
+		return false, nil
+	}
+	durablePlan, err := s.loadPlanUnlocked(current.ID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !reflect.DeepEqual(durablePlan, plan) {
+		return false, nil
+	}
+	durableHypotheses, err := s.hypothesesUnlocked(current.ID)
+	if err != nil {
+		return false, err
+	}
+	if !reflect.DeepEqual(durableHypotheses, hypotheses) {
+		return false, nil
+	}
+	durableEvidence, err := s.evidenceUnlocked(current.ID)
+	if err != nil {
+		return false, err
+	}
+	byEvidenceID := make(map[string][]domain.Evidence, len(durableEvidence))
+	for _, item := range durableEvidence {
+		byEvidenceID[item.ID] = append(byEvidenceID[item.ID], item)
+	}
+	for _, item := range evidence {
+		matches := byEvidenceID[item.ID]
+		if len(matches) == 0 {
+			return false, nil
+		}
+		if len(matches) != 1 {
+			return false, fmt.Errorf("evidence id %s appears more than once", item.ID)
+		}
+		if !reflect.DeepEqual(matches[0], item) {
+			return false, fmt.Errorf("evidence id %s already exists with different content", item.ID)
+		}
+	}
+	for _, raw := range raws {
+		data, err := readFileLimited(filepath.Join(s.dir(current.ID), "raw", raw.ID+".txt"), maxRawFileBytes)
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if string(data) != raw.Content {
+			return false, fmt.Errorf("raw id %s already exists with different content", raw.ID)
+		}
+	}
+	return true, nil
+}
+
+func equivalentCaseContent(left, right domain.CaseFile) bool {
+	left.Revision, right.Revision = 0, 0
+	left.UpdatedAt, right.UpdatedAt = time.Time{}, time.Time{}
+	return reflect.DeepEqual(left, right)
+}
+
+func (s *Store) planRawValuesUnlocked(taskID string, raws []RawRecord) ([]transactionValue, error) {
+	values := make([]transactionValue, 0, len(raws))
+	for _, raw := range raws {
+		name := filepath.Join("raw", raw.ID+".txt")
+		data, err := readFileLimited(filepath.Join(s.dir(taskID), name), maxRawFileBytes)
+		switch {
+		case err == nil && string(data) == raw.Content:
+			continue
+		case err == nil:
+			return nil, fmt.Errorf("raw id %s already exists with different content", raw.ID)
+		case !errors.Is(err, os.ErrNotExist):
+			return nil, err
+		}
+		values = append(values, transactionValue{name: name, bytes: []byte(raw.Content)})
+	}
+	return values, nil
+}
+
+func (s *Store) planEvidenceLedgerUnlocked(taskID string, evidence []domain.Evidence) ([]byte, bool, error) {
+	path := filepath.Join(s.dir(taskID), "evidence.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, false, err
+	}
+	newByID := make(map[string]domain.Evidence, len(evidence))
+	for _, item := range evidence {
+		newByID[item.ID] = item
+	}
+	seen := make(map[string]int, len(evidence))
+	existing := make(map[string]domain.Evidence, len(evidence))
+	if err := readJSONL(path, func(line []byte) error {
+		var item domain.Evidence
+		if err := json.Unmarshal(line, &item); err != nil {
+			return err
+		}
+		if _, tracked := newByID[item.ID]; tracked {
+			seen[item.ID]++
+			existing[item.ID] = item
+		}
+		return nil
+	}); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, false, err
+	}
+	changed := false
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	for _, item := range evidence {
+		switch seen[item.ID] {
+		case 0:
+			line, err := json.Marshal(item)
+			if err != nil {
+				return nil, false, err
+			}
+			if len(line) > maxLedgerRecordBytes {
+				return nil, false, fmt.Errorf("evidence.jsonl record exceeds %d byte limit", maxLedgerRecordBytes)
+			}
+			data = append(data, line...)
+			data = append(data, '\n')
+			changed = true
+		case 1:
+			if !reflect.DeepEqual(existing[item.ID], item) {
+				return nil, false, fmt.Errorf("evidence id %s already exists with different content", item.ID)
+			}
+		default:
+			return nil, false, fmt.Errorf("evidence id %s appears more than once", item.ID)
+		}
+	}
+	return data, changed, nil
 }
 
 // UpdateHypotheses performs a case-revision-guarded read-modify-write of the
@@ -358,6 +592,13 @@ type stagedFile struct {
 	existed bool
 }
 
+func removeStagedFiles(files []stagedFile) {
+	for _, file := range files {
+		_ = os.Remove(file.stage)
+		_ = os.Remove(file.stage + ".tmp")
+	}
+}
+
 const transactionJournalName = ".transaction.json"
 
 type transactionJournal struct {
@@ -374,19 +615,13 @@ type transactionJournalFile struct {
 
 func (s *Store) stageTransactionFiles(taskID string, revision uint64, values []transactionValue) ([]stagedFile, error) {
 	files := make([]stagedFile, 0, len(values))
-	cleanup := func() {
-		for _, file := range files {
-			_ = os.Remove(file.stage)
-			_ = os.Remove(file.stage + ".tmp")
-		}
-	}
 	for _, item := range values {
 		target := filepath.Join(s.dir(taskID), item.name)
 		stage := fmt.Sprintf("%s.txn-%d", target, revision)
 		old, err := os.ReadFile(target)
 		existed := err == nil
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			cleanup()
+			removeStagedFiles(files)
 			return nil, err
 		}
 		file := stagedFile{target: target, stage: stage, old: old, existed: existed}
@@ -397,7 +632,7 @@ func (s *Store) stageTransactionFiles(taskID string, revision uint64, values []t
 			err = writeJSON(stage, item.value)
 		}
 		if err != nil {
-			cleanup()
+			removeStagedFiles(files)
 			return nil, err
 		}
 	}

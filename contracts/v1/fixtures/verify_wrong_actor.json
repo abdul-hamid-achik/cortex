@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "verify_wrong_actor",
+  "generatedBy": "TestPublicConformanceStructuralRejections/verify_wrong_actor",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "active change lease belongs to \"agent-a\", not \"agent-b\"",
+    "rawAvailable": false,
+    "error": "active change lease belongs to \"agent-a\", not \"agent-b\""
+  }
+}

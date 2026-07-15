@@ -37,7 +37,7 @@ tasks:
       - 'echo "glyph:      $(glyph --version 2>/dev/null || echo missing)"'
       - 'echo "bun:        $(bun --version 2>/dev/null || echo missing)"'
       - 'echo "--- sibling tools (adapters degrade gracefully when missing) ---"'
-      - 'for t in codemap vecgrep cairn glyph fcheap tvault mcphub; do printf "%-10s %s\n" "$t" "$(command -v $t 2>/dev/null || echo missing)"; done'
+      - 'for t in bob codemap vecgrep cairn glyph fcheap tvault mcphub; do printf "%-10s %s\n" "$t" "$(command -v $t 2>/dev/null || echo missing)"; done'
 
   setup:
     desc: Download and tidy Go modules
@@ -129,6 +129,20 @@ tasks:
     cmds:
       - go test ./internal/eval/... -run TestEvalHarness -v
 
+  trajectory-validate:
+    desc: Validate an empirical trajectory manifest without executing it
+    requires:
+      vars: [MANIFEST]
+    cmds:
+      - go run ./cmd/cortex-trajectory validate --manifest "{{.MANIFEST}}"
+
+  trajectory:
+    desc: Run an explicitly approved empirical trajectory outside ordinary CI
+    requires:
+      vars: [MANIFEST, LAUNCHER]
+    cmds:
+      - go run ./cmd/cortex-trajectory run --manifest "{{.MANIFEST}}" --launcher "{{.LAUNCHER}}"
+
   docsdeps:
     desc: Install docs (VitePress) dependencies with Bun
     cmds:
@@ -144,13 +158,19 @@ tasks:
     cmds:
       - bun run --cwd docs build
 
+  docstest:
+    desc: Test the documentation release-version contract
+    cmds:
+      - bun run --cwd docs test
+
   ship:
-    desc: Full pre-release gate (check + race + build + flows + docs)
+    desc: Full pre-release gate (check + race + build + flows + docs tests/build)
     cmds:
       - task: check
       - task: race
       - task: build
       - task: flows
+      - task: docstest
       - task: docsbuild
 
   clean:

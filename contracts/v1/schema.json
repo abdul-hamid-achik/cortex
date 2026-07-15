@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortexai.tools/contracts/v1/schema.json",
+  "title": "Cortex public conformance fixture v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "id",
+    "generatedBy",
+    "classification",
+    "sensitiveDataPolicy",
+    "sizeBehavior",
+    "payload"
+  ],
+  "properties": {
+    "contractVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "generatedBy": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "classification": { "enum": ["canonical", "illustrative"] },
+    "sensitiveDataPolicy": {
+      "const": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden"
+    },
+    "sizeBehavior": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "payload": {}
+  }
+}

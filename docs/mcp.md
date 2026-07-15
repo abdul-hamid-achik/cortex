@@ -1,5 +1,8 @@
 # MCP server
 
+The versioned [public conformance corpus](/contracts) includes shared-envelope success and rejection
+examples plus a real stdio handshake fixture for compatibility harnesses.
+
 Cortex speaks the Model Context Protocol over stdio so agents can drive the kernel directly.
 
 ```bash
@@ -23,6 +26,14 @@ session administration stay outside the model's default tool context.
 `sessions`, `timeline`, `metrics`, `overview`, `archive`, and `unarchive`. Profiles change exposure
 only; both call the same kernel and use the same case files.
 
+There is no `lite` profile. CTX-5 remains an empirical decision gate because this release has no
+reviewed real-model comparison of the current `agent` profile, that profile through MCPHub with six
+pins, a frozen `lite` candidate, and lazy resolution through structured actions—and no profile
+design has been explicitly selected. Deterministic conformance/profile fixtures validate contracts,
+not model uplift. A smaller profile will be considered only if comparable reviewed runs show a
+meaningful quality improvement or context savings without materially worse recovery or human
+collaboration. See [Empirical trajectory runner: MCP profile decision gate](/evaluation#mcp-profile-decision-gate).
+
 ## Tools
 
 | Tool | Profile | Purpose |
@@ -30,7 +41,7 @@ only; both call the same kernel and use the same case files.
 | `cortex_start_task` | `agent`, `all` | deliberately create a fresh case; orient on git identity + tool health; optionally register immutable `acceptanceCriteria` |
 | `cortex_open_task` | `agent`, `all` | preferred retry-safe entry: idempotency key returns the same case; otherwise resume newest active normalized goal/mode/workspace/branch/criteria match or start once; a new case accepts criteria, actor, and parent linkage |
 | `cortex_investigate` | `agent`, `all` | route a question causally — bounded discovery (vecgrep/vidtrace) first, top candidates fed into codemap; structural evidence carries `derivedFrom` provenance |
-| `cortex_plan` | `agent`, `all` | the planning gate — hypotheses (with disproof and optional per-hypothesis evidence IDs), boundary, verification plan |
+| `cortex_plan` | `agent`, `all` | the planning gate — hypotheses (with disproof and optional per-hypothesis evidence IDs), boundary, verification plan; optionally adds bounded Bob path-ownership guidance when `bob.yaml` exists |
 | `cortex_begin_change` | `agent`, `all` | atomically acquire the actor's expiring change lease and enter `changing`; same-owner retries are safe |
 | `cortex_verify` | `agent`, `all` | run planned verifiers, detect scope drift, and bind typed `claimSpecs` to an exact surface/verifier/contract; leased tasks require the owner actor; intentional no-diff changes require `noOpAcknowledged` |
 | `cortex_remember` | `agent`, `all` | persist the outcome and complete; normal completion requires the canonical assessment to be `verified`, while explicit `verificationNotPossible` / `acceptFailed` acknowledgments preserve non-green outcomes |
@@ -108,6 +119,43 @@ A lifecycle rule rejection keeps this JSON envelope (`ok: false`, task ID, and a
 context) and also sets MCP `isError: true`. If an internal write fails after Cortex constructed an
 error envelope, that structured envelope is retained rather than replaced by plain error text.
 Clients may therefore use MCP error signaling without losing the fields needed to recover.
+
+### Cross-tool Bob actions
+
+When a Bob-managed repository needs an ownership check or Bob returned a related playbook, a plan
+can include these read-only structured continuations:
+
+```json
+[
+  {
+    "tool": "bob_path",
+    "command": "bob --json path --workspace /work/repo -- internal/cli/root.go",
+    "arguments": {
+      "workspace": "/work/repo",
+      "path": "internal/cli/root.go"
+    },
+    "reason": "confirm Bob ownership before editing",
+    "blockedBy": []
+  },
+  {
+    "tool": "bob_playbook",
+    "command": "bob --json playbook show add-cli-command /work/repo",
+    "arguments": {
+      "workspace": "/work/repo",
+      "id": "add-cli-command",
+      "operation": "show"
+    },
+    "reason": "inspect the exact Bob-supplied playbook before choosing an edit path",
+    "blockedBy": []
+  }
+]
+```
+
+`bob_path` and `bob_playbook` are action identifiers for an approved local tool registry; Cortex
+does not register them as MCP tools. It never emits a playbook action unless Bob supplied that
+exact ID, and it never converts these read-only actions into `bob apply`. Bob raw output stays
+bounded and redacted in the case store when policy permits and is not included in model-facing
+results by default.
 
 Raw downstream output is **not** included by default. Pass a `/raw/` ref only with its exact owning
 `taskId`. An fcheap ref must already be present in that task's artifact evidence or verification

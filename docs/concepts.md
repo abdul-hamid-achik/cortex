@@ -105,6 +105,24 @@ Confidence is a **policy band**, not the model's rhetorical certainty:
 `model_inference` and `human_report` evidence **cannot satisfy a verification requirement on their
 own**.
 
+#### Repository contract is guidance, not proof
+
+When a workspace contains `bob.yaml`, Cortex can consume Bob's compact repository contract during
+orientation and classify a bounded set of planned paths. These direct facts use the dedicated
+`repository_contract` kind and may be `high` confidence about the recipe, desired repository state,
+whole-file ownership, or an extension point.
+
+That confidence has a narrow meaning. A Bob fact cannot satisfy application-code correctness,
+browser, terminal, artifact, secret, or general behavior verification. Bob saying a path is outside
+its ownership is not a safety claim, and Bob saying desired state is clean is not proof that the
+change works. Cortex preserves this boundary in policy instead of asking a model to remember it.
+
+Path classifications inform the declared boundary without changing it. Bob-owned, reserved,
+manifest-controlled, and unsafe paths produce warnings; a human may still make an explicit choice
+while retaining the risk. A returned extension point stays warning-free, and Cortex recommends a
+playbook only when Bob supplied the exact ID. Missing or invalid Bob context degrades explicitly
+but does not stop unrelated Cortex work.
+
 ### Hypothesis
 
 A falsifiable explanation. It must state the proposed cause, its supporting evidence, a confidence
@@ -183,6 +201,10 @@ names the MCP `tool`, CLI `command`, known `arguments`, missing `inputs`, why it
 anything in `blockedBy`. Agents and UIs can therefore offer or invoke the next step without parsing
 English strings. Every task action carries its originating `workspace`; its CLI command is also
 rendered with `-C` and shell-safe quoting for people who copy it from Status, Show, or a handoff.
+
+Bob boundary guidance uses the same action envelope with read-only `bob_path` and `bob_playbook`
+continuations. They are recommendations for an approved local tool registry, not tools registered
+by Cortex's MCP server. Cortex never turns one into `bob apply` or any hidden mutation.
 
 ## Four layers of memory
 
@@ -280,4 +302,6 @@ Quality is reported separately from cost; overall adds cost as a lower-weight gu
 shows raw tool-call, latency, and estimated-cost deltas. Cases are macro-averaged so a claim-heavy
 case does not dominate. The checked-in deterministic pairs calibrate the scoring formulas and prove
 the model can report a regression; they are not empirical claims about how much Cortex improves an
-arbitrary agent. Real repository trials can populate the same paired observation model.
+arbitrary agent. Real repository trials can populate the same paired observation model through the
+separate, opt-in [empirical trajectory runner](/evaluation), which keeps launcher authority outside
+scenario YAML and judges every arm with an independent oracle.

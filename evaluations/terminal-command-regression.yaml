@@ -1,0 +1,43 @@
+schema_version: 1
+id: terminal-command-regression
+repository:
+  fixture: testrepos/cli-v1
+  digest: sha256:48dbc1efe071654ec5afaf49427b58679cc87d0b86919a0b67d8b56e943a83d9
+goal: fix the hello command exit behavior
+acceptance:
+  - id: terminal_help
+    statement: hello --help exits zero and documents --json
+surfaces: [code, terminal]
+allowed_changes:
+  - cmd/hello/main.go
+model:
+  identifier: example-model-pinned
+  build: example-provider-build-pinned
+  temperature: 0
+  seed: 42
+  context_budget_tokens: 32768
+arms:
+  - raw_tools
+  - cortex
+  - cortex_bob
+  - cortex_bob_local_agent
+budget:
+  max_tool_calls: 40
+  max_wall_time: 20m
+  max_oracle_wall_time: 5m
+  max_trace_bytes: 16777216
+  max_estimated_cost_micros: 100000
+oracle:
+  protected_paths:
+    - cmd/hello/main_test.go
+    - go.mod
+  commands:
+    - id: go_tests
+      argv: [go, test, ./...]
+      claim_ids: [terminal_help]
+      timeout: 2m
+  glyphrun_specs:
+    - id: terminal_help_flow
+      path: oracles/terminal-command-regression/hello.yml
+      claim_ids: [terminal_help]
+      timeout: 2m

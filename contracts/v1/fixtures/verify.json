@@ -1,0 +1,41 @@
+{
+  "contractVersion": 1,
+  "id": "verify",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/verify",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "verifying",
+    "summary": "1/1 claims verified; scope within_boundary",
+    "facts": [
+      {
+        "id": "$EVIDENCE_ID_1",
+        "claim": "callback diff is structurally sound",
+        "confidence": "high",
+        "source": "codemap",
+        "kind": "code_graph"
+      }
+    ],
+    "nextActions": [
+      "cortex remember — persist the outcome, evidence, and uncertainty once verification is adequate"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_remember",
+        "command": "cortex -C $WORKSPACE remember $TASK_ID_1",
+        "reason": "preserve the verified outcome, evidence, and uncertainty",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "outcome"
+        ]
+      }
+    ],
+    "rawAvailable": false
+  }
+}

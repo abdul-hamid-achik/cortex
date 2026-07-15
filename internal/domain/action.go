@@ -13,8 +13,8 @@ const (
 	// ActionLocalMutation writes to a local store Cortex owns: a durable memory,
 	// an fcheap stash, a codemap annotation.
 	ActionLocalMutation ActionClass = "local_mutation"
-	// ActionExternalMutation writes to a remote/outside system: send, deploy,
-	// publish, push. Requires explicit approval.
+	// ActionExternalMutation writes outside Cortex-owned state: repository apply,
+	// send, deploy, publish, push. Requires explicit approval.
 	ActionExternalMutation ActionClass = "external_mutation"
 	// ActionSecretedExecution runs with injected secrets (authenticated
 	// integration). Requires a secrets capability and redaction.
@@ -40,6 +40,14 @@ func ClassifyOp(tool, op string) ActionClass {
 		return ActionExternalMutation
 	}
 	switch tool {
+	case "bob":
+		// The optional Bob adapter implements only read-only context/path
+		// operations. Fail closed for every other present or future verb so a
+		// new Bob mutation cannot inherit the query layer's read-only default.
+		if op == "context" || op == "path" {
+			return ActionReadOnly
+		}
+		return ActionExternalMutation
 	case "command":
 		return ActionConfiguredExecution
 	case "fcheap":

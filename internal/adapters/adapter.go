@@ -19,6 +19,10 @@ const (
 	CapabilityArtifacts Capability = "artifacts" // fcheap
 	CapabilitySecrets   Capability = "secrets"   // tvault
 	CapabilityRecall    Capability = "recall"    // veclite cross-case disproof recall
+	// CapabilityRepositoryContract exposes deterministic desired-state and
+	// ownership facts. These facts guide orientation and boundaries; they are
+	// deliberately separate from behavioral verification capabilities.
+	CapabilityRepositoryContract Capability = "repository_contract" // Bob
 )
 
 // Status reports how much trust a result carries.
@@ -105,6 +109,10 @@ type Fact struct {
 	Location   *Location
 	URI        string
 	Sensitive  bool
+	// Attributes carries bounded adapter-local structure needed by kernel
+	// policy. It is not persisted or projected directly; the durable claim,
+	// URI, and location remain the public evidence contract.
+	Attributes map[string]string
 }
 
 // ArtifactRef is a durable-artifact pointer produced by an adapter.

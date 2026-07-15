@@ -6,22 +6,27 @@ import "time"
 type EvidenceKind string
 
 const (
-	KindCodeLocation    EvidenceKind = "code_location"
-	KindCodeGraph       EvidenceKind = "code_graph"
-	KindSemanticSearch  EvidenceKind = "semantic_search"
-	KindBrowserRun      EvidenceKind = "browser_run"
-	KindTerminalRun     EvidenceKind = "terminal_run"
-	KindUnitTest        EvidenceKind = "unit_test"
-	KindBuild           EvidenceKind = "build"
-	KindLint            EvidenceKind = "lint"
-	KindArtifact        EvidenceKind = "artifact"
-	KindHumanReport     EvidenceKind = "human_report"
-	KindModelInference  EvidenceKind = "model_inference"
-	KindToolUnavailable EvidenceKind = "tool_unavailable"
+	KindCodeLocation   EvidenceKind = "code_location"
+	KindCodeGraph      EvidenceKind = "code_graph"
+	KindSemanticSearch EvidenceKind = "semantic_search"
+	KindBrowserRun     EvidenceKind = "browser_run"
+	KindTerminalRun    EvidenceKind = "terminal_run"
+	KindUnitTest       EvidenceKind = "unit_test"
+	KindBuild          EvidenceKind = "build"
+	KindLint           EvidenceKind = "lint"
+	KindArtifact       EvidenceKind = "artifact"
+	KindHumanReport    EvidenceKind = "human_report"
+	KindModelInference EvidenceKind = "model_inference"
+	// KindRepositoryContract records deterministic repository desired-state,
+	// ownership, and extension-boundary facts. It is high-quality provenance
+	// for planning, but never proves application behavior by itself.
+	KindRepositoryContract EvidenceKind = "repository_contract"
+	KindToolUnavailable    EvidenceKind = "tool_unavailable"
 )
 
 // verifiableKinds are evidence classes that can satisfy a verification
-// requirement on their own. model_inference and human_report cannot.
+// requirement on their own. Model inference, human reports, search candidates,
+// and repository-contract guidance cannot.
 var verifiableKinds = map[EvidenceKind]bool{
 	KindCodeLocation: true, KindCodeGraph: true, KindBrowserRun: true,
 	KindTerminalRun: true, KindUnitTest: true, KindBuild: true,

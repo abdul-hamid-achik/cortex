@@ -1,0 +1,56 @@
+{
+  "contractVersion": 1,
+  "id": "open_task",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/open_task",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "investigating",
+    "summary": "started task $TASK_ID_1 (repair callback contract); oriented and ready to investigate",
+    "facts": [
+      {
+        "id": "ev_orientation_git",
+        "claim": "workspace $REPOSITORY on branch main at $REVISION_OR_DIGEST_1",
+        "confidence": "high",
+        "source": "git",
+        "kind": "code_location"
+      }
+    ],
+    "nextActions": [
+      "cortex investigate — discover by meaning, then resolve structure",
+      "treat search output as candidates, not proof"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_investigate",
+        "command": "cortex -C $WORKSPACE investigate $TASK_ID_1",
+        "reason": "gather evidence before choosing a change",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "question"
+        ]
+      },
+      {
+        "tool": "cortex_plan",
+        "command": "cortex -C $WORKSPACE plan $TASK_ID_1",
+        "reason": "declare hypotheses, disproof paths, boundary, and verification",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "hypotheses",
+          "uncertainty",
+          "files"
+        ]
+      }
+    ],
+    "rawAvailable": false
+  }
+}

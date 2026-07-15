@@ -143,6 +143,11 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 	var down []string
 	for _, h := range health {
 		if !h.Available {
+			// Bob is optional repository-contract guidance, not a verification
+			// surface. Its degradation is reported precisely by orientWithBob.
+			if h.Tool == "bob" {
+				continue
+			}
 			down = append(down, h.Tool)
 		}
 	}
@@ -152,6 +157,16 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 		warnings = append(warnings, "tools unavailable: "+joinStr(down, ", ")+" — verification on their surfaces will be blocked")
 	}
 
+	// Optional Bob orientation is strictly repository-contract evidence. It may
+	// improve desired-state awareness, but never blocks ordinary Cortex work or
+	// satisfies behavioral verification.
+	bob, bobErr := k.orientWithBob(ctx, c)
+	if bobErr != nil {
+		return errEnvelope(c.ID, "orientation canceled before commit: "+bobErr.Error()), bobErr
+	}
+	facts = append(facts, bob.facts...)
+	warnings = append(warnings, bob.warnings...)
+
 	// Cross-case disproof recall surfaces prior related cases as
 	// low-confidence orientation so a weak model reads prior disproofs before
 	// re-deriving a theory. Best-effort — a missing veclite is warn-once.
@@ -159,6 +174,9 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 	facts = append(facts, prior...)
 	if recallWarn != "" {
 		warnings = append(warnings, recallWarn)
+	}
+	if err := ctx.Err(); err != nil {
+		return errEnvelope(c.ID, "orientation canceled before commit: "+err.Error()), err
 	}
 
 	// orienting → investigating: identity and tool health are known.
@@ -206,6 +224,10 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 		verb = "recovered"
 	}
 	env := k.envelope(c, fmt.Sprintf("%s task %s (%s); oriented and ready to investigate", verb, c.ID, c.Goal), facts, warnings, next)
+	if len(bob.actions) > 0 {
+		env.Actions = append(k.redactStructuredActions(bob.actions), env.Actions...)
+	}
+	env.Degraded = bob.degraded
 	return env, nil
 }
 

@@ -17,7 +17,9 @@ Work through the task workflow. Cortex enforces the discipline; you supply the j
    results as evidence with a confidence band. A `low`/`medium` hit is a lead, not a conclusion.
 3. **Before editing, plan.** `cortex_plan` requires a testable hypothesis **with a disproof
    path**, a change boundary, and a verification plan. It rejects plans without a disproof path —
-   restating a hypothesis more confidently will not get you through the gate.
+   restating a hypothesis more confidently will not get you through the gate. In a Bob-managed
+   repository, also read any bounded ownership warning attached to a declared file; it is planning
+   guidance, not behavioral proof or an automatic rejection.
 4. **Claim change ownership before editing.** `cortex_begin_change` atomically acquires an
    expiring lease for the actor and moves the task to `changing`. A same-owner retry is safe; a
    different active owner is rejected. Pass the same actor to `cortex_verify` while the lease is
@@ -38,6 +40,31 @@ Work through the task workflow. Cortex enforces the discipline; you supply the j
    legacy tasks but never bypass a registered acceptance contract.
 8. **Never request or expose secret values.** Use `tvault` capability checks and scoped execution
    only.
+
+## Bob-aware repositories
+
+When `bob.yaml` exists and Bob exposes the compatible BOB-5 schema published in v0.4.0,
+orientation records a compact `repository_contract` fact. Planning then checks a deduplicated,
+capped set of concrete boundary files. A missing binary, invalid manifest, unsupported future
+schema, or malformed result appears as a degraded warning and corrective continuation; it does not
+manufacture context or stop unrelated work.
+
+Treat Bob facts as authoritative only about Bob's repository contract. Even a `high`-confidence
+ownership fact cannot prove code, browser, terminal, artifact, or secret-dependent behavior. Keep
+the disproof path and verification plan intact.
+
+If Cortex returns `bob_path`, invoke the read-only action with its exact `workspace` and `path`; if
+it returns `bob_playbook`, use only the supplied ID with `operation: "show"`. These actions project
+the direct commands below and are not Cortex MCP tools:
+
+```text
+bob --json path --workspace <absolute-workspace> -- <relative-path>
+bob --json playbook show <id> <absolute-workspace>
+```
+
+Never infer a playbook ID, rewrite the Cortex plan from Bob output, or turn a read-only continuation
+into `bob apply`. Any repository mutation remains an explicit human-authorized operation outside
+this adapter.
 
 ## Why this helps
 

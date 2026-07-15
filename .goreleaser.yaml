@@ -4,7 +4,7 @@ project_name: cortex
 
 before:
   hooks:
-    - go mod tidy
+    - go mod tidy -diff
 
 builds:
   - id: cortex
@@ -67,7 +67,7 @@ homebrew_casks:
     # Keep this a SINGLE line: GoReleaser renders each caveat line as a separate
     # Ruby string literal in the `caveats do … end` block, and the block returns
     # only its last expression — a multi-line caveat drops all but the last line.
-    caveats: "Git is required for revision-bound verification. Run `cortex serve` for the compact 17-tool agent MCP profile (default), or `cortex serve --profile all` for the full 24-tool operator surface; use the `cortex` CLI for direct operation (`--json` for agents). Sibling tools (codemap, vecgrep, cairntrace, glyphrun, fcheap, tvault) are optional — every adapter degrades safely when its binary is absent."
+    caveats: "Git is required for revision-bound verification. Run `cortex serve` for the compact 17-tool agent MCP profile (default), or `cortex serve --profile all` for the full 24-tool operator surface; use the `cortex` CLI for direct operation (`--json` for agents). Sibling tools (bob, codemap, vecgrep, cairn, glyph, fcheap, vidtrace, tvault, veclite) are optional — every adapter degrades safely when its binary is absent."
     # The released binary is unsigned (pure-Go, CGO_ENABLED=0, not notarized), so
     # strip the Gatekeeper quarantine attribute on install — otherwise macOS
     # refuses to run a cask-installed unsigned binary ("damaged and can't be opened").

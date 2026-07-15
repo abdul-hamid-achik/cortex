@@ -1,0 +1,73 @@
+{
+  "contractVersion": 1,
+  "id": "scope_unknown",
+  "generatedBy": "TestPublicConformanceDegradedAndEdgeCases/scope_unknown",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "changing",
+    "summary": "task $TASK_ID_1 is changing (repair callback contract)",
+    "warnings": [
+      "could not evaluate scope drift: git diff failed: fatal: ambiguous argument 'missing-review-base...HEAD': unknown revision or path not in the working tree.",
+      "1 required verification(s) still missing"
+    ],
+    "nextActions": [
+      "cortex verify"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_verify",
+        "command": "cortex -C $WORKSPACE verify $TASK_ID_1 --actor agent-a",
+        "reason": "prove the edited workspace and detect scope drift",
+        "arguments": {
+          "actor": "agent-a",
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        }
+      }
+    ],
+    "rawAvailable": false,
+    "revision": 6,
+    "actor": "agent-a",
+    "changeLease": {
+      "actor": "agent-a",
+      "acquiredAt": "$TIMESTAMP",
+      "renewedAt": "$TIMESTAMP",
+      "expiresAt": "$TIMESTAMP"
+    },
+    "mode": "change",
+    "risk": "low",
+    "workspace": {
+      "root": "$WORKSPACE",
+      "repository": "$REPOSITORY",
+      "branch": "main",
+      "commitBefore": "$REVISION_OR_DIGEST_1",
+      "baseRef": "missing-review-base"
+    },
+    "surfaces": [
+      "code"
+    ],
+    "unresolvedHypotheses": [
+      {
+        "id": "$HYPOTHESIS_ID_1",
+        "statement": "the callback implementation violates the contract",
+        "confidence": "low",
+        "status": "active"
+      }
+    ],
+    "verificationRequired": [
+      "codemap_review"
+    ],
+    "verificationOutcome": "unverified",
+    "claimProofTotal": 0,
+    "missingVerification": [
+      "codemap_review"
+    ],
+    "evidenceCount": 1,
+    "investigationRounds": 0,
+    "investigationBudget": 3
+  }
+}

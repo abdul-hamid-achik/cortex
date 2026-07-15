@@ -19,6 +19,8 @@ guidance live at https://github.com/abdul-hamid-achik/cortex.
 - [MCP server](https://cortexai.tools/mcp): Compact agent profile, complete operator profile, tool schemas, and examples.
 - [CLI reference](https://cortexai.tools/cli): Human commands and machine-readable JSON equivalents.
 - [Studio](https://cortexai.tools/studio): Cross-repository operator board and canonical session projection.
+- [Public contracts](https://cortexai.tools/contracts): Versioned JSON/MCP conformance fixtures and compatibility rules.
+- [Empirical evaluation](https://cortexai.tools/evaluation): Trusted opt-in trajectory manifests, launchers, independent oracles, and report interpretation.
 
 ## Kernel model
 

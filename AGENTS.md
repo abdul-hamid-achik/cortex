@@ -9,7 +9,7 @@ Design rationale and working notes belong in the Obsidian vault at `~/notes/proj
 ## Project Overview
 
 cortex is a local-first, evidence-guided **agent kernel** for software-engineering agents. It
-sits between an LLM and a set of specialist tools (codemap, vecgrep, cairntrace, glyphrun,
+sits between an LLM and a set of specialist tools (Bob, codemap, vecgrep, cairntrace, glyphrun,
 fcheap, vidtrace, tvault, veclite) and enforces a stateful reasoning loop:
 
 ```
@@ -35,6 +35,7 @@ Three surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
 
 ```
 cortex/
+├── cmd/cortex-trajectory/    # opt-in trusted empirical harness; separate from runtime/release CLI
 ├── cmd/cortex/               # Cobra CLI, split per-command. Each RunE is THIN → builds a
 │                             #   kernel (kernelFor) → calls internal/kernel. Files carry the
 │                             #   header `/* Copyright © 2026 abdul hamid <abdulachik@icloud.com> */`.
@@ -70,7 +71,7 @@ cortex/
 │   │   ├── adapter.go        #   Adapter interface, Request/Result/Fact, Capability/Status
 │   │   ├── exec.go           #   runner (fakeable), timeout, redaction, ErrToolMissing
 │   │   ├── registry.go       #   Registry + concurrent Health probe
-│   │   ├── codemap.go vecgrep.go fcheap.go cairntrace.go glyphrun.go vidtrace.go tvault.go veclite.go command.go
+│   │   ├── bob.go codemap.go vecgrep.go fcheap.go cairntrace.go glyphrun.go vidtrace.go tvault.go veclite.go command.go
 │   │   └── util.go           #   pluralize / decodeJSON / clip helpers
 │   ├── store/
 │   │   ├── casefs/           #   JSON/JSONL case-file persistence ($XDG_STATE_HOME/cortex/sessions/<repo>/<id>/)
@@ -79,10 +80,12 @@ cortex/
 │   ├── tui/board.go          # Charm v2 bubbletea studio — live cross-workspace board + loop stepper
 │   ├── config/               # XDG paths + cortex.yaml (budget/redact/cases_dir/recall/verifiers) + env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_/dec_/raw_)
-│   ├── eval/                 # 8 lifecycle scenarios + paired unassisted-baseline scoring
+│   ├── eval/                 # deterministic scorecard + separate opt-in trajectory runner contract
 │   ├── forge/forge.go        # PR review action (ModeReview: PR fetch + APPROVE/REQUEST CHANGES verdict)
 │   └── version/version.go    # Version/Commit/Date (ldflags-injected)
 ├── docs/                     # VitePress site (product docs ONLY) → deploy to Vercel
+├── contracts/v1/             # public deterministic JSON/MCP conformance schema + fixtures
+├── evaluations/              # trusted empirical manifests, repository fixtures, and independent oracles
 ├── specs/                    # glyphrun E2E specs (*.yml)
 ├── .github/workflows/        # ci.yml (test+race+build+lint) · release.yml (goreleaser on tags)
 ├── Taskfile.yml .golangci.yml .goreleaser.yaml
@@ -151,8 +154,10 @@ task fmt             # gofmt -s -w .
 task check           # fmt + lint + test  (aliases: ci, verify)
 task flows           # glyph run specs/*.yml  (E2E; local only — not run in CI)
 task eval            # lifecycle scenarios + paired unassisted-baseline scorecard
-task docs            # VitePress dev server (Bun)  ·  task docsbuild / task docsdeps
-task ship            # check + race + build + flows + docsbuild
+task trajectory-validate MANIFEST=...  # validate a trajectory manifest without execution
+CORTEX_APPROVE_TRAJECTORY=1 task trajectory MANIFEST=... LAUNCHER=...  # trusted opt-in run
+task docs            # VitePress dev server (Bun)  ·  task docsbuild / docstest / docsdeps
+task ship            # check + race + build + flows + docstest + docsbuild
 task install         # go install ./cmd/cortex
 ```
 
@@ -163,8 +168,8 @@ task install         # go install ./cmd/cortex
   revision-bound verification.
 - **Task** (`go install github.com/go-task/task/v3/cmd/task@latest`).
 - **Bun** for docs; **glyph** (glyphrun) for E2E specs; **golangci-lint** for lint.
-- Sibling tools (`codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `vidtrace`, `tvault`, `veclite`,
-  `mcphub`) are
+- Sibling tools (`bob`, `codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `vidtrace`, `tvault`,
+  `veclite`, `mcphub`) are
   **optional at runtime** — every adapter degrades safely when its binary is absent
   (`Health` returns `ErrToolMissing`; `Execute` returns a `tool_unavailable` fact). Cortex
   never fabricates a missing tool's output.
@@ -183,6 +188,24 @@ task install         # go install ./cmd/cortex
   `-f json-envelope`: Cortex accepts schema v1 and the transitional schema-version-zero shape,
   rejects unknown explicit majors, and falls back to the legacy bare-array `-f json` output.
   Similar and memory outputs remain bare JSON arrays.
+- **Bob v0.4.0/BOB-5 is optional and manifest-gated.** Health uses `bob --json version`. Cortex
+  calls `bob --json context <absolute-workspace> --profile compact` only when `bob.yaml` exists,
+  and planning classifies deduplicated, bounded paths with
+  `bob --json path --workspace <absolute-workspace> -- <relative-path>`. Use direct argv, strict
+  schema-v1 decoding, canonical-workspace checks, the shared timeout/redaction path, and bounded
+  capture. Reject unknown future schemas; missing or invalid Bob degrades explicitly without
+  stopping unrelated work.
+- Bob output normalizes to `repository_contract` evidence. Direct ownership/context facts may be
+  `high` confidence about Bob's desired state, but can never satisfy application-code, browser,
+  terminal, artifact, secret, or general behavioral verification. Raw output is case-only when
+  adapter policy permits and is never model-visible by default. Preserve digest-based retry
+  identity so open/resume does not duplicate equivalent context.
+- Bob plan checks warn on owned, reserved, manifest-controlled, or unsafe paths and stay silent for
+  human-owned extension points. They do not rewrite or reject the plan automatically. Structured
+  `bob_path` actions carry `{workspace,path}` and exact path argv; `bob_playbook` carries only a
+  Bob-returned `{workspace,id,operation:"show"}` and exact read-only show argv. These are
+  continuations for a local registry, not Cortex MCP tools. Never call `bob apply`, reproduce Bob's
+  planner/lock/recipe renderer, or make Cortex an MCP client.
 - Every adapter returns a normalized `Result{Status, Facts, Artifacts, Warnings, Raw}`. `Status`
   is authoritative | partial | unavailable | error. Raw (redacted) output is retained for the
   case file but **not** returned to the model by default.
@@ -223,6 +246,39 @@ task install         # go install ./cmd/cortex
   masks ordinary code is its own failure — and preserves the key name on assignments
   (`API_KEY="«redacted»"`). It is the last-line filter *behind* tvault's boundary.
 
+### Empirical evaluation boundary
+
+- `cmd/cortex-trajectory` and `internal/eval/trajectory` are an opt-in trusted test harness, not a
+  kernel, CLI/MCP, profile, or release-runtime path. Changes there must not alter Cortex semantics.
+- Scenario YAML fixes the repository digest, acceptance/oracle coverage, model build/configuration,
+  arms, and budgets. It cannot select a launcher, inject environment variables, or approve itself.
+- The operator supplies a separate exact-argv launcher config whose executable is an absolute path,
+  and must set `CORTEX_APPROVE_TRAJECTORY=1`. Cortex resolves and hashes that executable before any
+  arm, runs the resolved path, and rechecks its digest per arm. Once approved, manifest oracle argv
+  executes local fixture code; manifests and fixtures therefore require the same review as
+  executable test harnesses.
+- Processes use direct argv, process-group cancellation, bounded capture, stripped child approval
+  variables, a frozen Cortex-config digest with private copies per phase/arm, per-arm Cortex/XDG
+  state roots, and separate oracle environments reduced by sensitive names and known secret-value
+  shapes. Private config mutation invalidates only that arm. Real execution fails closed where
+  process-group containment is unavailable. Fixtures and workspace snapshots stream under
+  per-file/total/cardinality/aggregate-path bounds.
+- Independent oracle workspaces are rebuilt from the frozen fixture and receive only declared
+  allowed changes. Out-of-bound or oracle-protected changes invalidate success and are never allowed
+  to replace the frozen tests/spec dependencies. Launcher self-report, model inference,
+  blocked/not-run/inconclusive results, and stale receipts cannot pass or contaminate the measured
+  model diff.
+- Owner-only reports and redacted traces stay in XDG trajectory state, outside public docs. A
+  truncated trace is omitted atomically. Reports bind the manifest, fixture, copied oracle specs,
+  frozen/per-use Cortex config digests, launcher config/binary, each available absolute oracle
+  binary and digest, effective model, exact per-arm toolchain names/versions/binary digests, and arm
+  requests by digest. Missing or changed oracle executables stay blocked while independent oracles
+  continue. Cortex/Bob/local-agent executables are required only in the corresponding arms, and
+  boundary/recovery metrics require trusted launcher instrumentation. Failed, blocked, timed-out,
+  and incomplete arms remain in reports; unavailable cost is omitted rather than scored as zero.
+- Real model/network runs never belong in ordinary unit CI. Deterministic tests validate schemas,
+  process bounds, scoring, and failure handling without supporting an empirical uplift claim.
+
 ### MCP server (`internal/mcp/server.go`)
 - SDK: `github.com/modelcontextprotocol/go-sdk/mcp` (v1.6.1). Build with `sdkmcp.NewServer`,
   register with `sdkmcp.AddTool`, typed input structs using `json:"…,omitempty"` +
@@ -244,6 +300,11 @@ task install         # go install ./cmd/cortex
   piped/`--json` output is plain, so agents never see ANSI escapes. Every non-interactive read
   command supports `--json` for machine output; Studio rejects it and points callers to
   `sessions --json` / `show --json`.
+- Public documentation release labels come only from `VITEPRESS_VERSION`. Local builds intentionally
+  show `dev`; the tag-triggered release workflow validates the tag, nav label/link, and absence of a
+  second hardcoded release before building VitePress, then deploys the same tagged prebuild through
+  a pinned Vercel CLI. Automatic Vercel Git deployments are disabled so `main` cannot replace the
+  released label with a `dev` build.
 
 ## mcphub registration
 
@@ -274,6 +335,9 @@ registration + a thin `RunE` that builds a kernel and calls `internal/kernel`. S
 shared `tool.exec` (which redacts + times out), parse the tool's `--json`/`-f json`/`--format
 json` output into `Fact`s. Degrade to `unavailable`/`degraded` — never fabricate.
 
+For Bob, preserve its stable v0.4.0 direct-argv forms and the repository-contract/behavioral-proof
+boundary above; Bob's public BOB-5 fixtures are the consumer contract.
+
 **Change the phase machine:** edit `internal/domain/case.go` `transitions` and add a test in
 `case_test.go`. Keep the `Validate` invariants in sync (`plan.go`, `hypothesis.go`).
 
@@ -294,11 +358,22 @@ json` output into `Fact`s. Degrade to `unavailable`/`degraded` — never fabrica
   (`store/casefs`).
 - Adapter contract tests use a fake `runner` so no real binary is spawned; git tests use a real
   temp repo (git is a hard dependency).
+- Bob adapter/integration tests use Bob v0.4.0 BOB-5 public fixture envelopes. Cover exact argv,
+  strict schemas, workspace identity, timeout/truncation/redaction, retry-stable orientation,
+  bounded/deduplicated path calls, warning/action provenance, and the rule that Bob facts cannot
+  satisfy verification. Never require a live Bob binary in ordinary CI.
 - glyphrun specs in `specs/` are the E2E contract. Run with `task flows` (local only).
+- Public JSON/MCP compatibility goldens live in `contracts/v1/` and are generated from kernel,
+  handoff, and MCP test paths. Update them only with `CORTEX_UPDATE_CONTRACTS=1` and review every
+  diff; IDs, timestamps, digests, private paths, and secrets must remain normalized or absent.
 - `task eval` runs the eight authored lifecycle scenarios and the deterministic paired
   Cortex-versus-unassisted calibration scorecard. The paired fixtures validate scoring across
   evidence quality, disproof, scope, verification, completion honesty, recovery, and overhead;
   they are not statistical claims about model performance.
+- Trajectory manifest validation and runner logic use local fixtures and fake process runners in
+  unit tests. `task trajectory` is an explicit trusted integration operation, never a CI gate;
+  every published interpretation must name the exact scenario digest, model build, budgets, failed
+  or incomplete arms, and independent oracle outcome.
 
 ## Before Committing
 
@@ -309,8 +384,10 @@ stray `.md` in the repo root beyond README/AGENTS/CLAUDE/CHANGELOG. Commit/push 
 
 ## Related projects (ecosystem)
 
-Siblings under `~/projects`: **codemap** (structural code graph — the closest convention match:
+Siblings under `~/projects`: **Bob** (repository desired-state contract and generated-file
+ownership), **codemap** (structural code graph — the closest convention match:
 Go CLI + config + MCP), **vecgrep** (semantic search + memory), **cairntrace** (browser specs),
 **glyphrun** (terminal specs), **file.cheap**/`fcheap` (evidence stash), **vidtrace** (bug-video
 evidence), **tinyvault**/`tvault` (secrets), **veclite** (cross-case recall), and **mcphub** (MCP
-gateway). Cortex composes them; it does not replace mcphub.
+gateway). Cortex consumes Bob as read-only orientation/planning guidance; it does not replace Bob
+or mcphub.

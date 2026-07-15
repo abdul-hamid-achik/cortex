@@ -703,8 +703,9 @@ func (s *Store) WriteSummary(taskID, md string) error {
 }
 
 // WriteRaw persists a tool call's (redacted) raw output under raw/<rawID>.txt so
-// it can be retrieved on demand without bloating the model-visible envelope
-// rawID must be a filename-safe token.
+// it can be retrieved on demand without bloating the model-visible envelope.
+// Raw identities are write-once: an exact retry succeeds without rewriting,
+// while different content under an existing ID is rejected.
 func (s *Store) WriteRaw(taskID, rawID, content string) error {
 	if len(content) > maxRawFileBytes {
 		return fmt.Errorf("raw output exceeds %d byte limit", maxRawFileBytes)
@@ -714,7 +715,18 @@ func (s *Store) WriteRaw(taskID, rawID, content string) error {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
-		return writeFileAtomic(filepath.Join(dir, safeName(rawID)+".txt"), []byte(content), 0o600)
+		path := filepath.Join(dir, safeName(rawID)+".txt")
+		existing, err := readFileLimited(path, maxRawFileBytes)
+		switch {
+		case err == nil && string(existing) == content:
+			return nil
+		case err == nil:
+			return fmt.Errorf("raw id %s already exists with different content", rawID)
+		case !errors.Is(err, os.ErrNotExist):
+			return err
+		default:
+			return writeFileAtomic(path, []byte(content), 0o600)
+		}
 	})
 }
 

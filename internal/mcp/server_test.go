@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/abdul-hamid-achik/cortex/internal/config"
+	"github.com/abdul-hamid-achik/cortex/internal/contracttest"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 )
@@ -90,6 +92,11 @@ func TestMCPStdioSubprocessHandshakeUsesCleanNewlineFraming(t *testing.T) {
 	if len(tools.Tools) != len(qaAgentTools) {
 		t.Fatalf("stdio tool count=%d, want %d", len(tools.Tools), len(qaAgentTools))
 	}
+	toolNames := make([]string, 0, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		toolNames = append(toolNames, tool.Name)
+	}
+	sort.Strings(toolNames)
 	closed := make(chan error, 1)
 	go func() { closed <- cs.Close() }()
 	select {
@@ -111,6 +118,24 @@ func TestMCPStdioSubprocessHandshakeUsesCleanNewlineFraming(t *testing.T) {
 	}
 	if strings.TrimSpace(stderr.String()) != "" {
 		t.Fatalf("stdio server wrote unexpected diagnostics: %s", stderr.String())
+	}
+	fixture, err := contracttest.NewFixture(
+		"mcp_stdio_handshake",
+		"TestMCPStdioSubprocessHandshakeUsesCleanNewlineFraming",
+		"canonical",
+		"newline-delimited JSON-RPC over stdio; clean shutdown and empty stderr are required",
+		map[string]any{
+			"transport": "stdio", "framing": "newline-delimited-json-rpc",
+			"toolCount": len(toolNames), "tools": toolNames,
+			"cleanShutdown": true, "stderr": "",
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contracttest.AssertGolden("mcp_stdio_handshake", fixture); err != nil {
+		t.Fatal(err)
 	}
 }
 

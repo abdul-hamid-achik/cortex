@@ -1,0 +1,27 @@
+version: 1
+name: trajectory-hello-help
+intent: |
+    The fixed empirical scenario oracle proves that hello --help exits zero and documents --json.
+target:
+    cmd:
+        - "go"
+        - "run"
+        - "./cmd/hello"
+        - "--help"
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 30
+    profile: xterm-256color
+steps:
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 120000
+    - snapshot: hello-help
+outcomes:
+    - id: documents_json
+      description: help documents the machine-readable output flag
+      verify:
+        screen:
+            contains: "--json"

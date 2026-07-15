@@ -33,7 +33,8 @@ type Kernel struct {
 }
 
 // New builds a kernel for a workspace with a default adapter registry (git,
-// codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite).
+// codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite,
+// plus Bob only when the workspace declares bob.yaml).
 func New(cfg config.Config) (*Kernel, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid cortex configuration: %w", err)
@@ -47,7 +48,7 @@ func New(cfg config.Config) (*Kernel, error) {
 	// of the tree). Shared with the eval harness (config.EnsureStateIgnored).
 	config.EnsureStateIgnored(cfg.Workspace, cfg.CasesDir)
 	git := adapters.NewGit()
-	reg := adapters.NewRegistry(
+	registered := []adapters.Adapter{
 		git,
 		adapters.NewCodemap(),
 		adapters.NewVecgrep(),
@@ -58,7 +59,11 @@ func New(cfg config.Config) (*Kernel, error) {
 		adapters.NewTvault(),
 		adapters.NewVeclite(),
 		adapters.NewCommandVerifier(commandSpecs(cfg.Verifiers)),
-	)
+	}
+	if bobManifestRunnable(cfg.Workspace) {
+		registered = append(registered, adapters.NewBob())
+	}
+	reg := adapters.NewRegistry(registered...)
 	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls)
 	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool)
 	k := &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now}
@@ -185,10 +190,19 @@ func (k *Kernel) stampEvidence(taskID string, tool string, f adapters.Fact) (dom
 }
 
 func (k *Kernel) stampEvidenceOnce(taskID, stableID, tool string, f adapters.Fact, timestamp time.Time) (domain.Evidence, error) {
-	ev := k.buildEvidenceDerived(taskID, tool, f, "", nil)
+	return k.stampEvidenceOnceRaw(taskID, stableID, tool, f, "", timestamp)
+}
+
+// stampEvidenceOnceRaw is the retry-stable evidence path for read-only
+// orientation and boundary captures. Callers provide a deterministic identity
+// and, when raw was retained, its stable case URI.
+func (k *Kernel) stampEvidenceOnceRaw(taskID, stableID, tool string, f adapters.Fact, rawRef string, timestamp time.Time) (domain.Evidence, error) {
+	ev := k.buildEvidenceDerived(taskID, tool, f, rawRef, nil)
 	ev.ID = stableID
 	ev.Timestamp = timestamp.UTC()
-	ev.RawRef = fmt.Sprintf("case://%s/evidence/%s", taskID, stableID)
+	if rawRef == "" {
+		ev.RawRef = fmt.Sprintf("case://%s/evidence/%s", taskID, stableID)
+	}
 	durable, _, err := k.store.AppendEvidenceOnce(taskID, ev)
 	return durable, err
 }
@@ -204,6 +218,20 @@ func (k *Kernel) storeRaw(taskID string, res adapters.Result) string {
 	// Apply the per-tool raw cap here,
 	// at the storage boundary — NOT on the string the adapter parses, which would
 	// corrupt valid-but-large JSON. The cap bounds only what is kept on disk.
+	raw := capRawForStore(k.red.String(res.Raw), k.cfg.Budget.MaxRawOutputBytesPerTool)
+	if err := k.store.WriteRaw(taskID, rawID, raw); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("case://%s/raw/%s", taskID, rawID)
+}
+
+// storeRawStable retains a retry-stable read-only capture. The case store makes
+// stable raw identities write-once: an exact retry is a no-op and different
+// bytes cannot replace the capture first bound to durable evidence.
+func (k *Kernel) storeRawStable(taskID, rawID string, res adapters.Result) string {
+	if res.Raw == "" || strings.TrimSpace(rawID) == "" {
+		return ""
+	}
 	raw := capRawForStore(k.red.String(res.Raw), k.cfg.Budget.MaxRawOutputBytesPerTool)
 	if err := k.store.WriteRaw(taskID, rawID, raw); err != nil {
 		return ""
@@ -492,6 +520,8 @@ func mapKind(s string) domain.EvidenceKind {
 		return domain.KindArtifact
 	case "human_report":
 		return domain.KindHumanReport
+	case "repository_contract":
+		return domain.KindRepositoryContract
 	case "tool_unavailable":
 		return domain.KindToolUnavailable
 	default:

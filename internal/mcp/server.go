@@ -475,7 +475,7 @@ func (s *Server) handleInvestigate(ctx context.Context, _ *sdkmcp.CallToolReques
 	return result(env, err)
 }
 
-func (s *Server) handlePlan(_ context.Context, _ *sdkmcp.CallToolRequest, in planInput) (*sdkmcp.CallToolResult, any, error) {
+func (s *Server) handlePlan(ctx context.Context, _ *sdkmcp.CallToolRequest, in planInput) (*sdkmcp.CallToolResult, any, error) {
 	k, err := s.kernelFor(in.Workspace)
 	if err != nil {
 		return envelopeErrorResult(err)
@@ -484,7 +484,7 @@ func (s *Server) handlePlan(_ context.Context, _ *sdkmcp.CallToolRequest, in pla
 	for _, h := range in.Hypotheses {
 		hyps = append(hyps, kernel.HypothesisInput{Statement: h.Statement, Supports: h.Supports, Confidence: h.Confidence, DisproveBy: h.DisproveBy})
 	}
-	env, err := k.Plan(kernel.PlanInput{
+	env, err := k.PlanContext(ctx, kernel.PlanInput{
 		TaskID:         in.TaskID,
 		Hypotheses:     hyps,
 		ChangeBoundary: domain.ChangeBoundary{Files: in.Files, Symbols: in.Symbols, Reason: in.BoundaryReason},

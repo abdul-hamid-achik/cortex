@@ -285,6 +285,80 @@ func TestExecReturnsFullOutputForParsing(t *testing.T) {
 	}
 }
 
+func TestExecRunnerBoundsAndDrainsBothStreams(t *testing.T) {
+	if os.Getenv("CORTEX_EXEC_STREAM_HELPER") == "1" {
+		chunk := strings.Repeat("x", 64<<10)
+		for i := 0; i < rawBackstop/(64<<10)+16; i++ {
+			_, _ = os.Stdout.WriteString(chunk)
+			_, _ = os.Stderr.WriteString(chunk)
+		}
+		return
+	}
+
+	t.Setenv("CORTEX_EXEC_STREAM_HELPER", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stdout, stderr, exit, err := (execRunner{}).run(ctx, "", os.Args[0], "-test.run=^TestExecRunnerBoundsAndDrainsBothStreams$")
+	if err != nil || exit != 0 {
+		t.Fatalf("bounded helper run: exit=%d err=%v", exit, err)
+	}
+	for name, output := range map[string][]byte{"stdout": stdout, "stderr": stderr} {
+		if len(output) != rawBackstop+len(truncationMarker) {
+			t.Fatalf("%s retained %d bytes, want %d", name, len(output), rawBackstop+len(truncationMarker))
+		}
+		if !strings.HasSuffix(string(output), truncationMarker) {
+			t.Fatalf("%s lacks the truncation marker", name)
+		}
+	}
+}
+
+func TestBoundedCaptureAllocatesIncrementally(t *testing.T) {
+	capture := newBoundedCapture(rawBackstop)
+	if cap(capture.data) > 32<<10 {
+		t.Fatalf("bounded capture eagerly allocated %d bytes", cap(capture.data))
+	}
+	chunk := []byte(strings.Repeat("x", 96<<10))
+	for retained := 0; retained < rawBackstop+len(chunk); retained += len(chunk) {
+		if _, err := capture.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(capture.data) != rawBackstop || cap(capture.data) > rawBackstop {
+		t.Fatalf("bounded capture len/cap = %d/%d, want exact hard bound %d", len(capture.data), cap(capture.data), rawBackstop)
+	}
+	if got := capture.Bytes(); len(got) != rawBackstop+len(truncationMarker) || !strings.HasSuffix(string(got), truncationMarker) {
+		t.Fatalf("bounded capture output len=%d lacks stable marker", len(got))
+	}
+}
+
+func TestExecRunnerWaitDelayBoundsInheritedPipes(t *testing.T) {
+	switch os.Getenv("CORTEX_EXEC_DESCENDANT_HELPER") {
+	case "parent":
+		cmd := exec.Command(os.Args[0], "-test.run=^TestExecRunnerWaitDelayBoundsInheritedPipes$")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		for _, value := range os.Environ() {
+			if !strings.HasPrefix(value, "CORTEX_EXEC_DESCENDANT_HELPER=") {
+				cmd.Env = append(cmd.Env, value)
+			}
+		}
+		cmd.Env = append(cmd.Env, "CORTEX_EXEC_DESCENDANT_HELPER=grandchild")
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	case "grandchild":
+		time.Sleep(2 * time.Second)
+		return
+	}
+
+	t.Setenv("CORTEX_EXEC_DESCENDANT_HELPER", "parent")
+	_, _, _, err := (execRunner{}).run(context.Background(), "", os.Args[0], "-test.run=^TestExecRunnerWaitDelayBoundsInheritedPipes$")
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("inherited descriptors error = %v, want exec.ErrWaitDelay", err)
+	}
+}
+
 func TestToolVersion(t *testing.T) {
 	tl := tool{bin: "git", run: fakeRunner{stdout: "codemap version 1.2.3\nbuilt X"}, redact: redact.New()}
 	if v := tl.Version(context.Background()); v != "codemap version 1.2.3" {

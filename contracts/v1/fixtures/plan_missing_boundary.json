@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "plan_missing_boundary",
+  "generatedBy": "TestPublicConformanceStructuralRejections/plan_missing_boundary",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "plan rejected: a change task must declare a change boundary (files and/or symbols)",
+    "rawAvailable": false,
+    "error": "plan rejected: a change task must declare a change boundary (files and/or symbols)"
+  }
+}

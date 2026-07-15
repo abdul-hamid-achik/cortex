@@ -19,7 +19,7 @@ target:
           printf 'package a\nfunc HandleCallback(){}\n' > callback.go
           git add -A && git commit -qm init >/dev/null
           "$CX" -C "$WS" start "fix the checkout redirect" --json >/dev/null
-          exec "$CX" -C "$WS" studio
+          exec "$CX" -C "$WS" studio --repo "$(basename "$WS")"
     cwd: "."
 terminal:
     cols: 120
@@ -45,6 +45,10 @@ steps:
     # Navigation keys are handled, then quit restores the screen.
     - press: "j"
     - press: "k"
+    - wait:
+        screen:
+            contains: "Evidence"
+        timeoutMs: 5000
     - press: "q"
     - wait:
         process:

@@ -1,0 +1,155 @@
+{
+  "contractVersion": 1,
+  "id": "handoff",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/handoff",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "handoff JSON is hard-capped; complete proof closure is retained atomically or omitted with a warning",
+  "payload": {
+    "schemaVersion": 1,
+    "generatedAt": "$TIMESTAMP",
+    "taskId": "$TASK_ID_1",
+    "revision": 8,
+    "goal": "repair callback contract",
+    "phase": "complete",
+    "mode": "change",
+    "risk": "low",
+    "actor": "agent-a",
+    "changeLease": {
+      "actor": "agent-a",
+      "acquiredAt": "$TIMESTAMP",
+      "renewedAt": "$TIMESTAMP",
+      "expiresAt": "$TIMESTAMP",
+      "releasedAt": "$TIMESTAMP"
+    },
+    "workspace": {
+      "root": "$WORKSPACE",
+      "repository": "$REPOSITORY",
+      "branch": "main",
+      "commitBefore": "$REVISION_OR_DIGEST_1"
+    },
+    "boundary": {
+      "files": [
+        "src/callback.go"
+      ]
+    },
+    "plan": {
+      "hypotheses": [
+        {
+          "id": "$HYPOTHESIS_ID_1",
+          "statement": "the callback implementation violates the contract",
+          "confidence": "low",
+          "disproveBy": {
+            "note": "review the exact callback diff"
+          },
+          "status": "active"
+        }
+      ],
+      "changeBoundary": {
+        "files": [
+          "src/callback.go"
+        ]
+      },
+      "verificationRequired": [
+        "codemap_review"
+      ],
+      "uncertainty": "runtime coverage remains uncertain"
+    },
+    "hypotheses": [
+      {
+        "id": "$HYPOTHESIS_ID_1",
+        "statement": "the callback implementation violates the contract",
+        "confidence": "low",
+        "disproveBy": {
+          "note": "review the exact callback diff"
+        },
+        "status": "active"
+      }
+    ],
+    "evidence": [
+      {
+        "id": "ev_orientation_git",
+        "claim": "workspace $REPOSITORY on branch main at $REVISION_OR_DIGEST_1",
+        "confidence": "high",
+        "source": "git",
+        "kind": "code_location"
+      },
+      {
+        "id": "$EVIDENCE_ID_1",
+        "claim": "callback.go is a candidate",
+        "confidence": "medium",
+        "source": "vecgrep",
+        "kind": "semantic_search"
+      },
+      {
+        "id": "$EVIDENCE_ID_2",
+        "claim": "no prior disproof matched",
+        "confidence": "low",
+        "source": "veclite",
+        "kind": "model_inference"
+      },
+      {
+        "id": "$EVIDENCE_ID_3",
+        "claim": "no prior disproof matched",
+        "confidence": "low",
+        "source": "veclite",
+        "kind": "model_inference"
+      },
+      {
+        "id": "$EVIDENCE_ID_4",
+        "claim": "callback diff is structurally sound",
+        "confidence": "high",
+        "source": "codemap",
+        "kind": "code_graph"
+      },
+      {
+        "id": "$EVIDENCE_ID_5",
+        "claim": "callback diff is structurally sound",
+        "confidence": "high",
+        "source": "codemap",
+        "kind": "code_graph"
+      }
+    ],
+    "verification": {
+      "outcome": "verified",
+      "satisfiedRequired": [
+        "codemap_review"
+      ]
+    },
+    "receipts": [
+      {
+        "id": "$RECEIPT_ID_1",
+        "batchId": "$BATCH_ID_1",
+        "claim": "structural review of the diff",
+        "surface": "code",
+        "purpose": "verifier_run",
+        "requirement": "codemap_review",
+        "actor": "agent-a",
+        "tool": "codemap",
+        "status": "passed",
+        "evidence": [
+          "$EVIDENCE_ID_5"
+        ],
+        "revision": "$REVISION_OR_DIGEST_2",
+        "dirtyDigest": "sha256:$REVISION_OR_DIGEST_3",
+        "binding": "bound",
+        "timestamp": "$TIMESTAMP"
+      },
+      {
+        "id": "$RECEIPT_ID_2",
+        "batchId": "$BATCH_ID_1",
+        "claim": "callback diff is structurally sound",
+        "surface": "code",
+        "purpose": "named_claim",
+        "claimId": "claim_82b6e0b527570fb2",
+        "actor": "agent-a",
+        "tool": "codemap",
+        "status": "passed",
+        "revision": "$REVISION_OR_DIGEST_2",
+        "dirtyDigest": "sha256:$REVISION_OR_DIGEST_3",
+        "binding": "bound",
+        "timestamp": "$TIMESTAMP"
+      }
+    ]
+  }
+}

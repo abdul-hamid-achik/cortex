@@ -1,0 +1,84 @@
+{
+  "contractVersion": 1,
+  "id": "tool_unavailable",
+  "generatedBy": "TestPublicConformanceDegradedAndEdgeCases/tool_unavailable",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "investigating",
+    "summary": "investigated \"HandleCallback\" via codemap→codemap: 4 evidence items recorded (a known symbol resolves directly with the code graph)",
+    "facts": [
+      {
+        "id": "$EVIDENCE_ID_1",
+        "claim": "vecgrep is unavailable; dependent results are blocked",
+        "confidence": "unknown",
+        "source": "vecgrep",
+        "kind": "tool_unavailable"
+      },
+      {
+        "id": "$EVIDENCE_ID_2",
+        "claim": "veclite is unavailable; dependent results are blocked",
+        "confidence": "unknown",
+        "source": "veclite",
+        "kind": "tool_unavailable"
+      },
+      {
+        "id": "$EVIDENCE_ID_3",
+        "claim": "veclite is unavailable; dependent results are blocked",
+        "confidence": "unknown",
+        "source": "veclite",
+        "kind": "tool_unavailable"
+      },
+      {
+        "id": "$EVIDENCE_ID_4",
+        "claim": "codemap is unavailable; dependent results are blocked",
+        "confidence": "unknown",
+        "source": "codemap",
+        "kind": "tool_unavailable"
+      }
+    ],
+    "warnings": [
+      "degraded: one or more discovery tools did not return an authoritative result this round — treat facts below with extra caution, not as a clean search",
+      "vecgrep unavailable in fixture",
+      "veclite unavailable in fixture",
+      "codemap unavailable in fixture"
+    ],
+    "nextActions": [
+      "read raw evidence with cortex read-evidence <taskId> <evidenceId> when you need detail",
+      "cortex plan — state a hypothesis with a disproof path, a change boundary, and a verification plan"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_plan",
+        "command": "cortex -C $WORKSPACE plan $TASK_ID_1",
+        "reason": "declare hypotheses, disproof paths, boundary, and verification",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "hypotheses",
+          "uncertainty",
+          "files"
+        ]
+      },
+      {
+        "tool": "cortex_investigate",
+        "command": "cortex -C $WORKSPACE investigate $TASK_ID_1",
+        "reason": "gather evidence before choosing a change",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "question"
+        ]
+      }
+    ],
+    "rawAvailable": false,
+    "degraded": true
+  }
+}

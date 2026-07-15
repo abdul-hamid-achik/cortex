@@ -29,6 +29,16 @@ degrades gracefully: its adapter reports `tool_unavailable` and the loop continu
 fabricates output. You get more evidence with more tools installed, but the discipline (phases,
 gates, receipts, boundaries) works with zero of them.
 
+### Do I have to install Bob?
+
+No. The Bob v0.4.0/BOB-5 adapter is optional and Cortex only invokes it when the workspace contains
+`bob.yaml`. With no manifest, Cortex skips Bob entirely. With a manifest but no compatible binary,
+Cortex reports an explicit degraded warning and continuation while the task proceeds.
+
+When available, Bob contributes compact repository desired-state context during orientation and
+bounded ownership classifications for concrete plan paths. It does not replace Cortex's planner or
+verifiers.
+
 ### How do I install it?
 
 ```bash
@@ -86,6 +96,29 @@ could prove it never ran (tool missing, no spec provided), the receipt is `not_r
 `passed`. Cortex will not round an unchecked claim up to success. All views reduce current receipts
 to one assessment: `verified`, `partial`, `failed`, or `unverified`. Only `verified` is a normal
 completion; explicit acknowledgments preserve the other outcomes honestly.
+
+### Bob says the repository is clean. Is my change verified?
+
+No. A `repository_contract` fact can be `high` confidence about Bob's recipe, desired state, or
+whole-file ownership and still be ineligible as behavioral proof. It cannot satisfy code
+correctness, browser, terminal, artifact, secret-dependent, or general “the fix works” claims.
+Run the exact verifier required by the claim. Likewise, “outside Bob ownership” does not mean a
+path is safe or correct; it only describes Bob's ownership boundary.
+
+### Will Cortex run `bob apply` or change my Bob plan?
+
+No. The first Bob adapter is read-only. Cortex can warn about a Bob-owned, reserved,
+manifest-controlled, or unsafe planned path and can return `bob_path` or `bob_playbook`
+continuations. Those actions preserve the exact workspace/path or Bob-supplied playbook ID and only
+inspect context:
+
+```text
+bob --json path --workspace /work/repo -- internal/cli/root.go
+bob --json playbook show add-cli-command /work/repo
+```
+
+They are structured recommendations for an approved local tool registry, not Cortex MCP tools.
+Cortex does not call Bob's apply path, planner, lock manager, or recipe renderer.
 
 ### Why do I need `begin-change` and an actor?
 

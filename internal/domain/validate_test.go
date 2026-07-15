@@ -28,7 +28,7 @@ func TestEvidenceValidate(t *testing.T) {
 
 func TestEvidenceKindCanVerify(t *testing.T) {
 	// model_inference and human_report must NOT satisfy verification alone.
-	for _, k := range []EvidenceKind{KindModelInference, KindHumanReport, KindSemanticSearch} {
+	for _, k := range []EvidenceKind{KindModelInference, KindHumanReport, KindSemanticSearch, KindRepositoryContract} {
 		if k.CanVerify() {
 			t.Errorf("%s should not satisfy verification by itself", k)
 		}

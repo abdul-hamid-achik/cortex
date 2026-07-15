@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "verify_missing_exact_contract",
+  "generatedBy": "TestPublicConformanceStructuralRejections/verify_missing_exact_contract",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "verification claim id \"callback_contract\" is registered for a different acceptance statement",
+    "rawAvailable": false,
+    "error": "verification claim id \"callback_contract\" is registered for a different acceptance statement"
+  }
+}

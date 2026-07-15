@@ -1,0 +1,77 @@
+{
+  "contractVersion": 1,
+  "id": "investigate",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/investigate",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "investigating",
+    "summary": "investigated \"HandleCallback\" via codemap→codemap: 4 evidence items recorded (a known symbol resolves directly with the code graph)",
+    "facts": [
+      {
+        "id": "$EVIDENCE_ID_1",
+        "claim": "callback.go is a candidate",
+        "confidence": "medium",
+        "source": "vecgrep",
+        "kind": "semantic_search"
+      },
+      {
+        "id": "$EVIDENCE_ID_2",
+        "claim": "no prior disproof matched",
+        "confidence": "low",
+        "source": "veclite",
+        "kind": "model_inference"
+      },
+      {
+        "id": "$EVIDENCE_ID_3",
+        "claim": "no prior disproof matched",
+        "confidence": "low",
+        "source": "veclite",
+        "kind": "model_inference"
+      },
+      {
+        "id": "$EVIDENCE_ID_4",
+        "claim": "callback diff is structurally sound",
+        "confidence": "high",
+        "source": "codemap",
+        "kind": "code_graph"
+      }
+    ],
+    "nextActions": [
+      "read raw evidence with cortex read-evidence <taskId> <evidenceId> when you need detail",
+      "cortex plan — state a hypothesis with a disproof path, a change boundary, and a verification plan"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_plan",
+        "command": "cortex -C $WORKSPACE plan $TASK_ID_1",
+        "reason": "declare hypotheses, disproof paths, boundary, and verification",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "hypotheses",
+          "uncertainty",
+          "files"
+        ]
+      },
+      {
+        "tool": "cortex_investigate",
+        "command": "cortex -C $WORKSPACE investigate $TASK_ID_1",
+        "reason": "gather evidence before choosing a change",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "question"
+        ]
+      }
+    ],
+    "rawAvailable": false
+  }
+}

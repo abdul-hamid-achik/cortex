@@ -1,0 +1,14 @@
+{
+  "source_repository": "abdul-hamid-achik/bob",
+  "source_tag": "v0.4.0",
+  "source_revision": "8639e51828ec1511ba6745a67b31e622470fa837",
+  "fixture_contract": "public MCP structured-content fixtures used verbatim; adapter tests wrap only the context or path payload in Bob's CLI v1 envelope",
+  "files": {
+    "context-clean-v1.json": "sha256:e19c8612482bf385afc40e75c733744842fd83a603e5652d9b4ce043c537baa2",
+    "context-drift-v1.json": "sha256:c0b01f2fe4de3e2baad2b5325fca94788d2ae271beaeaa3144ae2e622abb6ca8",
+    "context-conflict-v1.json": "sha256:0333349e41ca8fd699d71b6b32c8c56fd296076b0ad03a04e1b7709b47894118",
+    "path-managed-v1.json": "sha256:8099a57b38a4ed51877a195443783fda97ffa1ea57c6624d340be7e8def743e4",
+    "path-extension-v1.json": "sha256:f15c301b5d9c42458eb49d10f4ef12eef598de06fc0959685b53f0500aa3063c",
+    "error-unsupported-schema-v1.json": "sha256:7e82764ba7ef8d8ee781f0d1bc46ba8c4fccf138d0b78d015a8ef0ce6a8c5ebf"
+  }
+}

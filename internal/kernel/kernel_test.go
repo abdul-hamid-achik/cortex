@@ -71,7 +71,7 @@ func testRepo(t *testing.T) string {
 			t.Fatalf("git %s: %v (%s)", strings.Join(args, " "), err, out)
 		}
 	}
-	run("init", "-q")
+	run("init", "-q", "-b", "main")
 	run("config", "user.email", "t@t.co")
 	run("config", "user.name", "t")
 	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {

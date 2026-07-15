@@ -1,10 +1,10 @@
 package adapters
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -23,33 +23,112 @@ type execRunner struct{}
 func (execRunner) run(ctx context.Context, dir, bin string, args ...string) ([]byte, []byte, int, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
-	var out, errb bytes.Buffer
+	// Unix commands run in a dedicated process group so cancellation terminates
+	// descendants as well as the direct child. Unsupported platforms retain
+	// CommandContext's direct-child cancellation and WaitDelay as a hard bound.
+	configureProcessTree(cmd)
+	cmd.WaitDelay = time.Second
+	out := newBoundedCapture(rawBackstop)
+	errOut := newBoundedCapture(rawBackstop)
 	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	err := cmd.Run()
-	exit := 0
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			exit = ee.ExitCode()
-			err = nil // a non-zero exit is data, not a runner failure
+	cmd.Stderr = &errOut
+	runErr := cmd.Run()
+	// Always reap the remaining process group after Wait returns. When a direct
+	// child exits non-zero while a descendant keeps stdout/stderr open, os/exec
+	// waits for WaitDelay but returns only *exec.ExitError, masking ErrWaitDelay.
+	// Restricting cleanup to ErrWaitDelay would therefore leak that descendant.
+	var treeErr error
+	if killErr := terminateProcessTree(cmd); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+		treeErr = fmt.Errorf("terminating process tree: %w", killErr)
+	}
+	// CommandContext normally reports a killed process as *exec.ExitError. A
+	// timeout or caller cancellation is an infrastructure outcome, not ordinary
+	// non-zero tool data, so retain the context cause before exit classification.
+	ctxErr := ctx.Err()
+	err := runErr
+	if ctxErr != nil {
+		if err == nil {
+			err = ctxErr
+		} else if !errors.Is(err, ctxErr) {
+			err = errors.Join(ctxErr, err)
 		}
 	}
-	// A generous fixed backstop guards against a runaway process. The per-tool
-	// configurable max_raw_output_bytes_per_tool cap is NOT applied
-	// here or in execOnce: it bounds the raw *retained for the case file*, so it
-	// is applied when the raw is stored (kernel.storeRaw). Capping the string the
-	// adapter parses would corrupt valid-but-large JSON into an unparseable blob.
-	return capBytes(out.Bytes(), rawBackstop), capBytes(errb.Bytes(), rawBackstop), exit, err
+	exit := 0
+	if runErr != nil {
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			exit = ee.ExitCode()
+			if ctxErr == nil && runErr == ee {
+				err = nil // an ordinary non-zero exit is data, not a runner failure
+			}
+		}
+	}
+	if treeErr != nil {
+		err = errors.Join(err, treeErr)
+	}
+	// The streaming captures keep draining both pipes after their retained prefix
+	// reaches rawBackstop. This prevents a noisy child from blocking on a full
+	// pipe without allowing stdout or stderr to grow without bound in memory.
+	return out.Bytes(), errOut.Bytes(), exit, err
 }
 
 // rawBackstop is a hard memory guard, independent of the configurable per-tool
 // output cap.
 const rawBackstop = 4 << 20 // 4 MiB
 
+const truncationMarker = "\n…(truncated)"
+
+// boundedCapture is an io.Writer that retains at most max bytes while reporting
+// every input write as consumed. os/exec can therefore continue draining a
+// child's pipe without allocating in proportion to a runaway output stream.
+type boundedCapture struct {
+	data      []byte
+	max       int
+	truncated bool
+}
+
+func newBoundedCapture(max int) boundedCapture {
+	if max < 0 {
+		max = 0
+	}
+	return boundedCapture{data: make([]byte, 0, min(max, 32<<10)), max: max}
+}
+
+func (b *boundedCapture) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := b.max - len(b.data)
+	if remaining > 0 {
+		keep := min(remaining, len(p))
+		needed := len(b.data) + keep
+		if needed > cap(b.data) {
+			nextCap := max(needed, max(1, cap(b.data))*2)
+			nextCap = min(nextCap, b.max)
+			next := make([]byte, len(b.data), nextCap)
+			copy(next, b.data)
+			b.data = next
+		}
+		start := len(b.data)
+		b.data = b.data[:needed]
+		copy(b.data[start:], p[:keep])
+		p = p[keep:]
+	}
+	if len(p) > 0 {
+		b.truncated = true
+	}
+	return written, nil
+}
+
+func (b *boundedCapture) Bytes() []byte {
+	out := append([]byte(nil), b.data...)
+	if b.truncated {
+		out = append(out, truncationMarker...)
+	}
+	return out
+}
+
 func capBytes(b []byte, max int) []byte {
 	if max > 0 && len(b) > max {
-		return append(b[:max:max], []byte("\n…(truncated)")...)
+		return append(b[:max:max], truncationMarker...)
 	}
 	return b
 }

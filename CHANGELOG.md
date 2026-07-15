@@ -5,6 +5,42 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Optional Bob repository-contract adapter** — workspaces with `bob.yaml` can consume Bob
+  v0.4.0/BOB-5 compact context during orientation and a deduplicated, capped set of exact path
+  classifications during planning. Strict schema/workspace validation, bounded redacted raw
+  capture, digest-stable evidence identity, explicit missing/invalid degradation, and read-only
+  `bob_path`/`bob_playbook` continuations preserve the integration boundary. Bob facts use the
+  dedicated `repository_contract` kind and may be high confidence about desired state or ownership,
+  but never satisfy behavioral verification; Cortex does not call `bob apply`, recreate Bob's
+  planner/lock/renderer, or act as a Bob MCP client.
+- **Opt-in empirical trajectory runner** — a separate trusted harness compares fixed repository
+  scenarios across raw-tools, Cortex, Cortex+Bob, and structured-continuation arms with pinned
+  model/budget inputs, digest-verified isolated workspaces, independent command/Glyphrun oracles,
+  frozen-baseline/allowed-change oracle overlays, protected test inputs, honest failed/incomplete
+  arms, scope and stale-proof checks, streaming size/cardinality bounds, process-group containment,
+  frozen configuration plus private per-phase/per-arm copies, exact digest-bound oracle execution,
+  per-arm mutable-state isolation, independently hashed effective-model/toolchain attestation,
+  instrumented boundary measurement, reproducibility digests, and owner-only redacted traces.
+  Scenario YAML cannot select a launcher or approve execution; real runs require a separate exact-
+  argv launcher config and `CORTEX_APPROVE_TRAJECTORY=1`, and remain outside ordinary CI and product
+  uplift claims.
+- **Public conformance corpus** — 27 versioned, deterministic fixtures cover lifecycle successes,
+  structural rejections, degraded and bounded states, exact shared-envelope text/structured parity,
+  and a real MCP stdio handshake. Corpus tests reject future schemas, private paths, secrets,
+  timestamps, nondeterministic IDs, and unreviewed golden drift.
+
+### Changed
+- MCP exposure remains the existing `agent` and `all` profiles. No `lite` profile was added because
+  there are no reviewed empirical results comparing direct `agent`, six-pin MCPHub, a frozen
+  candidate, and structured-action lazy resolution, and no design was explicitly selected.
+  Deterministic fixtures do not count as model-uplift evidence; a future profile requires meaningful
+  quality improvement or context savings without materially worse recovery or human collaboration.
+- Documentation release labels and links now derive from the release workflow's
+  `VITEPRESS_VERSION`, use an explicit `dev` fallback locally, and fail release validation when the
+  tag, rendered navigation contract, or VitePress source disagrees. The README status no longer
+  duplicates a manually maintained current-version string.
+
 ## [0.12.0] — 2026-07-12
 
 ### Added

@@ -97,12 +97,20 @@ func (k *Kernel) OpenTask(ctx context.Context, in OpenInput) (domain.Envelope, e
 					warnings = append(warnings, "parent linkage still needs repair: "+linkErr.Error())
 				}
 			}
-			result = domain.Envelope{
-				OK: true, TaskID: c.ID, Phase: c.Status,
-				Summary:  fmt.Sprintf("resumed existing task %s (%s)", c.ID, c.Goal),
-				Warnings: warnings, NextActions: nextForPhase(c.Status), RawAvailable: false,
+			// Re-project Bob orientation on the public idempotent retry path. The
+			// evidence/raw identities are digest-stable, so this preserves the
+			// original guidance or degradation without duplicating durable records.
+			bob, bobErr := k.orientWithBob(ctx, c)
+			if bobErr != nil {
+				result = errEnvelope(c.ID, "orientation canceled before projection: "+bobErr.Error())
+				return bobErr
 			}
-			k.attachStructuredActions(&result, c)
+			warnings = append(warnings, bob.warnings...)
+			result = k.envelope(c, fmt.Sprintf("resumed existing task %s (%s)", c.ID, c.Goal), bob.facts, warnings, nextForPhase(c.Status))
+			if len(bob.actions) > 0 {
+				result.Actions = append(k.redactStructuredActions(bob.actions), result.Actions...)
+			}
+			result.Degraded = bob.degraded
 			return nil
 		}
 		var startErr error

@@ -53,7 +53,7 @@ position) or inline with the "statement :: disproof" form:
 		if err != nil {
 			return err
 		}
-		env, err := k.Plan(kernel.PlanInput{
+		env, err := k.PlanContext(cmd.Context(), kernel.PlanInput{
 			TaskID:           args[0],
 			Hypotheses:       hyps,
 			ChangeBoundary:   domain.ChangeBoundary{Files: files, Symbols: symbols, Reason: reason},

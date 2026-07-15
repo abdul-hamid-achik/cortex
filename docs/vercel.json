@@ -3,6 +3,9 @@
   "buildCommand": "bun run build",
   "installCommand": "bun install --frozen-lockfile",
   "outputDirectory": ".vitepress/dist",
+  "git": {
+    "deploymentEnabled": false
+  },
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [

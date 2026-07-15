@@ -57,6 +57,11 @@ Cortex exposes a small task workflow instead of dozens of overlapping raw tools:
 These are structural invariants enforced by a **phase machine**, not by prompting. A model can't
 skip the disproof path by restating a hypothesis, or call a change "done" without proof.
 
+If a repository has `bob.yaml`, the optional Bob v0.4.0/BOB-5 adapter adds compact desired-state
+context at orientation and bounded path-ownership warnings at planning. Its
+`repository_contract` facts are guidance only: even `high`-confidence Bob evidence cannot prove
+application behavior, and Cortex never runs `bob apply` or replaces Bob's planner.
+
 ## Install
 
 ```bash
@@ -67,7 +72,7 @@ task build   # → ./bin/cortex
 
 Cortex is a single pure-Go binary (`CGO_ENABLED=0`), with **Git required** for repository identity,
 diffs, scope drift, and revision-bound verification. The specialist tools it composes
-(`codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `vidtrace`, `tvault`, `veclite`) are **optional
+(`bob`, `codemap`, `vecgrep`, `cairn`, `glyph`, `fcheap`, `vidtrace`, `tvault`, `veclite`) are **optional
 at runtime** — every adapter degrades safely when its tool is absent, and Cortex never fabricates
 a missing tool's output.
 
@@ -209,6 +214,7 @@ files, and binary content is refused unless explicitly allowed.
 
 | Tool | Role in Cortex |
 |---|---|
+| [Bob](https://github.com/abdul-hamid-achik/bob) | optional repository desired-state context and generated-file ownership warnings; read-only |
 | [codemap](https://github.com/abdul-hamid-achik/codemap) | structural code graph — impact, callers, diff review |
 | [vecgrep](https://github.com/abdul-hamid-achik/vecgrep) | semantic/keyword discovery + cross-session memory |
 | [cairntrace](https://github.com/abdul-hamid-achik/cairntrace) | browser behavior verification |
@@ -227,12 +233,14 @@ behavior, and contributor guidance live in [`AGENTS.md`](./AGENTS.md).
 
 ## Status
 
-**v0.12.0.** The kernel, all three surfaces (CLI + MCP + Studio), the
-adapter suite, case-file coordination, redaction, scope-drift detection, and revision-bound
-verification policy are implemented and tested. `task eval` also prints a paired
+The kernel, all three surfaces (CLI + MCP + Studio), the adapter suite, case-file coordination,
+redaction, scope-drift detection, and revision-bound verification policy are implemented and
+tested. `task eval` also prints a paired
 Cortex-versus-unassisted calibration scorecard; its deterministic fixtures validate the
-measurement model, not an empirical product claim. See `CHANGELOG.md` for the current release
-scope and `internal/eval` for the executable evaluation contract.
+measurement model, not an empirical product claim. See `CHANGELOG.md` for versioned release scope
+and `internal/eval` for the executable evaluation contract. Real fixed-scenario comparisons use the
+separate, explicitly approved [empirical trajectory runner](./docs/evaluation.md), which retains
+failed arms and judges launcher output with independent oracles.
 
 ## License
 

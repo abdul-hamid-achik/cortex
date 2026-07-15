@@ -1,0 +1,172 @@
+{
+  "contractVersion": 1,
+  "id": "blocked_command_verifier",
+  "generatedBy": "TestPublicConformanceDegradedAndEdgeCases/blocked_command_verifier",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "handoff": {
+      "schemaVersion": 1,
+      "generatedAt": "$TIMESTAMP",
+      "taskId": "$TASK_ID_1",
+      "revision": 4,
+      "goal": "verify safely",
+      "phase": "verifying",
+      "mode": "change",
+      "risk": "low",
+      "workspace": {
+        "root": "$WORKSPACE",
+        "repository": "$REPOSITORY",
+        "branch": "main",
+        "commitBefore": "$REVISION_OR_DIGEST_1"
+      },
+      "boundary": {
+        "files": [
+          "src/callback.go"
+        ]
+      },
+      "plan": {
+        "hypotheses": [
+          {
+            "id": "$HYPOTHESIS_ID_1",
+            "statement": "tests should pass",
+            "confidence": "low",
+            "disproveBy": {
+              "note": "the unit verifier fails"
+            },
+            "status": "active"
+          }
+        ],
+        "changeBoundary": {
+          "files": [
+            "src/callback.go"
+          ]
+        },
+        "verificationRequired": [
+          "command:unit"
+        ],
+        "uncertainty": "repository commands are untrusted"
+      },
+      "hypotheses": [
+        {
+          "id": "$HYPOTHESIS_ID_1",
+          "statement": "tests should pass",
+          "confidence": "low",
+          "disproveBy": {
+            "note": "the unit verifier fails"
+          },
+          "status": "active"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "ev_orientation_git",
+          "claim": "workspace $REPOSITORY on branch main at $REVISION_OR_DIGEST_1",
+          "confidence": "high",
+          "source": "git",
+          "kind": "code_location"
+        }
+      ],
+      "verification": {
+        "outcome": "unverified",
+        "missingRequired": [
+          "command:unit"
+        ]
+      },
+      "receipts": [
+        {
+          "id": "$RECEIPT_ID_1",
+          "batchId": "$BATCH_ID_1",
+          "claim": "structural review of the diff",
+          "surface": "code",
+          "purpose": "verifier_run",
+          "requirement": "codemap_review",
+          "tool": "codemap",
+          "status": "blocked",
+          "revision": "$REVISION_OR_DIGEST_2",
+          "dirtyDigest": "sha256:$REVISION_OR_DIGEST_3",
+          "binding": "bound",
+          "timestamp": "$TIMESTAMP"
+        },
+        {
+          "id": "$RECEIPT_ID_2",
+          "batchId": "$BATCH_ID_1",
+          "claim": "configured command verifier unit",
+          "surface": "code",
+          "purpose": "verifier_run",
+          "requirement": "command:unit",
+          "tool": "command",
+          "status": "blocked",
+          "revision": "$REVISION_OR_DIGEST_2",
+          "dirtyDigest": "sha256:$REVISION_OR_DIGEST_3",
+          "binding": "bound",
+          "notes": "configured command could not run",
+          "timestamp": "$TIMESTAMP"
+        }
+      ],
+      "actions": [
+        {
+          "tool": "cortex_verify",
+          "command": "cortex -C $WORKSPACE verify $TASK_ID_1",
+          "reason": "rerun missing or stale verifiers",
+          "arguments": {
+            "taskId": "$TASK_ID_1",
+            "workspace": "$WORKSPACE"
+          }
+        },
+        {
+          "tool": "cortex_remember",
+          "command": "cortex -C $WORKSPACE remember $TASK_ID_1",
+          "reason": "preserve the outcome once verification is adequate",
+          "arguments": {
+            "taskId": "$TASK_ID_1",
+            "workspace": "$WORKSPACE"
+          },
+          "inputs": [
+            "outcome"
+          ]
+        }
+      ],
+      "warnings": [
+        "verification outcome is unverified"
+      ]
+    },
+    "verify": {
+      "ok": true,
+      "taskId": "$TASK_ID_1",
+      "phase": "verifying",
+      "summary": "verification run complete; scope within_boundary",
+      "warnings": [
+        "command.unit (configured_execution) blocked: requires explicit approval"
+      ],
+      "nextActions": [
+        "cortex remember — persist the outcome, evidence, and uncertainty once verification is adequate"
+      ],
+      "actions": [
+        {
+          "tool": "cortex_verify",
+          "command": "cortex -C $WORKSPACE verify $TASK_ID_1",
+          "reason": "rerun missing or stale verifiers",
+          "arguments": {
+            "taskId": "$TASK_ID_1",
+            "workspace": "$WORKSPACE"
+          }
+        },
+        {
+          "tool": "cortex_remember",
+          "command": "cortex -C $WORKSPACE remember $TASK_ID_1",
+          "reason": "preserve the outcome once verification is adequate",
+          "arguments": {
+            "taskId": "$TASK_ID_1",
+            "workspace": "$WORKSPACE"
+          },
+          "inputs": [
+            "outcome"
+          ]
+        }
+      ],
+      "rawAvailable": false
+    }
+  }
+}

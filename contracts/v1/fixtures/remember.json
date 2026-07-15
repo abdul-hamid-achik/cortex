@@ -1,0 +1,21 @@
+{
+  "contractVersion": 1,
+  "id": "remember",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/remember",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "complete",
+    "summary": "task $TASK_ID_1 complete: callback contract repaired",
+    "warnings": [
+      "1 hypothesis was left unresolved at completion — resolve them with cortex_resolve before cortex_remember so the hypothesis ledger reflects the outcome, not just the prose"
+    ],
+    "nextActions": [
+      "summary written to $TEMP_PATH"
+    ],
+    "rawAvailable": false
+  }
+}

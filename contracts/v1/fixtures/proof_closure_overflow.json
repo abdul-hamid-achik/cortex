@@ -1,0 +1,29 @@
+{
+  "contractVersion": 1,
+  "id": "proof_closure_overflow",
+  "generatedBy": "TestPublicConformanceDegradedAndEdgeCases/proof_closure_overflow",
+  "classification": "illustrative",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "an oversize complete proof closure is omitted atomically with an explicit warning",
+  "payload": {
+    "schemaVersion": 1,
+    "generatedAt": "$TIMESTAMP",
+    "taskId": "task_oversize_proof",
+    "revision": 19,
+    "goal": "",
+    "phase": "complete",
+    "mode": "change",
+    "risk": "",
+    "workspace": {
+      "root": "",
+      "repository": "synthetic"
+    },
+    "boundary": {},
+    "verification": {
+      "outcome": "verified"
+    },
+    "warnings": [
+      "completion proof receipts omitted atomically because the complete non-sensitive proof closure exceeds the 90 KiB local-agent result budget; treat acceptance proof as unavailable"
+    ]
+  }
+}

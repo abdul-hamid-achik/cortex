@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "id": "immutable_acceptance_mismatch",
+  "generatedBy": "TestPublicConformanceStructuralRejections/immutable_acceptance_mismatch",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": false,
+    "taskId": "$TASK_ID_1",
+    "summary": "idempotency key already identifies a task with different acceptance criteria",
+    "rawAvailable": false,
+    "error": "idempotency key already identifies a task with different acceptance criteria"
+  }
+}

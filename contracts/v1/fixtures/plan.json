@@ -1,0 +1,46 @@
+{
+  "contractVersion": 1,
+  "id": "plan",
+  "generatedBy": "TestPublicConformanceLifecycleSuccesses/plan",
+  "classification": "canonical",
+  "sensitiveDataPolicy": "synthetic data only; secrets, private paths, timestamps, and nondeterministic identifiers are forbidden",
+  "sizeBehavior": "model-visible JSON is bounded by the kernel projection; raw tool output is excluded",
+  "payload": {
+    "ok": true,
+    "taskId": "$TASK_ID_1",
+    "phase": "planned",
+    "summary": "plan accepted: 1 hypothesis, boundary of 1 file(s) / 0 symbol(s), 1 verifier required",
+    "hypotheses": [
+      {
+        "id": "$HYPOTHESIS_ID_1",
+        "statement": "the callback implementation violates the contract",
+        "confidence": "low",
+        "status": "active"
+      }
+    ],
+    "warnings": [
+      "hypothesis \"$HYPOTHESIS_ID_1\" has no supporting evidence — investigate to gather evidence before changing"
+    ],
+    "nextActions": [
+      "cortex begin-change — claim bounded change ownership before editing",
+      "make your edits within the declared boundary — expand the plan if scope changes",
+      "cortex verify — run the required verifiers and check for scope drift"
+    ],
+    "actions": [
+      {
+        "tool": "cortex_begin_change",
+        "command": "cortex -C $WORKSPACE begin-change $TASK_ID_1 --ttl 15m0s",
+        "reason": "claim the bounded change before editing",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "ttl": "15m0s",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "actor"
+        ]
+      }
+    ],
+    "rawAvailable": false
+  }
+}
