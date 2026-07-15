@@ -27,14 +27,8 @@ jobs:
       - name: Check release publishing credentials
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           test -n "$HOMEBREW_TAP_TOKEN"
-          test -n "$VERCEL_TOKEN"
-          test -n "$VERCEL_ORG_ID"
-          test -n "$VERCEL_PROJECT_ID"
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -48,47 +42,6 @@ jobs:
       - name: "Run checks (non-mutating: lint + test, no gofmt write)"
         run: task lint && task test
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.14'
-
-      - name: Install documentation dependencies
-        run: bun install --cwd docs --frozen-lockfile
-
-      - name: Assert documentation release version
-        env:
-          VITEPRESS_VERSION: ${{ github.ref_name }}
-        run: bun run --cwd docs check:release-version "${GITHUB_REF_NAME}"
-
-      - name: Build release documentation
-        env:
-          VITEPRESS_VERSION: ${{ github.ref_name }}
-        run: bun run --cwd docs build
-
-      - name: Install pinned Vercel CLI
-        run: bun install --global vercel@50.25.1
-
-      - name: Pull production deployment settings
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-
-      - name: Build immutable production documentation
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          VITEPRESS_VERSION: ${{ github.ref_name }}
-        run: vercel build --prod --token="$VERCEL_TOKEN"
-
-      - name: Assert prebuilt documentation release navigation
-        run: >-
-          bun run --cwd docs check:built-release "$GITHUB_REF_NAME"
-          ../.vercel/output/static/index.html
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -97,10 +50,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-
-      - name: Deploy the same prebuilt documentation to production
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN"

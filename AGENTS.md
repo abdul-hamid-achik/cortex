@@ -300,11 +300,10 @@ task install         # go install ./cmd/cortex
   piped/`--json` output is plain, so agents never see ANSI escapes. Every non-interactive read
   command supports `--json` for machine output; Studio rejects it and points callers to
   `sessions --json` / `show --json`.
-- Public documentation release labels come only from `VITEPRESS_VERSION`. Local builds intentionally
-  show `dev`; the tag-triggered release workflow validates the tag, nav label/link, and absence of a
-  second hardcoded release before building VitePress, then deploys the same tagged prebuild through
-  a pinned Vercel CLI. Automatic Vercel Git deployments are disabled so `main` cannot replace the
-  released label with a `dev` build.
+- Public documentation does not duplicate the current version. Its `Latest release` navigation item
+  follows GitHub's stable `/releases/latest` redirect. Vercel Git Integration owns documentation
+  deployment from `main` using the normal VitePress build; the tag workflow only publishes binaries
+  and Homebrew metadata and does not call Vercel or require Vercel credentials.
 
 ## mcphub registration
 

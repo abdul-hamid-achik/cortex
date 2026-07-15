@@ -1,15 +1,9 @@
 import { defineConfig } from 'vitepress'
-import { releaseLink, resolveReleaseVersion } from './release-version.mts'
 
-export function releaseNavigation(version: string | undefined, requireRelease = false) {
-  const releaseVersion = resolveReleaseVersion(version, requireRelease)
-  return { text: releaseVersion, link: releaseLink(releaseVersion) }
+export const releaseNavigation = {
+  text: 'Latest release',
+  link: 'https://github.com/abdul-hamid-achik/cortex/releases/latest',
 }
-
-const publicRelease = releaseNavigation(
-  process.env.VITEPRESS_VERSION,
-  process.env.VERCEL_ENV === 'production',
-)
 
 export default defineConfig({
   title: 'Cortex',
@@ -57,7 +51,7 @@ export default defineConfig({
           { text: 'FAQ', link: '/faq' },
         ],
       },
-      publicRelease,
+      releaseNavigation,
     ],
     sidebar: [
       {

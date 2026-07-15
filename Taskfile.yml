@@ -159,7 +159,7 @@ tasks:
       - bun run --cwd docs build
 
   docstest:
-    desc: Test the documentation release-version contract
+    desc: Test the documentation configuration
     cmds:
       - bun run --cwd docs test
 

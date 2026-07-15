@@ -11,8 +11,8 @@ From the repository root:
 ```bash
 task docsdeps   # frozen install from docs/bun.lock
 task docs       # http://127.0.0.1:5173
-task docstest   # release-version contract tests
-task docsbuild  # production build → docs/.vitepress/dist
+task docstest   # documentation configuration tests
+task docsbuild  # optimized build → docs/.vitepress/dist
 ```
 
 You can also work directly from `docs/`:
@@ -24,23 +24,10 @@ bun run build
 bun run preview
 ```
 
-Without `VITEPRESS_VERSION`, local development and builds label the navigation release as `dev`.
-Release builds use the Git tag as the only public version source:
-
-```bash
-VITEPRESS_VERSION=v1.2.3 bun run check:release-version v1.2.3
-VITEPRESS_VERSION=v1.2.3 bun run build
-```
-
-`VITEPRESS_VERSION` must be a `v`-prefixed semantic version. The release workflow derives it from
-`github.ref_name`, checks that the navigation label and release link match that tag, rejects a
-second hardcoded release in the VitePress config, and then builds the site. The same tag-triggered
-workflow performs a pinned Vercel CLI prebuild with that value, confirms the immutable output
-contains a navigation label bound to the exact tag URL, and deploys that exact output to
-production. Release workflows do not overlap. GitHub keeps at most one pending run in a concurrency
-group and does not guarantee dispatch order, so publish one release tag at a time and wait for its
-workflow before pushing another. Preview and local builds may omit the variable and retain the
-explicit `dev` label.
+The navigation does not embed a release number. `Latest release` links to GitHub's stable
+`/releases/latest` redirect, so documentation builds never need a tag, release file, or deployment
+environment variable. Release workflows do not overlap. Publish one release tag at a time and wait
+for its workflow before publishing another.
 
 ## Vercel project contract
 
@@ -55,21 +42,15 @@ The project configuration lives in [`docs/vercel.json`](https://github.com/abdul
 Link the Git repository once from its root using Vercel's repository mapping. This creates
 `.vercel/repo.json` at the repository root; do not run a standalone `vercel link` inside `docs/`,
 because that local project link applies the remote Root Directory a second time (`docs/docs`).
-Automatic Git deployments are disabled in `docs/vercel.json`: only the tag-triggered release
-workflow may publish production documentation, so a later `main` push cannot overwrite the release
-label with `dev`.
 
-The GitHub repository must provide `HOMEBREW_TAP_TOKEN`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and
-`VERCEL_PROJECT_ID` as Actions secrets. The workflow checks all four before building or publishing,
-so a release cannot silently omit the Homebrew tap update. For an operator-approved manual
-recovery, use the same prebuilt sequence from the repository root:
+Vercel Git Integration is the documentation deployment authority. Pushes to the configured
+production branch build and deploy automatically. `docs/vercel.json` does not disable Git
+deployments. The GitHub release workflow neither calls Vercel nor needs Vercel credentials, so a
+documentation-provider outage cannot block the GitHub release or Homebrew update.
 
-```bash
-vercel link --repo --yes --project cortex --scope the-lacanians
-VITEPRESS_VERSION=v1.2.3 vercel pull --yes --environment=production
-VITEPRESS_VERSION=v1.2.3 vercel build --prod
-vercel deploy --prebuilt --prod
-```
+The only manually configured GitHub Actions secret is `HOMEBREW_TAP_TOKEN`; GitHub supplies the
+workflow's repository-scoped `GITHUB_TOKEN`. The workflow checks the tap token before building or
+publishing, so a release cannot silently omit the Homebrew tap update.
 
 The generated `.vercel/` directory is local account state and must not be committed. Vercel's Git
 integration should likewise be configured with `docs` as its Root Directory.
@@ -84,9 +65,8 @@ or font requests. Motion is CSS-only and respects `prefers-reduced-motion`.
 
 Before publishing documentation:
 
-1. Set `VITEPRESS_VERSION` to the release tag and run the release assertion shown above.
-2. Run `task docsbuild` with the same environment value.
-3. Start `bun run --cwd docs preview` and inspect the home page plus at least one reference page.
-4. Check the browser console and error overlay.
-5. Push the annotated tag and wait for the release workflow's prebuilt deployment to finish.
-6. Confirm `https://cortexai.tools` renders that exact tag.
+1. Run `task docstest` and `task docsbuild`.
+2. Start `bun run --cwd docs preview` and inspect the home page plus at least one reference page.
+3. Check the browser console and error overlay.
+4. Push `main`; Vercel builds and deploys it through Git Integration.
+5. Confirm `https://cortexai.tools` renders the update and its `Latest release` link resolves.

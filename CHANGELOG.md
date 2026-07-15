@@ -36,10 +36,10 @@ All notable changes to Cortex are documented here. The format follows
   candidate, and structured-action lazy resolution, and no design was explicitly selected.
   Deterministic fixtures do not count as model-uplift evidence; a future profile requires meaningful
   quality improvement or context savings without materially worse recovery or human collaboration.
-- Documentation release labels and links now derive from the release workflow's
-  `VITEPRESS_VERSION`, use an explicit `dev` fallback locally, and fail release validation when the
-  tag, rendered navigation contract, or VitePress source disagrees. The README status no longer
-  duplicates a manually maintained current-version string.
+- Public documentation no longer duplicates a manually maintained current-version string. Its
+  `Latest release` navigation follows GitHub's stable release redirect, while Vercel Git Integration
+  deploys `main` with the standard VitePress build and remains independent from the tag-triggered
+  GitHub Release and Homebrew workflow.
 
 ## [0.12.0] — 2026-07-12
 

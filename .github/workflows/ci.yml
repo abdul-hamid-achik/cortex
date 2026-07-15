@@ -81,8 +81,13 @@ jobs:
       - name: Install documentation dependencies
         run: bun install --cwd docs --frozen-lockfile
 
-      - name: Test documentation release contract
+      - name: Test documentation configuration
         run: bun run --cwd docs test
 
       - name: Build documentation site
         run: bun run --cwd docs build
+
+      - name: Check release navigation
+        run: |
+          grep -Fq 'VPNavBarMenuLink" href="https://github.com/abdul-hamid-achik/cortex/releases/latest"' docs/.vitepress/dist/index.html
+          grep -Fq '>Latest release</span>' docs/.vitepress/dist/index.html
