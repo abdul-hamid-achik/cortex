@@ -116,6 +116,34 @@ All notable changes to Cortex are documented here. The format follows
   returned no results, and `tool_unavailable` records no longer count as structural facts, so a
   failed codemap expansion can't masquerade as successful vecgrep→codemap routing.
 
+## [0.14.1] — 2026-07-15
+
+The tag that first shipped the strengthened public contracts: the Bob repository-contract
+adapter, the opt-in empirical trajectory runner, and the public conformance corpus all landed
+here — their full descriptions live under [0.15.0], which finalized them.
+
+### Added
+- **Public contracts and repository guidance** — release-bound documentation versioning, the
+  versioned conformance fixture corpus under `contracts/v1` (with its manifest and corpus tests),
+  the opt-in `cortex-trajectory` harness entrypoint, and bounded read-only Bob orientation and
+  path-ownership guidance, while keeping any `lite` MCP profile evidence-gated.
+
+### Fixed
+- **Docs deployment decoupled from the release workflow** — the tag-triggered release no longer
+  builds or validates the documentation site. The release-version stamping/check scripts
+  (`release-version.mts`, `check-release-version.mts`, `check-built-release.mts`) were removed;
+  CI checks the docs build and the stable `releases/latest` navigation link instead, and Vercel
+  deploys `main` independently.
+
+## [0.13.0] — 2026-07-13
+
+### Added
+- **Versioned vecgrep search envelopes** — the vecgrep adapter reads `schema_version` on the
+  `json-envelope` search shape: version 1 and the transitional unversioned pre-v1 envelope are
+  both accepted (dual-read during the compatibility window), and an unknown explicit major
+  degrades to partial with a schema-version warning instead of misreading a future contract.
+- The documentation site loads Vercel Analytics.
+
 ## [0.12.0] — 2026-07-12
 
 ### Added
@@ -227,6 +255,11 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [0.10.0] — 2026-07-10
 
+This section was written as a rollup at release time: several entries below (`cortex rm`,
+`cortex migrate`, the archive MCP tools, causal investigate routing, the retry budget, cross-case
+disproof recall, and the `config.AgentDir` removal) first shipped in the 0.6.0–0.9.0 tags, whose
+per-tag sections appear further down.
+
 ### Added
 - **`cortex rm <taskId>` / `delete`** — the first (and only) destructive operation in Cortex:
   permanently deletes a session's directory and everything under it. Guarded: refuses in-flight
@@ -290,6 +323,78 @@ All notable changes to Cortex are documented here. The format follows
 
 ### Removed
 - **`config.AgentDir`**, the deprecated alias for `config.StateDir`, has been retired. Use
+  `config.StateDir` directly.
+
+## [0.9.0] — 2026-07-09
+
+### Added
+- **Cross-case disproof recall — the fourth memory layer** — resolved hypotheses
+  (rejected/challenged are the gold) and definitive verification receipts are indexed into a
+  veclite collection, redaction-gated (sensitive records are **excluded**, not masked). At orient
+  and investigate, prior related cases surface as low-confidence `model_inference` evidence, so a
+  weak model reads prior disproofs before re-deriving the same wrong theory. Two-tier recall:
+  repo-scoped first, then cross-repo. New veclite adapter (CLI-only; embeddings via ollama),
+  `cortex_recall_cases` MCP tool (18 total), and `cortex recall-cases` CLI command. Kernel hooks
+  index at resolve time (immediately, with the reason) and at remember time (a completion sweep).
+  Configured via the `recall:` block / `CORTEX_RECALL_*` env (defaults: a central veclite DB,
+  nomic-embed-text via ollama at localhost:11434). Best-effort everywhere: a missing veclite or
+  unreachable ollama degrades to a warning, never a hard failure, and indexing runs on a
+  background context so a cancelled caller never drops a save.
+
+### Fixed
+- veclite adapter tests use a binary that exists on CI's PATH (`git`) so the fake-runner-driven
+  cases pass without a veclite install; the deliberately-missing-binary test keeps its own bin.
+
+## [0.8.0] — 2026-07-09
+
+### Changed
+- **`cortex investigate` routes causally, not in parallel** — bounded discovery
+  (vecgrep/vidtrace) runs first; the top deduplicated file/symbol candidates feed codemap as a
+  second structural stage, and each structural fact records `derivedFrom` provenance linking it
+  back to the discovery candidate that produced it (schema-additive — old case files and envelope
+  consumers stay byte-compatible). When discovery yields no locatable candidates the question
+  falls through to codemap as before; quick depth stays discovery-only.
+- **Read-only adapter retries honor `budget.max_auto_retries_per_tool`** — a transient process
+  failure (spawn/pipe/child-timeout, never a behavioral exit) retries up to the budget instead of
+  a fixed single retry, with the attempt count and final cause recorded on the degraded result
+  and in `commands.jsonl`. Mutating operations still never retry.
+
+## [0.7.0] — 2026-07-09
+
+### Added
+- **Every claim surface routes to a verifier** — artifact claims verify through fcheap manifest
+  verification, and secret capability claims verify through value-free tvault availability. New
+  CLI/MCP inputs accept artifact refs and secret projects.
+
+### Changed
+- **Verification receipts bind to the workspace revision** — new receipts record the full HEAD
+  plus a digest of tracked and untracked workspace changes; status, metrics, and remember ignore
+  stale proof, and stale verification is exposed with an exact rerun action. Legacy receipts
+  without a `dirtyDigest` remain compatible.
+
+## [0.6.0] — 2026-07-09
+
+### Added
+- **`cortex rm <taskId>`** — permanent session delete, the only destructive op: refuses in-flight
+  sessions (terminal only), is a dry run without `--force`, and locates the session in the active
+  tree or the archive. `archive`/`unarchive` remain the safe, reversible alternative.
+- **`cortex migrate`** — moves a legacy `~/.cortex` onto the split XDG layout (`config.yaml` →
+  XDG config, sessions/archive → XDG state, cache → XDG cache). Dry run by default; `--apply`
+  performs atomic renames with a cross-device copy+rename fallback, then removes the legacy base
+  if empty. No-op when `CORTEX_HOME` is set or no `~/.cortex` exists.
+- **`cortex_archive` / `cortex_unarchive` MCP tools** (17 total) — the session archive lifecycle
+  for agents, mirroring the CLI commands; workspace-independent, reversible, refuse in-flight
+  sessions.
+
+### Fixed
+- **`cortex migrate` is all-or-nothing** — a partial migrate (one entry skipped because its XDG
+  destination already existed) moved `sessions/` out but left `~/.cortex` in place, so path
+  resolution kept keying off the legacy dir and the moved sessions became invisible. The whole
+  migration is now blocked if any destination exists (nothing moves), and the cross-device
+  fallback copies to a temp then renames so a failed copy never leaves a partial destination.
+
+### Removed
+- **`config.AgentDir`**, the deprecated alias for `config.StateDir` — nothing referenced it; use
   `config.StateDir` directly.
 
 ## [0.5.0] — 2026-07-09
