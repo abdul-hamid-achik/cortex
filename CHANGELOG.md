@@ -5,6 +5,41 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-07-16
+
+### Fixed
+- **Unicode panic in deep-mode decomposition** — `objectConjunctSplit` sliced the original
+  question with a byte offset computed on a `ToLower` copy; runes whose lowercase changes UTF-8
+  byte length (Ⱥ, the Kelvin sign, İ) panicked the whole `cortex_investigate` call or silently
+  split queries mid-word. The conjunction is now located with an ASCII-case-insensitive scan over
+  the original bytes.
+- **Heuristic split misses can no longer lose the real query** — an object-conjunction split now
+  keeps the original clause FIRST alongside the targeted sub-queries, so firing on a fixed phrase
+  ("search and replace") adds a query instead of replacing the real one; hitting the sub-query cap
+  can no longer silently drop the right conjunct's terms from the whole set. The right conjunct is
+  bounded to 2–3 words, and the grafted query now keeps the verb ("…enforce idempotency and size
+  limits" → "…enforce size limits", not "…ingress size limits").
+- **Structural budget reserve collapse at tiny budgets** — with `max_evidence_items_returned` at or
+  below the reserve, the reservation clamped discovery back to the full budget and silently
+  re-cancelled the codemap stage — the exact bug it exists to prevent. The reserve is now capped at
+  budget−1.
+- **Memory recall can no longer crowd out discovery** — the three recall steps stamped first and
+  could contribute 3×candLimit facts against the reduced discovery cap, evicting every real search
+  hit. Recall is orientation: it is now bounded to 3 facts per step.
+- **Truncation warnings name their cap** — "evidence truncated to 12 items" now says the number is
+  the discovery cap (budget minus the structural reserve) instead of calling a number that matches
+  no configured limit "budget".
+- **Decomposition warning honesty** — the "targeted sub-queries searched" note now fires only when
+  a search step was actually expanded (a route with no search step decomposes nothing), and the
+  sub-query list is no longer mangled by nested quoting.
+- **Stage-2 provenance misalignment** — when `structuralSteps` skipped a candidate (a dotfile whose
+  query token is empty), the `derivedFrom` links for every following structural fact pointed at the
+  wrong discovery evidence and the "expanded structurally" count was inflated. Steps and links are
+  now built in lockstep, and the count reflects steps that ran.
+- **Non-code candidates no longer feed the structural stage** — README/AGENTS.md headings and
+  dotfiles like `.env` became `codemap impact`/`find` steps that could only return not_found noise
+  and a misleading degraded flag; structural expansion is now limited to files codemap can resolve.
+
 ## [0.15.1] — 2026-07-16
 
 ### Fixed

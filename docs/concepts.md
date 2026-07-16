@@ -290,9 +290,18 @@ and where is the boundary enforced") is decomposed into up to **five** targeted 
 searched separately — one giant embedding query averages every clause into mush and returns
 doc-header noise. The split is a deliberate heuristic, not an LLM call: hard separators (`?`, `;`,
 `:`) split only when followed by whitespace, so `std::sort`, URLs, and spaceless ternaries survive
-intact; a comma or "and" splits only when it introduces a new interrogative clause; fragments under
-three words are dropped. A question that does not decompose is searched unchanged, and `quick` /
-`standard` depths never decompose.
+intact; a comma or "and" splits when it introduces a new interrogative clause; and a clause whose
+tail conjoins two short parallel objects ("enforce idempotency **and size limits**") additionally
+yields one query per object, with the original clause always kept alongside them so a heuristic
+miss can only add a query, never lose the real one. Fragments under three words are dropped. The
+result lists the exact sub-queries searched ("deep decomposition: N targeted sub-queries
+searched: …") so the split is reviewable. A question that does not decompose is searched
+unchanged, and `quick` / `standard` depths never decompose.
+
+Deep mode also reserves a slice of the evidence budget (a quarter, at least two items) for the
+codemap structural stage whenever discovery defers to it, so a productive search can no longer
+crowd the structural expansion out of the round, and evidence claims display each chunk's first
+*substantive* line rather than a markdown heading.
 
 ## Action classes & approval
 

@@ -112,13 +112,17 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		// how does Z enforce…") is decomposed into targeted sub-queries — one
 		// giant embedding query averages every clause into mush and returns
 		// doc-header noise (dogfooding 2026-07-15).
-		steps = decomposeSearchSteps(steps, in.Question, candLimit)
-		if subs := subQuestions(in.Question, maxSubQueries); len(subs) > 0 {
+		var subsUsed []string
+		steps, subsUsed = decomposeSearchSteps(steps, in.Question, candLimit)
+		if len(subsUsed) > 0 {
 			// Surface the decomposition so the caller can see (and judge) the
 			// actual queries that ran — an invisible split is indistinguishable
-			// from no split (dogfooding 2026-07-16).
+			// from no split. Gated on subsUsed, not subQuestions: a route with
+			// no search step decomposes nothing, and claiming "sub-queries
+			// searched" there would be a lie (panel review 2026-07-16).
 			warnings = append(warnings, fmt.Sprintf(
-				"deep decomposition: %d targeted sub-queries searched — %q", len(subs), strings.Join(subs, `" | "`)))
+				"deep decomposition: %d targeted sub-queries searched: %s",
+				len(subsUsed), strings.Join(subsUsed, " | ")))
 		}
 	}
 	// Recall prior durable conclusions for THIS repo first (semantic
@@ -127,9 +131,18 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// orientation instead of being re-derived. Scoped by the cortex+repo:<name>
 	// tags the persist phase writes (never a bare repo name — "cortex" the
 	// product must not match every project also named cortex).
+	// Recall is orientation, not discovery: it stamps FIRST and therefore
+	// eats the discovery budget before any search hit lands. At candLimit per
+	// step the three recall steps could contribute 3×candLimit facts and
+	// crowd every real search hit out of a reserved-down budget (panel review
+	// 2026-07-16) — a few memories are plenty.
+	recallLimit := 3
+	if candLimit < recallLimit {
+		recallLimit = candLimit
+	}
 	steps = append([]step{
 		{tool: "vecgrep", op: "memory_recall", input: map[string]any{
-			"query": in.Question, "tags": memoryTags(c), "limit": candLimit,
+			"query": in.Question, "tags": memoryTags(c), "limit": recallLimit,
 		}},
 		// Cross-case disproof recall includes prior rejected/challenged
 		// hypotheses and definitive receipts, scoped to this repo. A second
@@ -137,10 +150,10 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		// orientation — candidatesFrom skips model_inference, so they never
 		// become codemap candidates.
 		{tool: "veclite", op: "case_recall", input: map[string]any{
-			"query": in.Question, "repo": c.Workspace.Repository, "limit": candLimit,
+			"query": in.Question, "repo": c.Workspace.Repository, "limit": recallLimit,
 		}},
 		{tool: "veclite", op: "case_recall", input: map[string]any{
-			"query": in.Question, "repo": "", "limit": candLimit,
+			"query": in.Question, "repo": "", "limit": recallLimit,
 		}},
 	}, steps...)
 	if in.Video != "" {
@@ -161,8 +174,16 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		if reserve < 2 {
 			reserve = 2
 		}
-		if discoveryBudget = budget - reserve; discoveryBudget < 1 {
-			discoveryBudget = 1
+		if reserve > budget-1 {
+			// A degenerate budget (≤ reserve) has no room to hold both stages;
+			// clamping discovery to budget-1 keeps the stage-2 gate reachable
+			// instead of silently re-cancelling the structural stage (panel
+			// review 2026-07-16: reserve collapse at budget=1 reintroduced the
+			// exact bug this reservation exists to fix).
+			reserve = budget - 1
+		}
+		if reserve > 0 {
+			discoveryBudget = budget - reserve
 		}
 	}
 	// Execute stage 1 with bounded parallelism.
@@ -171,7 +192,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// sequentially after, serializing store writes.
 	results := k.runStepsParallel(ctx, c.ID, steps)
 	var sErr error
-	facts, warnings, degraded, sErr = k.stampResults(c, results, discoveryBudget, facts, warnings, nil)
+	facts, warnings, degraded, sErr = k.stampResults(c, results, discoveryBudget, discoveryStageLabel(discoveryBudget, budget), facts, warnings, nil)
 	if sErr != nil {
 		return errEnvelope(c.ID, sErr.Error()), sErr
 	}
@@ -192,13 +213,13 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 			before := len(facts)
 			cands := candidatesFrom(facts, lim)
 			if len(cands) > 0 {
-				steps2 := structuralSteps(cands, candLimit)
+				steps2, evIDs := structuralSteps(cands, candLimit)
 				if len(steps2) > 0 {
 					res2 := k.runStepsParallel(ctx, c.ID, steps2)
 					var d2 bool
-					facts, warnings, d2, sErr = k.stampResults(c, res2, budget, facts, warnings, func(i int) []string {
-						if i < len(cands) {
-							return []string{cands[i].EvidenceID}
+					facts, warnings, d2, sErr = k.stampResults(c, res2, budget, "budget", facts, warnings, func(i int) []string {
+						if i < len(evIDs) {
+							return []string{evIDs[i]}
 						}
 						return nil
 					})
@@ -206,7 +227,9 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 						return errEnvelope(c.ID, sErr.Error()), sErr
 					}
 					degraded = degraded || d2
-					expanded = len(cands)
+					// Count the steps that actually ran, not the candidate pool —
+					// skipped candidates are not expansions (audit 2026-07-16).
+					expanded = len(steps2)
 				}
 			} else {
 				// Fallback: no locatable candidates — feed the raw question to
@@ -219,7 +242,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 				}
 				res2 := k.runStepsParallel(ctx, c.ID, fb)
 				var d2 bool
-				facts, warnings, d2, sErr = k.stampResults(c, res2, budget, facts, warnings, nil)
+				facts, warnings, d2, sErr = k.stampResults(c, res2, budget, "budget", facts, warnings, nil)
 				if sErr != nil {
 					return errEnvelope(c.ID, sErr.Error()), sErr
 				}
@@ -310,12 +333,15 @@ func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []st
 }
 
 // stampResults stamps every fact of every result into durable evidence,
-// honoring the evidence budget. derivedFor(i) supplies the causal-routing
-// provenance links for results[i]'s facts (nil for discovery stage). It
-// returns the accumulated evidence, warnings, a degraded flag (true when any
-// result was non-authoritative), and a stamping error. Shared by both
-// investigation stages so evidence ordering and budget handling stay identical.
-func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, budget int, facts []domain.Evidence, warnings []string, derivedFor func(i int) []string) ([]domain.Evidence, []string, bool, error) {
+// honoring the evidence budget. stage names the truncation message's cap so a
+// discovery cap reduced by the structural reserve is not mistaken for the
+// configured budget (panel review 2026-07-16: "truncated to 12" matched no
+// configured limit). derivedFor(i) supplies the causal-routing provenance
+// links for results[i]'s facts (nil for discovery stage). It returns the
+// accumulated evidence, warnings, a degraded flag (true when any result was
+// non-authoritative), and a stamping error. Shared by both investigation
+// stages so evidence ordering and budget handling stay identical.
+func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, budget int, stage string, facts []domain.Evidence, warnings []string, derivedFor func(i int) []string) ([]domain.Evidence, []string, bool, error) {
 	degraded := false
 	for ri, res := range results {
 		// A non-authoritative result (partial/unavailable/error) means this
@@ -333,7 +359,7 @@ func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, bud
 		}
 		for _, f := range res.Facts {
 			if len(facts) >= budget {
-				warnings = append(warnings, fmt.Sprintf("evidence truncated to %d items (budget)", budget))
+				warnings = append(warnings, fmt.Sprintf("evidence truncated to %d items (%s)", budget, stage))
 				break
 			}
 			ev, err := k.stampEvidenceDerived(c.ID, res.Tool, f, rawRef, links)
@@ -520,10 +546,15 @@ func subQuestions(q string, max int) []string {
 		if len(splitWS(p)) < 3 {
 			continue // too short to stand alone as a query
 		}
-		parts := objectConjunctSplit(p)
-		if parts == nil {
-			parts = []string{p}
-		}
+		// An object split emits the ORIGINAL fragment first, then the two
+		// targeted conjunct queries. The original must survive: the split is
+		// heuristic and sometimes fires on non-object conjunctions ("search
+		// and replace"), and at the cap a partial emit would silently drop
+		// the right conjunct's terms from the whole query set (panel review
+		// 2026-07-16) — original-first means whatever the cap keeps still
+		// covers all the question's terms.
+		parts := []string{p}
+		parts = append(parts, objectConjunctSplit(p)...)
 		for _, part := range parts {
 			key := strings.ToLower(part)
 			if seen[key] {
@@ -545,6 +576,21 @@ func subQuestions(q string, max int) []string {
 	return out
 }
 
+// lastIndexFoldASCII returns the last index of sub in s comparing ASCII
+// case-insensitively over the ORIGINAL bytes. strings.LastIndex over a
+// ToLower copy is not equivalent: Unicode case mapping changes UTF-8 byte
+// length for some runes (Ⱥ, İ, the Kelvin sign), so an index computed in the
+// lowered copy panics or splits mid-rune when applied to the original (panel
+// review 2026-07-16, reproduced). sub must be ASCII.
+func lastIndexFoldASCII(s, sub string) int {
+	for i := len(s) - len(sub); i >= 0; i-- {
+		if strings.EqualFold(s[i:i+len(sub)], sub) {
+			return i
+		}
+	}
+	return -1
+}
+
 // objectConjunctSplit splits a clause whose tail conjoins two parallel objects
 // ("… enforce idempotency and size limits") into one query per object. The
 // clause-boundary pass above cannot see these: the conjunct after " and "
@@ -553,38 +599,40 @@ func subQuestions(q string, max int) []string {
 // jobs queue ingress enforce idempotency and size limits?" did not decompose
 // and discovery returned doc mush). Only the RIGHTMOST " and " is considered
 // (object lists sit at a clause's end), the right conjunct must be a short
-// phrase (2–4 words) that does not open a new interrogative clause, and the
+// phrase (2–3 words) that does not open a new interrogative clause, and the
 // left side must be long enough (≥5 words) to carry the shared context. The
-// second query grafts the right conjunct into the first object's slot,
-// assuming parallel objects of similar width.
+// second query drops the left side's last word — the first object's head —
+// and grafts the right conjunct into its slot, keeping the verb ("…enforce
+// idempotency and size limits" → "…enforce size limits"). The caller keeps
+// the original clause alongside these, so a heuristic miss adds noise but
+// never loses the real query. Returns nil when the shape doesn't hold.
 func objectConjunctSplit(p string) []string {
-	i := strings.LastIndex(strings.ToLower(p), " and ")
+	i := lastIndexFoldASCII(p, " and ")
 	if i < 0 {
 		return nil
 	}
 	left := strings.TrimSpace(p[:i])
 	right := strings.TrimSpace(p[i+len(" and "):])
 	lw, rw := splitWS(left), splitWS(right)
-	if len(lw) < 5 || len(rw) < 2 || len(rw) > 4 || interrogatives[strings.ToLower(rw[0])] {
+	if len(lw) < 5 || len(rw) < 2 || len(rw) > 3 || interrogatives[strings.ToLower(rw[0])] {
 		return nil
 	}
-	drop := len(rw)
-	if len(lw)-drop < 3 {
-		drop = len(lw) - 3
-	}
-	second := strings.Join(append(append([]string{}, lw[:len(lw)-drop]...), rw...), " ")
+	second := strings.Join(append(append([]string{}, lw[:len(lw)-1]...), rw...), " ")
 	return []string{left, second}
 }
 
 // decomposeSearchSteps rewrites each discovery search step over a compound
-// question into one targeted search per sub-question. Non-search steps
-// (codemap impact/find, artifact listings) pass through unchanged; a question
-// that does not decompose leaves the steps untouched. Each tool's search is
-// expanded once even if the route named it twice.
-func decomposeSearchSteps(steps []step, question string, candLimit int) []step {
+// question into one targeted search per sub-question, returning the rewritten
+// steps and the sub-queries that were actually installed into a search step.
+// Non-search steps (codemap impact/find, artifact listings) pass through
+// unchanged; a question that does not decompose — or a route with no search
+// step at all — leaves the steps untouched and returns nil sub-queries, so
+// callers can report decomposition only when it really happened. Each tool's
+// search is expanded once even if the route named it twice.
+func decomposeSearchSteps(steps []step, question string, candLimit int) ([]step, []string) {
 	subs := subQuestions(question, maxSubQueries)
 	if len(subs) == 0 {
-		return steps
+		return steps, nil
 	}
 	expandedTools := map[string]bool{}
 	var out []step
@@ -601,7 +649,21 @@ func decomposeSearchSteps(steps []step, question string, candLimit int) []step {
 			out = append(out, step{tool: s.tool, op: "search", input: map[string]any{"query": sub, "limit": candLimit}})
 		}
 	}
-	return out
+	if len(expandedTools) == 0 {
+		return steps, nil
+	}
+	return out, subs
+}
+
+// discoveryStageLabel names the cap stampResults reports when stage-1
+// truncation fires. When the structural reserve shrank the discovery cap, the
+// truncation count matches no configured limit — spell out where the number
+// comes from instead of calling it "budget" (panel review 2026-07-16).
+func discoveryStageLabel(discoveryBudget, budget int) string {
+	if discoveryBudget < budget {
+		return fmt.Sprintf("discovery cap: %d-item budget minus %d reserved for the structural stage", budget, budget-discoveryBudget)
+	}
+	return "budget"
 }
 
 // hasFoldPrefix reports whether s begins with prefix, ASCII case-insensitively.
@@ -654,6 +716,13 @@ func candidatesFrom(evs []domain.Evidence, max int) []candidate {
 		if ev.Location == nil || strings.TrimSpace(ev.Location.Symbol) == "" {
 			continue
 		}
+		if ev.Location.File != "" && !isCodeFile(ev.Location.File) {
+			// A "symbol" from a non-code hit is a markdown heading or a config
+			// key — codemap impact on it can only return not_found noise and a
+			// misleading degraded flag (audit 2026-07-16: README/.env/AGENTS.md
+			// hits became `codemap impact <heading>` steps).
+			continue
+		}
 		key := strings.ToLower(ev.Location.Symbol)
 		if seenSymbol[key] {
 			continue
@@ -677,7 +746,7 @@ func candidatesFrom(evs []domain.Evidence, max int) []candidate {
 			continue
 		}
 		f := strings.TrimSpace(ev.Location.File)
-		if f == "" {
+		if f == "" || !isCodeFile(f) {
 			continue
 		}
 		if symbolFiles[f] || seenFile[f] {
@@ -689,15 +758,39 @@ func candidatesFrom(evs []domain.Evidence, max int) []candidate {
 	return out
 }
 
-// structuralSteps expands candidates into codemap operations: a candidate with
-// a symbol becomes `impact`; a file-only candidate becomes `find` keyed by the
-// file's base name (path and extension stripped). The steps are independent and
-// parallel-safe. A candidate with neither a symbol nor a file token is skipped.
-func structuralSteps(cands []candidate, candLimit int) []step {
+// codeFileExts is the extension allowlist for structural expansion — the
+// languages codemap can actually resolve. Discovery hits in docs, configs,
+// or data files are real evidence but useless as codemap inputs.
+var codeFileExts = map[string]bool{
+	".go": true, ".ts": true, ".tsx": true, ".js": true, ".jsx": true,
+	".mjs": true, ".cjs": true, ".py": true, ".rs": true, ".java": true,
+	".rb": true, ".lua": true, ".vue": true, ".c": true, ".h": true,
+	".cc": true, ".cpp": true, ".hpp": true, ".cs": true, ".kt": true,
+	".swift": true, ".php": true, ".scala": true,
+}
+
+// isCodeFile reports whether a discovery hit's file can meaningfully feed the
+// codemap structural stage.
+func isCodeFile(path string) bool {
+	dot := strings.LastIndex(path, ".")
+	if dot < 0 {
+		return false
+	}
+	return codeFileExts[strings.ToLower(path[dot:])]
+}
+
+// structuralSteps builds the stage-2 codemap steps and, in lockstep, the
+// EvidenceID of the discovery candidate behind each step. Steps and links are
+// appended in the same loop iteration so a skipped candidate (a dotfile whose
+// query token is empty) can never desynchronize them — indexing the candidate
+// slice by result position misattributed derivedFrom provenance for every
+// fact after a skip (audit 2026-07-16: silent corruption of the audit trail).
+func structuralSteps(cands []candidate, candLimit int) ([]step, []string) {
 	if candLimit < 1 {
 		candLimit = 8
 	}
 	var steps []step
+	var evIDs []string
 	for _, c := range cands {
 		s := strings.TrimSpace(c.Symbol)
 		f := strings.TrimSpace(c.File)
@@ -713,8 +806,9 @@ func structuralSteps(cands []candidate, candLimit int) []step {
 			}
 			steps = append(steps, step{tool: "codemap", op: "find", input: map[string]any{"query": tok, "top": candLimit}})
 		}
+		evIDs = append(evIDs, c.EvidenceID)
 	}
-	return steps
+	return steps, evIDs
 }
 
 // expansionLimit bounds how many discovery candidates feed codemap per round:

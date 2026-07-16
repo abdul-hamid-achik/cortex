@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
+	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
 
 // compoundQuestion is the real multi-part question from the 2026-07-15
@@ -211,7 +213,10 @@ func TestDecomposeSearchStepsPassesThroughNonSearch(t *testing.T) {
 		{tool: "vecgrep", op: "search", input: map[string]any{"query": compoundQuestion, "limit": 8}},
 		{tool: "vidtrace", op: "stash_list", input: map[string]any{}},
 	}
-	out := decomposeSearchSteps(steps, compoundQuestion, 8)
+	out, subs := decomposeSearchSteps(steps, compoundQuestion, 8)
+	if len(subs) == 0 {
+		t.Fatal("expected sub-queries to be reported for an expanded search step")
+	}
 	searches, other := 0, 0
 	for _, s := range out {
 		if s.op == "search" {
@@ -227,7 +232,10 @@ func TestDecomposeSearchStepsPassesThroughNonSearch(t *testing.T) {
 		t.Errorf("non-search steps must pass through unchanged, got %d", other)
 	}
 	// A non-compound question leaves steps untouched.
-	same := decomposeSearchSteps(steps, "where is the login redirect handled", 8)
+	same, noSubs := decomposeSearchSteps(steps, "where is the login redirect handled", 8)
+	if noSubs != nil {
+		t.Errorf("simple question should report no sub-queries, got %v", noSubs)
+	}
 	if len(same) != len(steps) {
 		t.Errorf("simple question should leave steps untouched, got %d steps", len(same))
 	}
@@ -237,21 +245,69 @@ func TestSubQuestionsSplitsObjectConjunction(t *testing.T) {
 	// "enforce idempotency and size limits" conjoins two OBJECTS — no
 	// interrogative follows the " and ", so the clause-boundary pass alone
 	// left this question whole and discovery ran one averaged-out query that
-	// returned doc mush (dogfooding 2026-07-16 against cartographer).
+	// returned doc mush (dogfooding 2026-07-16 against cartographer). The
+	// original clause is kept FIRST so a heuristic miss can only add noise,
+	// never lose the real query (panel review 2026-07-16).
 	subs := subQuestions("How does the jobs queue ingress enforce idempotency and size limits?", maxSubQueries)
-	if len(subs) != 2 {
-		t.Fatalf("expected 2 sub-queries, got %v", subs)
+	if len(subs) != 3 {
+		t.Fatalf("expected original + 2 targeted sub-queries, got %v", subs)
 	}
-	if !strings.Contains(subs[0], "idempotency") || strings.Contains(subs[0], "size limits") {
-		t.Errorf("first sub-query should target idempotency only: %q", subs[0])
+	if !strings.Contains(subs[0], "idempotency and size limits") {
+		t.Errorf("first sub-query should be the original clause: %q", subs[0])
 	}
-	if !strings.Contains(subs[1], "size limits") || strings.Contains(subs[1], "idempotency") {
-		t.Errorf("second sub-query should target size limits only: %q", subs[1])
+	if !strings.Contains(subs[1], "idempotency") || strings.Contains(subs[1], "size limits") {
+		t.Errorf("second sub-query should target idempotency only: %q", subs[1])
+	}
+	if !strings.Contains(subs[2], "enforce size limits") || strings.Contains(subs[2], "idempotency") {
+		t.Errorf("third sub-query should keep the verb and target size limits: %q", subs[2])
 	}
 	for _, s := range subs {
 		if !strings.Contains(s, "jobs queue ingress") {
 			t.Errorf("sub-queries must keep the shared clause context: %q", s)
 		}
+	}
+}
+
+func TestObjectConjunctSplitSurvivesUnicodeCaseMapping(t *testing.T) {
+	// strings.LastIndex over a ToLower copy is NOT a valid index into the
+	// original: Ⱥ (U+023A) grows 2→3 bytes under ToLower (panicked in
+	// production shape), the Kelvin sign K (U+212A) shrinks 3→1 (silently
+	// split mid-word). Panel review 2026-07-16, both reproduced on v0.15.1.
+	panicInput := strings.Repeat("Ⱥ", 12) + " module loads the config and size limits"
+	subs := subQuestions(panicInput, maxSubQueries) // must not panic
+	for _, s := range subs {
+		if !utf8.ValidString(s) {
+			t.Errorf("sub-query is not valid UTF-8: %q", s)
+		}
+	}
+	kelvins := "Where does the " + strings.Repeat("K", 4) + " constant get parsed and range checked"
+	for _, s := range subQuestions(kelvins, maxSubQueries) {
+		if !utf8.ValidString(s) {
+			t.Errorf("sub-query is not valid UTF-8: %q", s)
+		}
+		if strings.Contains(s, "does the sed") || strings.HasSuffix(s, " ge") {
+			t.Errorf("sub-query split mid-word — lowered-copy index leaked through: %q", s)
+		}
+	}
+}
+
+func TestSubQuestionsKeepsOriginalWhenSplitMisfires(t *testing.T) {
+	// The guards cannot recognize every fixed phrase ("drag and drop" mid-
+	// sentence) — when the split fires anyway, the original clause must be
+	// among the queries so discovery never loses the real question.
+	q := "where does the app handle drag and drop for file uploads"
+	subs := subQuestions(q, maxSubQueries)
+	if subs == nil {
+		return // guards rejected the split entirely — also acceptable
+	}
+	found := false
+	for _, s := range subs {
+		if strings.Contains(s, "drag and drop for file uploads") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("original clause must survive a heuristic split, got %v", subs)
 	}
 }
 
@@ -261,7 +317,7 @@ func TestSubQuestionsIgnoresShortConjunctions(t *testing.T) {
 	for _, q := range []string{
 		"where is drag and drop handled",           // left side too short
 		"does the export endpoint accept json and", // right side empty
-		"how does the retry loop use jitter and b",  // right side one word
+		"how does the retry loop use jitter and b", // right side one word
 	} {
 		if subs := subQuestions(q, maxSubQueries); subs != nil {
 			t.Errorf("%q should not decompose, got %v", q, subs)
@@ -307,5 +363,50 @@ func TestInvestigateDeepDiscoveryDoesNotStarveStructuralStage(t *testing.T) {
 	}
 	if strings.Contains(inv.Summary, "returned no results") {
 		t.Errorf("a productive structural stage must not be reported empty: %s", inv.Summary)
+	}
+}
+
+func TestCandidatesFromFiltersNonCodeFiles(t *testing.T) {
+	// Doc/config discovery hits are real evidence but useless codemap inputs:
+	// a README heading fed to `codemap impact` returns not_found noise and a
+	// misleading degraded flag (audit 2026-07-16).
+	evs := []domain.Evidence{
+		{ID: "ev1", Kind: "semantic_search", Location: &domain.Location{File: "README.md", Symbol: "Installation"}},
+		{ID: "ev2", Kind: "semantic_search", Location: &domain.Location{File: ".env"}},
+		{ID: "ev3", Kind: "semantic_search", Location: &domain.Location{File: "src/auth/callback.go", Symbol: "HandleCallback"}},
+		{ID: "ev4", Kind: "semantic_search", Location: &domain.Location{File: "AGENTS.md"}},
+		{ID: "ev5", Kind: "semantic_search", Location: &domain.Location{Symbol: "DirectSymbol"}},
+	}
+	cands := candidatesFrom(evs, 10)
+	if len(cands) != 2 {
+		t.Fatalf("expected only the code-file and bare-symbol candidates, got %+v", cands)
+	}
+	if cands[0].Symbol != "HandleCallback" || cands[0].EvidenceID != "ev3" {
+		t.Errorf("code-file symbol candidate wrong: %+v", cands[0])
+	}
+	if cands[1].Symbol != "DirectSymbol" || cands[1].EvidenceID != "ev5" {
+		t.Errorf("bare-symbol candidate must survive (no file to judge): %+v", cands[1])
+	}
+}
+
+func TestStructuralStepsKeepsProvenanceAlignedAcrossSkips(t *testing.T) {
+	// A skipped candidate (dotfile with an empty query token) must skip its
+	// provenance link too — indexing candidates by result position after a
+	// skip misattributed derivedFrom for every following fact (audit
+	// 2026-07-16: silent corruption of the evidence audit trail).
+	cands := []candidate{
+		{Symbol: "Foo", EvidenceID: "ev1"},
+		{File: ".env", EvidenceID: "ev2"}, // fileQueryToken(".env") == "" → skipped
+		{File: "bar.go", EvidenceID: "ev3"},
+	}
+	steps, evIDs := structuralSteps(cands, 8)
+	if len(steps) != 2 || len(evIDs) != 2 {
+		t.Fatalf("expected 2 steps with 2 aligned links, got %d steps %v", len(steps), evIDs)
+	}
+	if evIDs[0] != "ev1" || evIDs[1] != "ev3" {
+		t.Errorf("provenance misaligned after skip: %v", evIDs)
+	}
+	if steps[1].op != "find" || steps[1].input["query"] != "bar" {
+		t.Errorf("bar.go step wrong: %+v", steps[1])
 	}
 }
