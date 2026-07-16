@@ -151,3 +151,38 @@ func TestVecgrepKeepsImportsWhenQueryAsksAboutImports(t *testing.T) {
 		t.Fatalf("import lines must be kept for an import question, got %d facts: %s", len(res.Facts), factClaims(res))
 	}
 }
+
+func TestVecgrepClaimSnippetSkipsHeadingLines(t *testing.T) {
+	// A markdown chunk that OPENS with a heading but carries a body is kept as
+	// evidence — and its claim must show the body, not the heading. "generic
+	// in SECURITY.md (score 0.53): # Security" reads as junk while the chunk
+	// spans 24 substantive lines (dogfooding 2026-07-16).
+	fixture := `{"schema_version":1,"index":{"indexed":true,"fresh":true,"chunks":100},"hits":[
+	  {"relative_path":"SECURITY.md","start_line":1,"content":"# Security\n\nThe demo keeps campaign state in browser sessionStorage only.","score":0.53}]}`
+	v := &Vecgrep{tool: fakeTool(fixture, "", 0)}
+	res, _ := v.Execute(context.Background(), Request{Operation: "search", Input: map[string]any{"query": "trust boundary"}})
+	if len(res.Facts) != 1 {
+		t.Fatalf("expected the substantive chunk to survive, got %d facts", len(res.Facts))
+	}
+	if strings.Contains(res.Facts[0].Claim, "# Security") {
+		t.Errorf("claim should show the body line, not the heading: %s", res.Facts[0].Claim)
+	}
+	if !strings.Contains(res.Facts[0].Claim, "sessionStorage") {
+		t.Errorf("claim should carry the first substantive line: %s", res.Facts[0].Claim)
+	}
+}
+
+func TestVecgrepClaimSnippetFallsBackToFirstLine(t *testing.T) {
+	// An import-only chunk kept because the question asks about imports must
+	// still show SOMETHING — the fallback is the first non-empty line.
+	fixture := `{"schema_version":1,"index":{"indexed":true,"fresh":true,"chunks":100},"hits":[
+	  {"relative_path":"apps/web/src/app/page.tsx","start_line":1,"content":"import { createDemoDashboardData } from \"@cartographer/domain\"","score":0.52}]}`
+	v := &Vecgrep{tool: fakeTool(fixture, "", 0)}
+	res, _ := v.Execute(context.Background(), Request{Operation: "search", Input: map[string]any{"query": "what imports the domain package"}})
+	if len(res.Facts) != 1 {
+		t.Fatalf("expected the import chunk to survive an import question, got %d facts", len(res.Facts))
+	}
+	if !strings.Contains(res.Facts[0].Claim, "createDemoDashboardData") {
+		t.Errorf("claim should fall back to the first line: %s", res.Facts[0].Claim)
+	}
+}

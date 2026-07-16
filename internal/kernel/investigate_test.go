@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -229,5 +230,82 @@ func TestDecomposeSearchStepsPassesThroughNonSearch(t *testing.T) {
 	same := decomposeSearchSteps(steps, "where is the login redirect handled", 8)
 	if len(same) != len(steps) {
 		t.Errorf("simple question should leave steps untouched, got %d steps", len(same))
+	}
+}
+
+func TestSubQuestionsSplitsObjectConjunction(t *testing.T) {
+	// "enforce idempotency and size limits" conjoins two OBJECTS — no
+	// interrogative follows the " and ", so the clause-boundary pass alone
+	// left this question whole and discovery ran one averaged-out query that
+	// returned doc mush (dogfooding 2026-07-16 against cartographer).
+	subs := subQuestions("How does the jobs queue ingress enforce idempotency and size limits?", maxSubQueries)
+	if len(subs) != 2 {
+		t.Fatalf("expected 2 sub-queries, got %v", subs)
+	}
+	if !strings.Contains(subs[0], "idempotency") || strings.Contains(subs[0], "size limits") {
+		t.Errorf("first sub-query should target idempotency only: %q", subs[0])
+	}
+	if !strings.Contains(subs[1], "size limits") || strings.Contains(subs[1], "idempotency") {
+		t.Errorf("second sub-query should target size limits only: %q", subs[1])
+	}
+	for _, s := range subs {
+		if !strings.Contains(s, "jobs queue ingress") {
+			t.Errorf("sub-queries must keep the shared clause context: %q", s)
+		}
+	}
+}
+
+func TestSubQuestionsIgnoresShortConjunctions(t *testing.T) {
+	// Conjunctions without enough shared context stay whole — splitting
+	// "drag and drop" produces garbage queries.
+	for _, q := range []string{
+		"where is drag and drop handled",           // left side too short
+		"does the export endpoint accept json and", // right side empty
+		"how does the retry loop use jitter and b",  // right side one word
+	} {
+		if subs := subQuestions(q, maxSubQueries); subs != nil {
+			t.Errorf("%q should not decompose, got %v", q, subs)
+		}
+	}
+}
+
+func TestInvestigateDeepDiscoveryDoesNotStarveStructuralStage(t *testing.T) {
+	// Deep discovery returning a full budget of hits must still leave room
+	// for the structural stage (dogfooding 2026-07-16: 16/16 recorded facts
+	// were vecgrep hits, codemap never ran, and — because the stage was never
+	// "attempted" — the empty-structural-stage warning stayed silent too).
+	many := make([]adapters.Fact, 0, 40)
+	for i := 0; i < 40; i++ {
+		many = append(many, adapters.Fact{Kind: "semantic_search", Confidence: "low",
+			Claim:    fmt.Sprintf("candidate %d", i),
+			Location: &adapters.Location{File: "src/callback.go", Symbol: "HandleCallback"}})
+	}
+	vecgrep := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusAuthoritative, Facts: many},
+		}}
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"impact": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "code_graph", Confidence: "medium", Claim: "HandleCallback blast radius: 3 callers"},
+			}},
+		}}
+	k := newTestKernel(t, testRepo(t), vecgrep, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
+	inv, _ := k.Investigate(context.Background(), InvestigateInput{
+		TaskID: env.TaskID, Question: "where is the login redirect handled", Depth: "deep"})
+	if !inv.OK {
+		t.Fatalf("investigate failed: %s", inv.Error)
+	}
+	if len(codemap.requests()) == 0 {
+		t.Fatalf("structural stage must run even when discovery fills the budget; codemap got no requests")
+	}
+	if !strings.Contains(inv.Summary, "expanded structurally") {
+		t.Errorf("summary should record the structural expansion, got: %s", inv.Summary)
+	}
+	if strings.Contains(inv.Summary, "returned no results") {
+		t.Errorf("a productive structural stage must not be reported empty: %s", inv.Summary)
 	}
 }

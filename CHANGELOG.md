@@ -5,6 +5,28 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Deep-mode decomposition now splits object conjunctions** — "how does X enforce idempotency
+  and size limits?" previously did not decompose at all (the clause-boundary pass only split at
+  `", "`/`" and "` followed by an interrogative), so discovery ran one averaged-out embedding
+  query and returned doc mush. The rightmost `" and "` conjoining a short (2–4 word) trailing
+  object now yields one targeted query per object, with the shared clause context preserved.
+  Guards keep "drag and drop"-style phrases whole.
+- **Structural stage no longer silently starved by discovery** — when discovery filled the entire
+  evidence budget, `cortex_investigate` skipped the codemap stage without attempting it, so the
+  empty-structural-stage warning never fired and the summary still claimed "via vecgrep→codemap".
+  A slice of the budget (¼, min 2) is now reserved for structural facts whenever a codemap
+  follow-up is deferred to stage 2.
+- **Evidence claims show the chunk's first substantive line** — a markdown chunk opening with a
+  heading ("# Security") but carrying a 24-line body rendered its claim as just the heading,
+  making legitimate evidence read as noise. Claims now skip heading/import/trivial lines and fall
+  back to the first non-empty line.
+
+### Added
+- **Deep decomposition is surfaced** — the investigate result now lists the exact sub-queries
+  searched ("deep decomposition: 2 targeted sub-queries searched — …"), so an invisible split is
+  distinguishable from no split.
+
 ## [0.15.0] — 2026-07-15
 
 ### Added

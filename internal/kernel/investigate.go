@@ -113,6 +113,13 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		// giant embedding query averages every clause into mush and returns
 		// doc-header noise (dogfooding 2026-07-15).
 		steps = decomposeSearchSteps(steps, in.Question, candLimit)
+		if subs := subQuestions(in.Question, maxSubQueries); len(subs) > 0 {
+			// Surface the decomposition so the caller can see (and judge) the
+			// actual queries that ran — an invisible split is indistinguishable
+			// from no split (dogfooding 2026-07-16).
+			warnings = append(warnings, fmt.Sprintf(
+				"deep decomposition: %d targeted sub-queries searched — %q", len(subs), strings.Join(subs, `" | "`)))
+		}
 	}
 	// Recall prior durable conclusions for THIS repo first (semantic
 	// recall): cortex writes a memory on every completed task, so a related past
@@ -142,13 +149,29 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 			"connect": true, "limit": candLimit,
 		}}}, steps...)
 	}
+	// Stage 1 must not saturate the whole evidence budget when a structural
+	// follow-up is deferred to stage 2: a full budget makes the
+	// `len(facts) < budget` gate below silently cancel the codemap stage while
+	// the summary still claims "via vecgrep→codemap" (dogfooding 2026-07-16: a
+	// deep investigation recorded 16/16 discovery hits and structure never
+	// ran). Reserve a slice of the budget for structural facts.
+	discoveryBudget := budget
+	if route.FollowUp == "codemap" && route.First != "codemap" && expansionLimit(depth, candLimit) > 0 {
+		reserve := budget / 4
+		if reserve < 2 {
+			reserve = 2
+		}
+		if discoveryBudget = budget - reserve; discoveryBudget < 1 {
+			discoveryBudget = 1
+		}
+	}
 	// Execute stage 1 with bounded parallelism.
 	// The steps are independent adapter calls — step N's result does not feed
 	// step N+1's input here — so they fan out; evidence stamping runs
 	// sequentially after, serializing store writes.
 	results := k.runStepsParallel(ctx, c.ID, steps)
 	var sErr error
-	facts, warnings, degraded, sErr = k.stampResults(c, results, budget, facts, warnings, nil)
+	facts, warnings, degraded, sErr = k.stampResults(c, results, discoveryBudget, facts, warnings, nil)
 	if sErr != nil {
 		return errEnvelope(c.ID, sErr.Error()), sErr
 	}
@@ -497,12 +520,21 @@ func subQuestions(q string, max int) []string {
 		if len(splitWS(p)) < 3 {
 			continue // too short to stand alone as a query
 		}
-		key := strings.ToLower(p)
-		if seen[key] {
-			continue
+		parts := objectConjunctSplit(p)
+		if parts == nil {
+			parts = []string{p}
 		}
-		seen[key] = true
-		out = append(out, p)
+		for _, part := range parts {
+			key := strings.ToLower(part)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, part)
+			if len(out) == max {
+				break
+			}
+		}
 		if len(out) == max {
 			break
 		}
@@ -511,6 +543,37 @@ func subQuestions(q string, max int) []string {
 		return nil
 	}
 	return out
+}
+
+// objectConjunctSplit splits a clause whose tail conjoins two parallel objects
+// ("… enforce idempotency and size limits") into one query per object. The
+// clause-boundary pass above cannot see these: the conjunct after " and "
+// opens with a noun, not an interrogative, so the question reaches the
+// embedder as one averaged-out query (dogfooding 2026-07-16: "how does the
+// jobs queue ingress enforce idempotency and size limits?" did not decompose
+// and discovery returned doc mush). Only the RIGHTMOST " and " is considered
+// (object lists sit at a clause's end), the right conjunct must be a short
+// phrase (2–4 words) that does not open a new interrogative clause, and the
+// left side must be long enough (≥5 words) to carry the shared context. The
+// second query grafts the right conjunct into the first object's slot,
+// assuming parallel objects of similar width.
+func objectConjunctSplit(p string) []string {
+	i := strings.LastIndex(strings.ToLower(p), " and ")
+	if i < 0 {
+		return nil
+	}
+	left := strings.TrimSpace(p[:i])
+	right := strings.TrimSpace(p[i+len(" and "):])
+	lw, rw := splitWS(left), splitWS(right)
+	if len(lw) < 5 || len(rw) < 2 || len(rw) > 4 || interrogatives[strings.ToLower(rw[0])] {
+		return nil
+	}
+	drop := len(rw)
+	if len(lw)-drop < 3 {
+		drop = len(lw) - 3
+	}
+	second := strings.Join(append(append([]string{}, lw[:len(lw)-drop]...), rw...), " ")
+	return []string{left, second}
 }
 
 // decomposeSearchSteps rewrites each discovery search step over a compound

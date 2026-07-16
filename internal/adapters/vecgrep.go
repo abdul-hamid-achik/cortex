@@ -225,7 +225,7 @@ func (v *Vecgrep) hitsResult(op, q, mode string, hits []vgHit, raw string) Resul
 	for _, h := range kept {
 		path := firstNonEmpty(h.RelPath, h.FilePath)
 		claim := fmt.Sprintf("%s in %s (score %.2f)", firstNonEmpty(h.SymbolName, h.ChunkType), path, h.Score)
-		if snip := clip(firstLine(h.Content), 80); snip != "" {
+		if snip := clip(snippetLine(h.Content, markdownDoc(h)), 80); snip != "" {
 			claim += ": " + snip
 		}
 		facts = append(facts, Fact{
@@ -241,6 +241,30 @@ func (v *Vecgrep) hitsResult(op, q, mode string, hits []vgHit, raw string) Resul
 		Warnings: warnings,
 		Raw:      raw,
 	}
+}
+
+// snippetLine picks the line a fact's claim displays: the chunk's first
+// substantive line. A chunk that opens with a heading is legitimately kept as
+// evidence when a body follows — but its claim must show that body, not the
+// heading. "generic in SECURITY.md (score 0.53): # Security" reads as noise
+// while the chunk actually spans 24 substantive lines (dogfooding 2026-07-16).
+// Falls back to the first non-empty line when nothing more substantive exists.
+func snippetLine(content string, markdown bool) string {
+	first := ""
+	for _, ln := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" {
+			continue
+		}
+		if first == "" {
+			first = t
+		}
+		if (markdown && headingLine(t)) || importLine(t) || trivialLine(t) {
+			continue
+		}
+		return t
+	}
+	return first
 }
 
 // allBelowScore reports whether every hit carries a positive score below the
