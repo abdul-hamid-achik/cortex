@@ -43,6 +43,24 @@ Transient spawn/transport failures on read-only queries retry automatically up t
 `failed after N attempts … final cause: …` in its `tool_unavailable` fact. A non-zero exit is
 data — never retried — so behavioral failures are never replayed.
 
+## Discovery quality gates (vecgrep)
+
+Search and similarity hits pass two gates before becoming facts, because a recorded claim like
+"# Cartographer" is not a fact:
+
+1. **Low-value chunks are dropped** — hits whose content is only markdown headings, bare
+   import/require lines, or punctuation fragments. Dropping requires positive proof of noise: `#`
+   marks a heading only in markdown files (elsewhere it is a comment or preprocessor directive and
+   survives); import filtering is disabled when the question itself asks about
+   imports/includes/requires/dependencies; and a hit with no content field (older binaries) is
+   never dropped. Filtered counts appear as a warning.
+2. **All-weak rounds record nothing** — when every remaining scored hit is below 0.10, the adapter
+   returns zero facts and an explicit **"no strong candidates"** summary instead of a pile of weak
+   leads. Unscored hits (older binaries, keyword mode) disable this gate; absence of a score is not
+   evidence of weakness.
+
+Kept hits stay `low` confidence — discovery is a candidate, not proof.
+
 ## Flag dialects (they differ)
 
 The adapters intentionally speak each tool's real dialect:

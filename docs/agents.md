@@ -15,6 +15,12 @@ Work through the task workflow. Cortex enforces the discipline; you supply the j
    are immutable. Use `cortex_start_task` only when you deliberately need a fresh case.
 2. **Treat search output as candidates, not proof.** `cortex_investigate` records vecgrep/codemap
    results as evidence with a confidence band. A `low`/`medium` hit is a lead, not a conclusion.
+   Cortex filters heading-only, bare-import, and trivial hits before they become evidence, and a
+   round where every remaining hit is weak records **zero facts** with a **"no strong candidates"**
+   warning. Treat that as *nothing found*: rephrase the question, name a specific symbol, use
+   `deep` depth on a compound question, or state honestly that discovery came up empty — never plan
+   on hits Cortex told you were weak. When a summary says the structural stage (codemap) returned
+   no results, the evidence is discovery-only; structure has not been resolved.
 3. **Before editing, plan.** `cortex_plan` requires a testable hypothesis **with a disproof
    path**, a change boundary, and a verification plan. It rejects plans without a disproof path —
    restating a hypothesis more confidently will not get you through the gate. In a Bob-managed

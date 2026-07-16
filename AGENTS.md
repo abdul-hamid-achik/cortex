@@ -104,7 +104,7 @@ The recommended change path is retry-safe and makes change ownership explicit:
 | Action | Phase move | Gate the kernel enforces |
 |---|---|---|
 | `open` | new → orienting → investigating, or resume | idempotency key wins; otherwise newest active normalized goal/mode/workspace/branch/acceptance-contract match resumes; keyed retries cannot change criteria |
-| `investigate` | (stays investigating) | search output recorded as *candidates*, not proof |
+| `investigate` | (stays investigating) | search output recorded as *candidates*, not proof; heading-only/bare-import/trivial hits filtered; all-weak rounds record zero facts ("no strong candidates"); deep depth decomposes compound questions into ≤5 sub-queries |
 | `plan` | investigating → planned | every hypothesis has a **disproof path**; change tasks declare a **boundary**; uncertainty stated |
 | `begin-change` | planned → changing | an actor acquires the bounded, expiring lease; competing actors lose the CAS race |
 | `verify` | changing → verifying | typed claim→surface→verifier/contract receipts; registered IDs require their exact stored statement; leased tasks require the owner actor; no-diff changes require an explicit no-op acknowledgment |

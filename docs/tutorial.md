@@ -132,6 +132,11 @@ not indexed, its adapter warns instead of inventing hits. With the discovery too
 indexed, Cortex records the returned locations as candidates and feeds the strongest ones into
 structural expansion.
 
+Not every hit becomes evidence. Chunks that are only markdown headings, bare imports, or
+punctuation fragments are filtered out, and if everything left is weak the round records zero facts
+and reports **"no strong candidates"** — an honest nothing-found, not a failure. If you see it,
+rephrase the question or ask about a specific symbol instead of treating weak hits as leads.
+
 > **Search results are candidates, never proof.** Every hit is stored with a confidence band
 > (`low`/`medium`), and confirming a hypothesis takes more than "search pointed here." That
 > discipline is the whole reason Cortex exists — it's what stops an agent from "finding" a cause

@@ -257,6 +257,43 @@ discovery evidence whose candidate produced it, preserving symptom → candidate
 expansion provenance. When discovery yields no locatable candidates, the question itself falls
 through to codemap (the previous behavior).
 
+The summary is honest about that second stage. When the structural stage ran but resolved nothing,
+the summary says so ("structural stage (codemap) returned no results") and warns that the evidence
+is discovery-only. `tool_unavailable` records never count as structural facts, so a failed codemap
+expansion cannot masquerade as successful vecgrep→codemap routing.
+
+### Discovery quality gates
+
+Discovery output is filtered before it becomes evidence — a search hit is a candidate, and a
+worthless candidate is not worth recording. A vecgrep hit whose matched content is *only* markdown
+headings, bare import/require lines, or punctuation fragments carries no evidentiary weight and is
+dropped; the dropped count is reported as a warning. The filter demands positive proof of noise:
+
+- A `#` line is a heading only in a markdown document. In shell, Python, or YAML it is a comment,
+  and in C/C++ a preprocessor directive — substantive content that survives.
+- When the question itself asks about imports/includes/requires/dependencies, import lines **are**
+  the evidence the caller asked for and are kept.
+- A hit with no content at all (older vecgrep binaries omit the field) is never treated as low
+  value.
+
+When every remaining scored hit falls below the usefulness floor (score 0.10), the round records
+**zero facts** and reports **"no strong candidates"** — nothing found is stated honestly instead of
+a pile of weak leads polluting the ledger. Treat that report as *nothing found*, not as evidence:
+rephrase the question, name a specific symbol, or record that discovery came up empty. Unscored
+hits (older binaries, keyword mode) are never gated on score — absence of a score is not evidence
+of weakness.
+
+### Deep-mode decomposition
+
+At `deep` depth, a compound question ("where is the plan created, how is session state validated,
+and where is the boundary enforced") is decomposed into up to **five** targeted sub-queries, each
+searched separately — one giant embedding query averages every clause into mush and returns
+doc-header noise. The split is a deliberate heuristic, not an LLM call: hard separators (`?`, `;`,
+`:`) split only when followed by whitespace, so `std::sort`, URLs, and spaceless ternaries survive
+intact; a comma or "and" splits only when it introduces a new interrogative clause; fragments under
+three words are dropped. A question that does not decompose is searched unchanged, and `quick` /
+`standard` depths never decompose.
+
 ## Action classes & approval
 
 Every tool operation is classified by side-effect risk, and the class drives what's allowed:

@@ -47,7 +47,7 @@ Cortex exposes a small task workflow instead of dozens of overlapping raw tools:
 | Action | What it enforces |
 |---|---|
 | **open** | retry-safely resumes matching work or starts one durable case; a new case can register an immutable acceptance contract and records actor/parent linkage when supplied |
-| **investigate** | routes a question through discovery (vecgrep) then structure (codemap); records evidence with provenance — search output is a *candidate*, not proof |
+| **investigate** | routes a question through discovery (vecgrep) then structure (codemap); records evidence with provenance — search output is a *candidate*, not proof; low-value hits are filtered and an all-weak round reports "no strong candidates" with zero facts |
 | **plan** | requires a testable hypothesis **with a disproof path**, a change boundary, and a verification plan — plans without a disproof path are **rejected** |
 | **begin-change** | atomically claims bounded change ownership for an actor before editing; leases expire, renew, and prevent competing writers |
 | **verify** | binds typed claims to an explicit surface, optional verifier, and required exact contract; detects scope drift and atomically writes one revision-bound receipt batch |

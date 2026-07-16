@@ -87,6 +87,20 @@ cortex investigate task_06FK… "where is the OAuth return URL handled"
 Depth and surface overrides are validated before Cortex invokes an adapter. Unknown values fail
 explicitly instead of silently falling back to a different route or investigation cost.
 
+`--depth deep` widens the per-tool candidate budget and decomposes a compound question ("where is
+X created, how is Y validated, and where is Z enforced") into up to **five** targeted sub-queries,
+each searched separately. The split is a whitespace-gated heuristic — code tokens such as
+`std::sort`, URLs, and spaceless ternaries survive intact — and a question that does not decompose
+runs unchanged. `quick` and `standard` never decompose.
+
+Discovery hits are quality-gated before they become evidence: heading-only, bare-import, and
+punctuation-fragment chunks are filtered (import lines are kept when the question itself asks about
+imports), and when every remaining hit scores below 0.10 the round records **zero facts** and
+reports **"no strong candidates"**. Treat that as nothing found — rephrase the question or ask
+about a specific symbol — not as weak evidence. The summary also states when the structural
+(codemap) stage ran but returned no results, so discovery-only evidence is never dressed up as
+resolved structure.
+
 ### `cortex route [question]`
 
 Export the executable routing matrix for agents and gateway instructions:

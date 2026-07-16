@@ -40,7 +40,7 @@ collaboration. See [Empirical trajectory runner: MCP profile decision gate](/eva
 |---|---|---|
 | `cortex_start_task` | `agent`, `all` | deliberately create a fresh case; orient on git identity + tool health; optionally register immutable `acceptanceCriteria` |
 | `cortex_open_task` | `agent`, `all` | preferred retry-safe entry: idempotency key returns the same case; otherwise resume newest active normalized goal/mode/workspace/branch/criteria match or start once; a new case accepts criteria, actor, and parent linkage |
-| `cortex_investigate` | `agent`, `all` | route a question causally — bounded discovery (vecgrep/vidtrace) first, top candidates fed into codemap; structural evidence carries `derivedFrom` provenance |
+| `cortex_investigate` | `agent`, `all` | route a question causally — bounded discovery (vecgrep/vidtrace) first, top candidates fed into codemap; structural evidence carries `derivedFrom` provenance; low-value hits are filtered and an all-weak round reports "no strong candidates" with zero facts; `deep` depth splits a compound question into up to five sub-queries |
 | `cortex_plan` | `agent`, `all` | the planning gate — hypotheses (with disproof and optional per-hypothesis evidence IDs), boundary, verification plan; optionally adds bounded Bob path-ownership guidance when `bob.yaml` exists |
 | `cortex_begin_change` | `agent`, `all` | atomically acquire the actor's expiring change lease and enter `changing`; same-owner retries are safe |
 | `cortex_verify` | `agent`, `all` | run planned verifiers, detect scope drift, and bind typed `claimSpecs` to an exact surface/verifier/contract; leased tasks require the owner actor; intentional no-diff changes require `noOpAcknowledged` |

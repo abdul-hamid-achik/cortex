@@ -176,6 +176,32 @@ Yes. Each round is counted against a small budget (you'll see `rounds 2/3` in `s
 it doesn't hard-block you — it *warns*, so aimless searching becomes visible. The nudge is toward
 forming a hypothesis and planning, not toward endless search.
 
+### My investigation said "no strong candidates". Is that a failure?
+
+No — it's honesty. Discovery hits that are only markdown headings, bare imports, or punctuation
+fragments are filtered before they can become evidence, and when everything left scores below the
+usefulness floor (0.10) Cortex records **zero facts** instead of a pile of weak leads. Treat it as
+*nothing found*: rephrase with more specific vocabulary, ask about a known symbol (which routes
+straight to codemap), or use `--depth deep` if the question was really several questions in one.
+Recording nothing was the correct outcome — weak hits in the ledger are worse than an empty round.
+
+### Why did investigate filter some of my search hits?
+
+Because a claim like "# Cartographer" is not a fact. Heading-only, bare-import, and
+punctuation-only chunks are dropped before they become evidence (the count appears as a warning).
+The filter has deliberate escape hatches: `#` comments in shell/Python/YAML are substantive and
+survive (only markdown files treat `#` as a heading), and when your question is itself about
+imports/includes/requires/dependencies, import lines are exactly the evidence you asked for and
+are kept.
+
+### What does `--depth deep` actually change?
+
+It widens the per-tool candidate budget and, for a compound question, decomposes it into up to
+five targeted sub-queries searched separately — one giant embedding query averages every clause
+into mush. The split is a whitespace-gated heuristic, so code tokens (`std::sort`, URLs, spaceless
+ternaries) survive intact, and a question that doesn't decompose runs unchanged. `quick` and
+`standard` behave as before.
+
 ### How do I pause for a human or transfer the task?
 
 Use `cortex decision request` for one bounded choice with at least two options and explicit
