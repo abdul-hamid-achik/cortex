@@ -5,7 +5,13 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-15
+
 ### Added
+- **Deep-mode question decomposition** — `cortex_investigate` at deep depth splits compound
+  questions into up to five targeted sub-queries (heuristic, no LLM dependency) and searches each
+  separately. Splitting is whitespace-gated so code tokens (`std::sort`, URLs, spaceless ternaries)
+  survive intact, and non-compound questions are unchanged.
 - **Optional Bob repository-contract adapter** — workspaces with `bob.yaml` can consume Bob
   v0.4.0/BOB-5 compact context during orientation and a deduplicated, capped set of exact path
   classifications during planning. Strict schema/workspace validation, bounded redacted raw
@@ -40,6 +46,16 @@ All notable changes to Cortex are documented here. The format follows
   `Latest release` navigation follows GitHub's stable release redirect, while Vercel Git Integration
   deploys `main` with the standard VitePress build and remains independent from the tag-triggered
   GitHub Release and Homebrew workflow.
+
+### Fixed
+- **Discovery evidence quality gates** — vecgrep hits that are only markdown headings, bare
+  import/require lines, or punctuation fragments are no longer recorded as investigation facts.
+  Filtering is markdown-aware (`#` code comments in shell/Python/YAML survive), keeps import lines
+  when the question itself asks about imports, and when every remaining hit scores below 0.10 the
+  investigation records zero facts and reports "no strong candidates" instead of low-value noise.
+- **Structural-stage honesty** — investigation summaries now state when the codemap stage ran but
+  returned no results, and `tool_unavailable` records no longer count as structural facts, so a
+  failed codemap expansion can't masquerade as successful vecgrep→codemap routing.
 
 ## [0.12.0] — 2026-07-12
 

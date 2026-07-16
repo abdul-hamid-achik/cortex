@@ -107,6 +107,13 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		// Quick: primary route tool only (no follow-up), still after memory recall.
 		steps = firstRouteStep(steps, route)
 	}
+	if depth == "deep" {
+		// Deep: a compound question ("where is X created, how is Y validated,
+		// how does Z enforce…") is decomposed into targeted sub-queries — one
+		// giant embedding query averages every clause into mush and returns
+		// doc-header noise (dogfooding 2026-07-15).
+		steps = decomposeSearchSteps(steps, in.Question, candLimit)
+	}
 	// Recall prior durable conclusions for THIS repo first (semantic
 	// recall): cortex writes a memory on every completed task, so a related past
 	// case ("returnTo was dropped in HandleCallback…") becomes low-confidence
@@ -154,8 +161,12 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// discovery yields no locatable candidates, the raw question falls through
 	// to codemap exactly as the previous parallel route did (byte-identical).
 	expanded := 0
+	structuralAttempted := false
+	structuralFacts := 0
 	if route.FollowUp == "codemap" && route.First != "codemap" {
 		if lim := expansionLimit(depth, candLimit); lim > 0 && len(facts) < budget {
+			structuralAttempted = true
+			before := len(facts)
 			cands := candidatesFrom(facts, lim)
 			if len(cands) > 0 {
 				steps2 := structuralSteps(cands, candLimit)
@@ -191,6 +202,15 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 				}
 				degraded = degraded || d2
 			}
+			// Count only substantive structural facts: a tool_unavailable record
+			// ("no symbol named X", codemap missing) means the stage resolved
+			// nothing — counting it would suppress the empty-stage note in the
+			// exact situation it exists for (e2e verification 2026-07-15).
+			for _, ev := range facts[before:] {
+				if ev.Kind != domain.KindToolUnavailable {
+					structuralFacts++
+				}
+			}
 		}
 	}
 
@@ -205,6 +225,14 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		// surface the causal-routing provenance count.
 		summary = fmt.Sprintf("investigated %q via %s→%s: %s recorded; %d discovery candidate(s) expanded structurally (%s)",
 			clipStr(in.Question, 60), route.First, route.FollowUp, pluralizeEv(len(facts)), expanded, route.Why)
+	}
+	if structuralAttempted && structuralFacts == 0 {
+		// The structural stage ran but resolved nothing — say so instead of
+		// letting "via vecgrep→codemap" imply the expansion succeeded
+		// (dogfooding 2026-07-15: a summary claimed vecgrep→codemap while every
+		// recorded fact was a vecgrep hit).
+		summary += "; structural stage (codemap) returned no results"
+		warnings = append(warnings, "structural stage (codemap) returned no results this round — structure was not resolved; the evidence below is discovery-only")
 	}
 	if degraded {
 		warnings = append([]string{"degraded: one or more discovery tools did not return an authoritative result this round — treat facts below with extra caution, not as a clean search"}, warnings...)
@@ -403,6 +431,128 @@ func routeSteps(r domain.Route, question string, surfaces []domain.Surface, cand
 		steps = append(steps, search("vecgrep"))
 	}
 	return steps
+}
+
+// maxSubQueries bounds the deep-mode decomposition fan-out so one compound
+// question cannot explode into unbounded discovery calls.
+const maxSubQueries = 5
+
+// interrogatives are the clause openers that mark a new sub-question after a
+// comma or "and" ("…, how is session state validated, and where is …").
+var interrogatives = map[string]bool{
+	"how": true, "where": true, "what": true, "why": true, "when": true,
+	"which": true, "who": true, "does": true, "do": true, "is": true,
+	"are": true, "can": true,
+}
+
+// subQuestions decomposes a compound question into targeted sub-queries using
+// a deliberately heuristic split (no LLM): hard separators (?, ;, :) first,
+// then comma/"and" boundaries that introduce a new interrogative clause.
+// Fragments under three words are dropped, duplicates collapse, and the result
+// is capped at max. A question that does not decompose returns nil — callers
+// keep the original question.
+func subQuestions(q string, max int) []string {
+	if max < 2 {
+		return nil
+	}
+	const marker = "\x00"
+	// Hard separators (?, ;, :) split only when followed by whitespace or the
+	// end of the question — a ? / ; / : glued to the next character is code or
+	// a URL ("std::sort", "https://…", "a?b:c"), not a clause boundary, and
+	// splitting there mangles the question into garbage sub-queries.
+	mb := make([]byte, 0, len(q))
+	for i := 0; i < len(q); i++ {
+		ch := q[i]
+		if (ch == '?' || ch == ';' || ch == ':') &&
+			(i+1 == len(q) || q[i+1] == ' ' || q[i+1] == '\t' || q[i+1] == '\n') {
+			mb = append(mb, marker[0])
+			continue
+		}
+		mb = append(mb, ch)
+	}
+	marked := string(mb)
+	// Soft separators: a comma or " and " followed by an interrogative word.
+	var b strings.Builder
+	for i := 0; i < len(marked); {
+		cut := 0
+		for _, sep := range []string{", ", " and "} {
+			if hasFoldPrefix(marked[i:], sep) && interrogatives[firstWordLower(marked[i+len(sep):])] {
+				cut = len(sep)
+				break
+			}
+		}
+		if cut > 0 {
+			b.WriteString(marker)
+			i += cut
+			continue
+		}
+		b.WriteByte(marked[i])
+		i++
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range strings.Split(b.String(), marker) {
+		p = strings.Trim(strings.TrimSpace(p), ",")
+		p = strings.TrimSpace(p)
+		if len(splitWS(p)) < 3 {
+			continue // too short to stand alone as a query
+		}
+		key := strings.ToLower(p)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, p)
+		if len(out) == max {
+			break
+		}
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+// decomposeSearchSteps rewrites each discovery search step over a compound
+// question into one targeted search per sub-question. Non-search steps
+// (codemap impact/find, artifact listings) pass through unchanged; a question
+// that does not decompose leaves the steps untouched. Each tool's search is
+// expanded once even if the route named it twice.
+func decomposeSearchSteps(steps []step, question string, candLimit int) []step {
+	subs := subQuestions(question, maxSubQueries)
+	if len(subs) == 0 {
+		return steps
+	}
+	expandedTools := map[string]bool{}
+	var out []step
+	for _, s := range steps {
+		if s.op != "search" {
+			out = append(out, s)
+			continue
+		}
+		if expandedTools[s.tool] {
+			continue
+		}
+		expandedTools[s.tool] = true
+		for _, sub := range subs {
+			out = append(out, step{tool: s.tool, op: "search", input: map[string]any{"query": sub, "limit": candLimit}})
+		}
+	}
+	return out
+}
+
+// hasFoldPrefix reports whether s begins with prefix, ASCII case-insensitively.
+func hasFoldPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+// firstWordLower returns the first whitespace-delimited word of s, lowercased.
+func firstWordLower(s string) string {
+	fields := splitWS(strings.TrimSpace(s))
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.ToLower(fields[0])
 }
 
 // candidate is one deduplicated discovery hit selected for structural expansion

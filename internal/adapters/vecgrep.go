@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -178,9 +179,50 @@ func (v *Vecgrep) similar(ctx context.Context, dir, target string, limit int) (R
 	return v.hitsResult("similar", target, "similarity", hits, stdout), nil
 }
 
+// minUsefulScore is the discovery usefulness floor. When every scored hit of a
+// search falls below it, the search surfaced only noise (dogfooding 2026-07-15:
+// 16 hits at 0.01–0.02 — doc headers and bare imports — were recorded as
+// evidence and polluted the task ledger). Hits with score 0 are treated as
+// unscored (old binaries / keyword mode) and never gated on score.
+const minUsefulScore = 0.10
+
 func (v *Vecgrep) hitsResult(op, q, mode string, hits []vgHit, raw string) Result {
-	facts := make([]Fact, 0, len(hits))
+	// Quality gate 1: drop chunks that carry no evidentiary weight — markdown
+	// headings, bare import statements, punctuation-only fragments. A claim
+	// like "# Cartographer" is not a fact (dogfooding 2026-07-15). When the
+	// question itself is about imports/includes/requires, import lines ARE the
+	// evidence and are kept.
+	keepImports := queryWantsImports(q)
+	kept := make([]vgHit, 0, len(hits))
+	dropped := 0
 	for _, h := range hits {
+		if lowValueChunk(h.Content, markdownDoc(h), keepImports) {
+			dropped++
+			continue
+		}
+		kept = append(kept, h)
+	}
+	var warnings []string
+	if dropped > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"vecgrep %s: filtered %s (heading-only, import-only, or trivial chunks are not recorded as evidence)",
+			op, pluralize(dropped, "low-value hit")))
+	}
+	// Quality gate 2: when EVERY remaining scored hit is below the usefulness
+	// floor, say so honestly instead of recording a pile of weak candidates.
+	if len(kept) > 0 && allBelowScore(kept, minUsefulScore) {
+		msg := fmt.Sprintf(
+			"vecgrep %s: discovery returned no strong candidates for %q — all %d hits scored below %.2f; treat this as nothing found, not as evidence",
+			op, clip(q, 40), len(kept), minUsefulScore)
+		return Result{
+			Tool: "vecgrep", Operation: op, Status: StatusAuthoritative,
+			Summary:  fmt.Sprintf("%s (%s): no strong candidates for %q (%d weak hits below score %.2f)", op, mode, clip(q, 40), len(kept), minUsefulScore),
+			Warnings: append(warnings, msg),
+			Raw:      raw,
+		}
+	}
+	facts := make([]Fact, 0, len(kept))
+	for _, h := range kept {
 		path := firstNonEmpty(h.RelPath, h.FilePath)
 		claim := fmt.Sprintf("%s in %s (score %.2f)", firstNonEmpty(h.SymbolName, h.ChunkType), path, h.Score)
 		if snip := clip(firstLine(h.Content), 80); snip != "" {
@@ -194,10 +236,143 @@ func (v *Vecgrep) hitsResult(op, q, mode string, hits []vgHit, raw string) Resul
 	}
 	return Result{
 		Tool: "vecgrep", Operation: op, Status: StatusAuthoritative,
-		Summary: fmt.Sprintf("%s (%s): %s for %q", op, mode, pluralize(len(hits), "candidate"), clip(q, 40)),
-		Facts:   facts,
-		Raw:     raw,
+		Summary:  fmt.Sprintf("%s (%s): %s for %q", op, mode, pluralize(len(facts), "candidate"), clip(q, 40)),
+		Facts:    facts,
+		Warnings: warnings,
+		Raw:      raw,
 	}
+}
+
+// allBelowScore reports whether every hit carries a positive score below the
+// floor. Any unscored hit (score ≤ 0 — old binaries, keyword mode) disables
+// the gate: absence of a score is not evidence of weakness.
+func allBelowScore(hits []vgHit, floor float64) bool {
+	if len(hits) == 0 {
+		return false
+	}
+	for _, h := range hits {
+		if h.Score <= 0 || h.Score >= floor {
+			return false
+		}
+	}
+	return true
+}
+
+// lowValueChunk reports whether a hit's matched content carries no evidentiary
+// weight: every non-empty line is a markdown heading (markdown documents
+// only), a bare import/include statement (unless the question is about
+// imports), or near-empty punctuation. Empty content is NOT low value — old
+// binaries omit the content field entirely, and absence of content must not
+// suppress an otherwise locatable hit.
+func lowValueChunk(content string, markdown, keepImports bool) bool {
+	c := strings.TrimSpace(content)
+	if c == "" {
+		return false
+	}
+	for _, ln := range strings.Split(c, "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" {
+			continue
+		}
+		if markdown && headingLine(t) {
+			continue
+		}
+		if !keepImports && importLine(t) {
+			continue
+		}
+		if trivialLine(t) {
+			continue
+		}
+		return false // at least one substantive line
+	}
+	return true
+}
+
+// markdownDoc reports whether the hit comes from a markdown document — the
+// only place a leading '#' marks a heading. Everywhere else '#' opens a
+// comment (shell, Python, YAML) or a preprocessor directive (C/C++), which is
+// substantive content. Unknown origin is NOT markdown: dropping evidence
+// requires positive proof of noise.
+func markdownDoc(h vgHit) bool {
+	if strings.EqualFold(strings.TrimSpace(h.Language), "markdown") {
+		return true
+	}
+	p := strings.ToLower(firstNonEmpty(h.RelPath, h.FilePath))
+	for _, ext := range []string{".md", ".mdx", ".markdown", ".mdown"} {
+		if strings.HasSuffix(p, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// queryWantsImports reports whether the search question is itself about
+// dependency wiring — then import/include/require lines are the evidence the
+// caller asked for and must not be filtered as noise.
+func queryWantsImports(q string) bool {
+	for _, kw := range []string{"import", "include", "require", "depend"} {
+		if containsFold(q, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// headingLine matches markdown ATX headings ("# Title") and setext underlines
+// ("----", "====").
+func headingLine(t string) bool {
+	if strings.HasPrefix(t, "#") {
+		return true
+	}
+	return len(t) >= 3 && strings.Trim(t, "=-") == ""
+}
+
+// importPrefixes are line starts that unambiguously mark a bare dependency
+// statement (TS/JS, Go, Python, C/C++). Keyword prefixes that double as
+// English prose ("use", "using", "package") are handled shape-aware in
+// importLine instead.
+var importPrefixes = []string{
+	"import ", "import{", "import(", "export {", "export{",
+	"#include", "require(",
+}
+
+// importLine matches a line that is only an import/include/require statement.
+func importLine(t string) bool {
+	for _, p := range importPrefixes {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	// Rust "use std::fmt;", C# "using System.Text;", Go/Java "package main" /
+	// "package com.example;" — only in statement shape (semicolon-terminated
+	// or a single module token). Prose like "use the campaign dialog to plan a
+	// probe run" must survive.
+	for _, kw := range []string{"use ", "using ", "package "} {
+		if strings.HasPrefix(t, kw) {
+			rest := strings.TrimSpace(t[len(kw):])
+			return strings.HasSuffix(rest, ";") || len(strings.Fields(rest)) == 1
+		}
+	}
+	// JS/TS continuation (`} from "..."`) and Python (`from x import y`).
+	if strings.Contains(t, ` from "`) || strings.Contains(t, " from '") {
+		return true
+	}
+	return strings.HasPrefix(t, "from ") && strings.Contains(t, " import ")
+}
+
+// trivialLine matches punctuation-only fragments (closing braces, rules,
+// delimiters) with fewer than three letters or digits.
+func trivialLine(t string) bool {
+	n := 0
+	for _, r := range t {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			n++
+			if n >= 3 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // vgMemory is one recalled memory (bare-array output).
