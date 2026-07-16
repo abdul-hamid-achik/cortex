@@ -5,6 +5,8 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-07-16
+
 ### Fixed
 - **Deep-mode decomposition now splits object conjunctions** — "how does X enforce idempotency
   and size limits?" previously did not decompose at all (the clause-boundary pass only split at
