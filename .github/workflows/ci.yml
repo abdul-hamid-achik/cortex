@@ -41,8 +41,8 @@ jobs:
       - name: Build
         run: task build
 
-      - name: Coverage
-        run: go test -coverprofile=coverage.out ./...
+      - name: Coverage (with 78% floor gate)
+        run: task cov-check
 
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -65,7 +65,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          # Pinned to match the Taskfile's local lint version for reproducibility
+          # (was `latest`, which could break CI on an unrelated lint release).
+          version: v2.12.2
 
   docs:
     runs-on: ubuntu-latest

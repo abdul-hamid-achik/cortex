@@ -101,6 +101,13 @@ about a specific symbol — not as weak evidence. The summary also states when t
 (codemap) stage ran but returned no results, so discovery-only evidence is never dressed up as
 resolved structure.
 
+When semantic discovery (vecgrep) **cannot run** — no index in the workspace, or the binary is
+missing — Cortex falls back to a literal `git grep` over tracked files so discovery still has a
+zero-dependency floor (git is the only hard requirement). The matches are recorded as
+low-confidence `code_location` candidates (one per file, with a snippet) and can still be expanded
+by the structural stage. This fallback fires only when semantic search is *unavailable*; a clean
+search that legitimately finds nothing is reported as such, never papered over with literal noise.
+
 ### `cortex route [question]`
 
 Export the executable routing matrix for agents and gateway instructions:
@@ -220,6 +227,7 @@ cortex verify task_06FK… \
 | `--claim-surface` (repeatable) | explicit `code`, `browser`, `terminal`, `artifact`, or `secret` surface; repeat once per claim |
 | `--claim-verifier` (repeatable) | optional exact verifier (`codemap`, `cairntrace`, `glyphrun`, `fcheap`, `tvault`, or `command:<name>`); omit entirely or repeat once per claim |
 | `--claim-contract` (repeatable) | required exact spec path/configured check/capability selector for each typed claim; repeat once per claim |
+| `--claim-spec` (repeatable) | one **self-contained** typed claim — `id=…\|surface=…\|verifier=…\|contract=…\|<statement>` — so a claim's attributes need not be repeated in lockstep across the coupled flags above |
 | `--changed-file` (repeatable) | override changed files (derived from git otherwise) |
 | `--browser-spec` | cairntrace spec path (proves browser claims) |
 | `--terminal-spec` | glyphrun spec path (proves terminal claims) |
@@ -227,7 +235,16 @@ cortex verify task_06FK… \
 | `--secret-project` | tvault project for a value-free capability claim |
 | `--no-auto-specs` | disable automatic selection of covering browser/terminal specs |
 | `--no-op` | acknowledge that a change task intentionally produced no diff; does not create a pass |
-| `--actor` | active change-lease owner, when leased |
+| `--actor` | change-lease owner; defaults to the active lease owner when the task is leased |
+
+`--claim-spec` bundles a whole typed claim into one value (recognized keys `id`, `surface`,
+`verifier`, `contract`; everything else is the statement, which may itself contain `=` or `|`):
+
+```bash
+cortex verify task_06FK… \
+  --claim-spec "id=checkout_return|surface=browser|contract=specs/cairntrace/checkout_return.yml|Login started at checkout returns to checkout" \
+  --browser-spec specs/cairntrace/checkout_return.yml
+```
 
 Supplying `--claim-surface` opts into typed claims and requires the matching `--claim-contract`.
 When `--claim-id` is used, repeat it once per claim. Typed routing is exact: a claim is `not_run`
@@ -353,6 +370,21 @@ Cortex stores sessions in a central, XDG-organized location
 work regardless of which repository it belongs to — one place to audit and monitor. All support
 `--json`.
 
+**Choosing a read command** — they overlap on purpose; pick by scope:
+
+| You want… | Use |
+|---|---|
+| One screen of a single session, from any directory (the default human view) | `cortex show <taskId>` |
+| The agent-checkpoint view: phase, hypotheses, scope drift, missing verification, tool health | `cortex status <taskId>` |
+| A session's chronological feed (phases + evidence + tool calls + verification) | `cortex timeline <taskId>` |
+| Outcome + evidence-trail metrics, incl. time-in-phase (per-task or workspace aggregate) | `cortex metrics [taskId]` |
+| Every session across every repo (filter by repo/active/stale/query) | `cortex sessions` |
+| A cross-repo rollup (completion, verification, where work sits) | `cortex overview` |
+
+`show` is the recommended single-session view; `status`, `timeline`, and `metrics` are focused
+projections of the same session (and `timeline`/`metrics` are also exposed to operators via the MCP
+`all` profile), so nothing is lost by starting with `show`.
+
 ### `cortex sessions` (`sess`)
 
 Every session across every repo, newest first: repo · phase · age · verification · goal.
@@ -375,6 +407,22 @@ the active tree into `$XDG_STATE_HOME/cortex/archive/`, so `sessions` / `overvie
 focused on live work as history accumulates. The data is preserved and reversible with `unarchive`;
 **nothing is deleted**, and in-flight sessions are refused. View the archive with
 `cortex sessions --archived`.
+
+### `cortex prune`
+
+Bulk-retire **forgotten in-flight** sessions. Lists the active sessions that have not advanced
+within `--older-than` (default `7d` — more conservative than the 24h monitoring "stale" flag).
+**Dry run by default**: it reports what would be pruned and changes nothing. With `--apply`, each
+stale session is **aborted** (recording the reason) and **archived** — honest because the abort
+records why it was retired, and recoverable because `cortex unarchive <taskId>` restores it. Use
+`--repo` to prune one repository only.
+
+```bash
+cortex prune                       # dry run — list in-flight sessions idle > 7d
+cortex prune --older-than 30d      # idle > 30 days
+cortex prune --apply               # abort + archive them (reversible)
+cortex prune --repo myrepo --apply # one repository only
+```
 
 ### `cortex rm <taskId>` (`delete`)
 
@@ -444,6 +492,8 @@ Keys: `↑/↓` navigate · `g/G` jump · `Page Up/Page Down` (or `Ctrl-U/Ctrl-D
 | `cortex metrics [taskId]` | observability: per-task outcome + evidence trail (incl. **time-in-phase**), or the workspace aggregate |
 | `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
 | `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
+| `cortex init` | write a starter `cortex.yaml`, detecting your test runner (Go/Rust/Node/Python) as a command verifier; refuses to clobber an existing config unless `--force` |
+| `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** — with the exact command to fix each gap |
 | `cortex config` | resolved workspace/storage paths, budget, recall policy, safe verifier metadata (argv omitted), redaction count, and applied `cortex.yaml` sources |
 | `cortex abort <taskId> <reason>` | stop a task without deleting evidence |
 | `cortex read-evidence <taskId> <evidenceId>` | print a full evidence record (with its `rawRef`) |

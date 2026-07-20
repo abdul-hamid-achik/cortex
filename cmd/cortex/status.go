@@ -13,7 +13,11 @@ import (
 var statusCmd = &cobra.Command{
 	Use:   "status <taskId>",
 	Short: "Show a task's phase, hypotheses, scope drift, and missing verification",
-	Args:  cobra.ExactArgs(1),
+	Long: `The agent-checkpoint view of a task in the current workspace: its phase, unresolved
+hypotheses, scope drift, and missing verification (add --detail full for specialist tool health).
+For a richer one-screen human view that works from any directory, use cortex show <taskId>; for a
+chronological feed use cortex timeline, and for outcome metrics use cortex metrics.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		k, err := kernelFor(cmd)
 		if err != nil {

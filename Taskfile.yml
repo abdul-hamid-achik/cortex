@@ -88,6 +88,16 @@ tasks:
       - go test -coverprofile=coverage.out ./...
       - go tool cover -func=coverage.out | tail -1
 
+  cov-check:
+    desc: Run tests with coverage and fail if the total drops below the 78% floor
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - |
+        total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+        floor=78
+        echo "total coverage: ${total}% (floor ${floor}%)"
+        awk "BEGIN {exit !(${total} >= ${floor})}" || { echo "coverage ${total}% fell below the ${floor}% floor" >&2; exit 1; }
+
   check:
     desc: Format, lint, and test (pre-commit gate)
     aliases: [ci, verify]

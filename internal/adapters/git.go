@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -36,6 +37,8 @@ func (g *Git) Execute(ctx context.Context, req Request) (Result, error) {
 		return g.status(ctx, dir)
 	case "changed_files":
 		return g.changed(ctx, dir, req.Str("since"), boolOf(req.Input["staged"]))
+	case "grep":
+		return g.grep(ctx, dir, req.Str("pattern"), req.Int("limit", 8))
 	default:
 		return Result{Tool: "git", Operation: req.Operation, Status: StatusError,
 			Summary: "unknown git operation: " + req.Operation}, nil
@@ -82,7 +85,7 @@ func (g *Git) CurrentRevision(ctx context.Context, dir string) (Revision, error)
 	_, _ = h.Write([]byte(diff))
 	for _, p := range paths {
 		_, _ = h.Write([]byte("\x00" + filepath.ToSlash(p) + "\x00"))
-		if b, readErr := os.ReadFile(filepath.Join(dir, p)); readErr == nil {
+		if b, readErr := os.ReadFile(filepath.Join(dir, p)); readErr == nil { // #nosec G304 -- p is a git-tracked path from ls-files within the workspace
 			_, _ = h.Write(b)
 		} else {
 			_, _ = h.Write([]byte("<unreadable>"))
@@ -199,6 +202,97 @@ func (g *Git) changed(ctx context.Context, dir, since string, staged bool) (Resu
 		Summary: pluralize(len(files), "changed file"),
 		Facts:   facts,
 	}, nil
+}
+
+// grep runs a literal, case-insensitive `git grep` over tracked files — a
+// zero-dependency discovery fallback for when no semantic index exists (git is
+// Cortex's only hard dependency). It returns low-confidence code_location
+// candidates (one per matching file, bounded to limit), never proof. A clean
+// search with zero matches is authoritative-empty, not an error; a non-repo
+// workspace degrades to partial.
+func (g *Git) grep(ctx context.Context, dir, pattern string, limit int) (Result, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return Result{Tool: "git", Operation: "grep", Status: StatusError,
+			Summary: "git grep needs a non-empty pattern"}, nil
+	}
+	if limit < 1 {
+		limit = 8
+	}
+	if !binExists(g.bin) {
+		return unavailable("git", "grep", "git not available"), nil
+	}
+	// -n line numbers, -I skip binaries, -i case-insensitive, -F fixed-string
+	// (literal keywords — never a regex), --max-count bounds matches per file so
+	// a broad term cannot flood the capture. `--` keeps a leading dash in the
+	// pattern from being parsed as a flag.
+	out, serr, code, err := g.exec(ctx, dir,
+		"grep", "-n", "-I", "-i", "-F", "--max-count", "3", "--", pattern)
+	if err != nil {
+		return unavailable("git", "grep", err.Error()), nil
+	}
+	switch code {
+	case 0:
+		// matches found — parsed below
+	case 1:
+		// git grep exits 1 on a clean search with no matches: authoritative empty.
+		return Result{Tool: "git", Operation: "grep", Status: StatusAuthoritative,
+			Summary: fmt.Sprintf("git grep: no tracked file matches %q", pattern)}, nil
+	default:
+		msg := firstNonEmpty(firstLine(serr), fmt.Sprintf("exit %d", code))
+		if strings.Contains(msg, "not a git repository") {
+			return Result{Tool: "git", Operation: "grep", Status: StatusPartial,
+				Summary: "workspace is not a git repository"}, nil
+		}
+		return unavailable("git", "grep", msg), nil
+	}
+	facts := parseGitGrep(out, pattern, limit)
+	if len(facts) == 0 {
+		return Result{Tool: "git", Operation: "grep", Status: StatusAuthoritative,
+			Summary: fmt.Sprintf("git grep: no tracked file matches %q", pattern)}, nil
+	}
+	return Result{
+		Tool: "git", Operation: "grep", Status: StatusAuthoritative,
+		Summary: fmt.Sprintf("git grep: %s matching %q (literal, tracked files)", pluralize(len(facts), "candidate file"), pattern),
+		Facts:   facts,
+	}, nil
+}
+
+// parseGitGrep parses `git grep -n` output ("<file>:<line>:<text>") into one
+// code_location fact per distinct file (its first match), bounded to limit. The
+// matched line is already redacted by the exec layer, so the snippet is safe to
+// record.
+func parseGitGrep(out, pattern string, limit int) []Fact {
+	var facts []Fact
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if len(facts) >= limit {
+			break
+		}
+		file, rest, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(file) == "" {
+			continue
+		}
+		lineNo, text, ok := strings.Cut(rest, ":")
+		if !ok {
+			continue
+		}
+		file = strings.TrimSpace(file)
+		if seen[file] {
+			continue
+		}
+		seen[file] = true
+		n, _ := strconv.Atoi(strings.TrimSpace(lineNo))
+		claim := fmt.Sprintf("%s:%s matches %q", file, strings.TrimSpace(lineNo), pattern)
+		if snippet := strings.TrimSpace(text); snippet != "" {
+			claim += " — " + clip(snippet, 120)
+		}
+		facts = append(facts, Fact{
+			Kind: "code_location", Claim: claim, Confidence: "low",
+			Location: &Location{File: file, StartLine: n},
+		})
+	}
+	return facts
 }
 
 // line runs a git command and returns its first line trimmed (read-only).

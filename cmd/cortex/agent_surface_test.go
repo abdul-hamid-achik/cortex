@@ -77,24 +77,15 @@ func TestCLIAgentWorkflowPreservesContractsAndStructuredActions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	withoutActorOut, withoutActorErr := runCLI(t, "--json", "-C", ws, "verify", taskID,
-		"--claim", "redirect is preserved", "--claim-surface", "code", "--claim-contract", "codemap_review")
-	if withoutActorErr == nil {
-		t.Fatalf("leased verify without --actor should fail: %s", withoutActorOut)
-	}
-	var withoutActor domain.Envelope
-	if err := json.Unmarshal([]byte(withoutActorOut), &withoutActor); err != nil {
-		t.Fatalf("leased verify rejection is not JSON: %v (%s)", err, withoutActorOut)
-	}
-	if withoutActor.OK || !strings.Contains(withoutActor.Error, "verify must name that actor") {
-		t.Fatalf("unexpected leased verify rejection: %+v", withoutActor)
-	}
-
+	// Verify WITHOUT --actor: it defaults to the active lease owner (agent-a)
+	// rather than failing, so a single actor who ran begin-change need not repeat
+	// the actor. The typed claim still verifies. (An explicit *wrong* actor is
+	// still rejected — covered by the kernel and conformance tests.)
 	verified := qaRunCLIEnvelope(t, "--json", "-C", ws, "verify", taskID,
-		"--actor", "agent-a", "--claim", "redirect is preserved", "--claim-surface", "code",
+		"--claim", "redirect is preserved", "--claim-surface", "code",
 		"--claim-verifier", "codemap", "--claim-contract", "codemap_review")
 	if verified.Phase != domain.PhaseVerifying {
-		t.Fatalf("typed verify = %+v", verified)
+		t.Fatalf("typed verify without --actor (defaults to owner) = %+v", verified)
 	}
 	qaRequireCLIAction(t, verified, "cortex_verify")
 
@@ -187,7 +178,7 @@ func TestCLIAgentHelpMatchesExposedContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--actor", "--claim-surface", "--claim-contract", "same --actor"} {
+	for _, want := range []string{"--actor", "--claim-surface", "--claim-contract", "defaults to the lease owner"} {
 		if !strings.Contains(verify, want) {
 			t.Errorf("verify help missing %q:\n%s", want, verify)
 		}

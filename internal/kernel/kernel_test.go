@@ -2432,7 +2432,13 @@ func TestInvestigateRunsCaseRecallStep(t *testing.T) {
 		}}
 	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
 		result: adapters.Result{Status: adapters.StatusAuthoritative}}
-	k := newTestKernel(t, testRepo(t), vl, codemap)
+	// Semantic search must be authoritative here so this test isolates the
+	// "no discovery candidates → raw-question codemap fallback" path. An
+	// unavailable vecgrep search would (correctly) trigger the git-grep
+	// discovery fallback instead, which has its own dedicated tests.
+	vecgrep := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	k := newTestKernel(t, testRepo(t), vl, codemap, vecgrep)
 	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g"})
 	inv, _ := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is the login callback wired up"})
 	found := false

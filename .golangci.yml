@@ -8,6 +8,29 @@ linters:
     - staticcheck
     - unused
     - misspell
+    # gosec adds a static security net over the runtime code (process exec,
+    # file paths, permissions, redaction). Test/eval infrastructure is excluded
+    # below; genuine safe-by-construction sites in runtime code carry a
+    # justified inline `#nosec` annotation documenting the defense.
+    - gosec
+  exclusions:
+    rules:
+      # Tests legitimately use secret-shaped fixtures, deliberate permission
+      # setups, and exec-with-variable; gosec's heuristics only add noise there.
+      - path: _test\.go
+        linters:
+          - gosec
+      # The deterministic scorecard and the opt-in trusted trajectory harness are
+      # evaluation infrastructure, not shipped runtime code (see AGENTS.md). The
+      # harness intentionally spawns processes and moves files under out-of-band
+      # approval, so gosec's exec/file warnings there are expected, not defects.
+      - path: internal/eval/
+        linters:
+          - gosec
+      # Public JSON/MCP golden-fixture support writes normalized fixtures by design.
+      - path: internal/contracttest/
+        linters:
+          - gosec
 
 issues:
   max-issues-per-linter: 0

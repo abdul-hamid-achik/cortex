@@ -344,7 +344,7 @@ func (f *Fcheap) PreviewWithOptions(ctx context.Context, dir, stash, selector st
 	if err != nil {
 		return preview, err
 	}
-	file, err := os.Open(full)
+	file, err := os.Open(full) // #nosec G304 -- full is validated by safeRestoredArtifactPath
 	if err != nil {
 		return preview, err
 	}
@@ -400,7 +400,7 @@ func listRestoredArtifactFiles(root string) ([]PreviewFile, error) {
 	for len(dirs) > 0 {
 		dir := dirs[0]
 		dirs = dirs[1:]
-		handle, err := os.Open(dir)
+		handle, err := os.Open(dir) // #nosec G304 -- dir is a bounded walk rooted at a validated artifact path
 		if err != nil {
 			return nil, err
 		}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
@@ -16,7 +17,8 @@ var verifyCmd = &cobra.Command{
 	Long: `Run verification after editing: a structural diff review (codemap), any
 provided behavioral specs, and scope-drift detection. Each named claim gets a
 receipt; a claim with no relevant verifier is recorded not_run — never passed.
-If begin-change claimed a lease, verification must pass the same --actor.
+If begin-change claimed a lease, --actor defaults to the lease owner; pass
+--actor explicitly only to assert a specific actor (it must match the owner).
 Prefer pairing each --claim with an explicit --claim-surface. Repository-configured
 commands are arbitrary local code and run only when the trusted launcher set
 CORTEX_APPROVE_COMMANDS=1; otherwise their receipts are blocked.
@@ -26,6 +28,13 @@ CORTEX_APPROVE_COMMANDS=1; otherwise their receipts are blocked.
     --claim-id checkout_return \
     --claim-surface browser \
     --claim-contract specs/cairntrace/checkout_return.yml \
+    --browser-spec specs/cairntrace/checkout_return.yml
+
+Each typed claim can also be given as ONE self-contained --claim-spec instead of
+the coupled --claim-id/-surface/-verifier/-contract flags (repeat per claim):
+
+  cortex verify task_X \
+    --claim-spec "id=checkout_return|surface=browser|contract=specs/cairntrace/checkout_return.yml|the OAuth callback preserves the return URL" \
     --browser-spec specs/cairntrace/checkout_return.yml`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -41,6 +50,14 @@ CORTEX_APPROVE_COMMANDS=1; otherwise their receipts are blocked.
 		claimSpecs, err := verificationClaimSpecs(claims, claimIDs, claimSurfaces, claimVerifiers, claimContracts)
 		if err != nil {
 			return err
+		}
+		specFlags, _ := cmd.Flags().GetStringArray("claim-spec")
+		for _, spec := range specFlags {
+			claim, perr := parseClaimSpec(spec)
+			if perr != nil {
+				return perr
+			}
+			claimSpecs = append(claimSpecs, claim)
 		}
 		if len(claimSpecs) > 0 {
 			claims = nil
@@ -79,6 +96,7 @@ func init() {
 	verifyCmd.Flags().StringArray("claim-surface", nil, "explicit surface for each --claim: code, browser, terminal, artifact, or secret")
 	verifyCmd.Flags().StringArray("claim-verifier", nil, "optional exact verifier for each --claim (repeat once per claim)")
 	verifyCmd.Flags().StringArray("claim-contract", nil, "required exact spec/check for each typed --claim (repeat once per claim)")
+	verifyCmd.Flags().StringArray("claim-spec", nil, "one self-contained typed claim: id=|surface=|verifier=|contract=|<statement> (repeatable; replaces the coupled --claim-* flags)")
 	verifyCmd.Flags().StringArray("changed-file", nil, "override changed files (repeatable; derived from git when omitted)")
 	verifyCmd.Flags().String("browser-spec", "", "cairntrace spec path to prove browser claims")
 	verifyCmd.Flags().String("terminal-spec", "", "glyphrun spec path to prove terminal claims")
@@ -86,7 +104,7 @@ func init() {
 	verifyCmd.Flags().String("secret-project", "", "tvault project whose value-free availability proves secret capability")
 	verifyCmd.Flags().Bool("no-auto-specs", false, "don't auto-select and run the specs that cover the change when none is supplied")
 	verifyCmd.Flags().Bool("no-op", false, "explicitly acknowledge that this change task intentionally produced no diff")
-	verifyCmd.Flags().String("actor", "", "active change-lease owner, when the task is leased")
+	verifyCmd.Flags().String("actor", "", "change-lease owner (defaults to the active lease owner when the task is leased)")
 	rootCmd.AddCommand(verifyCmd)
 }
 
@@ -119,4 +137,42 @@ func verificationClaimSpecs(claims, ids, surfaces, verifiers, contracts []string
 		out = append(out, claim)
 	}
 	return out, nil
+}
+
+// parseClaimSpec parses one self-contained typed claim of the form
+// "id=X|surface=Y|verifier=Z|contract=W|<statement>". Recognized key=value
+// segments (id, surface, verifier, contract) set the matching field; every other
+// pipe-separated segment is statement text, re-joined with "|" so a statement
+// may itself contain pipes or "=". This is the ergonomic alternative to the
+// coupled --claim-id/-surface/-verifier/-contract flags, which must be repeated
+// in lockstep per claim. Surface/verifier validity is checked by the kernel.
+func parseClaimSpec(spec string) (domain.VerificationClaim, error) {
+	var claim domain.VerificationClaim
+	var statement []string
+	for _, part := range strings.Split(spec, "|") {
+		key, value, isKV := strings.Cut(part, "=")
+		if isKV {
+			switch strings.TrimSpace(key) {
+			case "id":
+				claim.ID = strings.TrimSpace(value)
+				continue
+			case "surface":
+				claim.Surface = domain.Surface(strings.TrimSpace(value))
+				continue
+			case "verifier":
+				claim.Verifier = strings.TrimSpace(value)
+				continue
+			case "contract":
+				claim.Contract = strings.TrimSpace(value)
+				continue
+			}
+		}
+		statement = append(statement, part)
+	}
+	claim.Statement = strings.TrimSpace(strings.Join(statement, "|"))
+	claim.Required = true
+	if claim.Statement == "" {
+		return claim, fmt.Errorf("claim spec %q has no statement", spec)
+	}
+	return claim, nil
 }

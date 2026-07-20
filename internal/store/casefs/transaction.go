@@ -350,7 +350,7 @@ func (s *Store) planRawValuesUnlocked(taskID string, raws []RawRecord) ([]transa
 
 func (s *Store) planEvidenceLedgerUnlocked(taskID string, evidence []domain.Evidence) ([]byte, bool, error) {
 	path := filepath.Join(s.dir(taskID), "evidence.jsonl")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is built from a validated task id
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, false, err
 	}
@@ -535,7 +535,7 @@ func (s *Store) evidenceLedgerWithUnlocked(taskID string, evidence domain.Eviden
 
 func (s *Store) evidenceLedgerWithManyUnlocked(taskID string, evidence []domain.Evidence) ([]byte, error) {
 	path := filepath.Join(s.dir(taskID), "evidence.jsonl")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is built from a validated task id
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -618,7 +618,7 @@ func (s *Store) stageTransactionFiles(taskID string, revision uint64, values []t
 	for _, item := range values {
 		target := filepath.Join(s.dir(taskID), item.name)
 		stage := fmt.Sprintf("%s.txn-%d", target, revision)
-		old, err := os.ReadFile(target)
+		old, err := os.ReadFile(target) // #nosec G304 -- target joins a validated task dir with a controlled storage name
 		existed := err == nil
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			removeStagedFiles(files)

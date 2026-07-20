@@ -10,7 +10,7 @@ import (
 // whether that process still exists. Malformed/zero PIDs are treated as dead so
 // genuinely abandoned legacy locks remain recoverable.
 func lockOwnerAlive(lockPath string) bool {
-	data, err := os.ReadFile(lockPath)
+	data, err := os.ReadFile(lockPath) // #nosec G304 -- lockPath is built by the store from a validated task id
 	if err != nil {
 		return false
 	}

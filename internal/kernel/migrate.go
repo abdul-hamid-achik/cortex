@@ -121,7 +121,7 @@ func Migrate(apply bool) (MigrateReport, error) {
 // notably Windows) it falls back to a recursive copy followed by removing the
 // source, which is correct (if slower) regardless of why the rename failed.
 func moveTree(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { // #nosec G301 -- migration recreates the XDG layout; case contents keep their owner-only perms
 		return err
 	}
 	if err := os.Rename(src, dst); err == nil {
@@ -179,13 +179,13 @@ func copyTree(src, dst string) error {
 
 // copyFile copies a single regular file, preserving mode.
 func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
+	in, err := os.Open(src) // #nosec G304 -- src is a file under the legacy cortex root being migrated
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm()) // #nosec G304 -- dst is a migration destination under the XDG layout
 	if err != nil {
 		return err
 	}

@@ -476,35 +476,20 @@ func TestMCPAgentWorkflowPreservesActorsTypedClaimsAndActions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	withoutActorResult, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "cortex_verify", Arguments: map[string]any{
-		"taskId": taskID, "workspace": ws,
-		"claimSpecs": []any{map[string]any{
-			"id": "claim_redirect", "statement": "redirect is preserved", "surface": "code", "contract": "codemap_review",
-		}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !withoutActorResult.IsError {
-		t.Fatalf("leased verify rejection must set MCP isError: %s", textOf(withoutActorResult))
-	}
-	var withoutActor map[string]any
-	if err := json.Unmarshal([]byte(textOf(withoutActorResult)), &withoutActor); err != nil {
-		t.Fatalf("leased verify rejection lost its JSON envelope: %v (%s)", err, textOf(withoutActorResult))
-	}
-	if withoutActor["ok"] != false || !strings.Contains(withoutActor["error"].(string), "verify must name that actor") {
-		t.Fatalf("leased verify without actor should fail: %v", withoutActor)
-	}
-
+	// Verify WITHOUT an explicit actor: it defaults to the active lease owner
+	// (agent-a) rather than failing, so a single actor who ran begin-change need
+	// not repeat the actor at verify. The typed claim must still survive into the
+	// handoff receipts. (An explicit *wrong* actor is still rejected — covered by
+	// the kernel and conformance tests.)
 	verified := callEnvelope(t, cs, "cortex_verify", map[string]any{
-		"taskId": taskID, "workspace": ws, "actor": "agent-a",
+		"taskId": taskID, "workspace": ws,
 		"claimSpecs": []any{map[string]any{
 			"id": "claim_redirect", "statement": "redirect is preserved", "surface": "code",
 			"verifier": "codemap", "contract": "codemap_review",
 		}},
 	})
 	if verified["ok"] != true || verified["phase"] != "verifying" {
-		t.Fatalf("leased typed verify = %v", verified)
+		t.Fatalf("leased typed verify without explicit actor (defaults to owner) = %v", verified)
 	}
 	qaRequireAction(t, verified, "cortex_verify")
 

@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -52,4 +53,42 @@ func firstLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// requireFields verifies that each named key is present and non-null in a JSON
+// object, returning an error naming any that are missing. Adapters call it after
+// decodeJSON to catch schema drift: if a tool renames a field the adapter relies
+// on (e.g. codemap's "found"), a plain unmarshal silently reads a zero value and
+// could report a confidently-wrong "not found"; this check makes the adapter
+// degrade loudly instead. It complements decodeJSON, which only catches output
+// that is not valid JSON at all.
+func requireFields(stdout string, required ...string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &fields); err != nil {
+		return err
+	}
+	var missing []string
+	for _, key := range required {
+		value, ok := fields[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required field(s): %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// schemaDrift builds a partial result for parseable JSON that is missing a field
+// the adapter depends on (a tool schema rename). Degrading loudly here prevents
+// a silently-zeroed field from becoming a confidently-wrong conclusion. The raw
+// (already redacted) output is kept as evidence.
+func schemaDrift(tool, op string, err error, stdout string) Result {
+	return Result{
+		Tool: tool, Operation: op, Status: StatusPartial,
+		Summary:  fmt.Sprintf("%s %s returned an unexpected output shape: %s", tool, op, err.Error()),
+		Warnings: []string{tool + ": " + clip(err.Error(), 160)},
+		Raw:      stdout,
+	}
 }

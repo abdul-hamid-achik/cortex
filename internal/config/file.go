@@ -80,7 +80,7 @@ func searchPaths(workspace string) []string {
 }
 
 func readConfigFile(path string) (fileConfig, bool, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is a fixed config filename under the workspace or global config dir
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fileConfig{}, false, nil

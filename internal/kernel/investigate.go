@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
@@ -195,6 +196,30 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	facts, warnings, degraded, sErr = k.stampResults(c, results, discoveryBudget, discoveryStageLabel(discoveryBudget, budget), facts, warnings, nil)
 	if sErr != nil {
 		return errEnvelope(c.ID, sErr.Error()), sErr
+	}
+
+	// Discovery fallback: when semantic search (vecgrep) could not run
+	// authoritatively — no index, missing binary, or error — a literal git grep
+	// over tracked files gives discovery a zero-dependency floor (git is Cortex's
+	// only hard dependency). The hits are stamped as low-confidence candidates
+	// exactly like search hits, so the structural stage below can still expand
+	// them. Deliberately skipped when semantic search ran and found nothing on
+	// purpose: an authoritative empty search is a real result, not a degraded one
+	// to paper over.
+	if semanticDiscoveryUnavailable(steps, results) {
+		if pattern := grepPattern(in.Question); pattern != "" {
+			fb := k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
+				Input: map[string]any{"pattern": pattern, "limit": candLimit}})
+			var fbErr error
+			facts, warnings, _, fbErr = k.stampResults(c, []adapters.Result{fb}, discoveryBudget, "git-grep fallback", facts, warnings, nil)
+			if fbErr != nil {
+				return errEnvelope(c.ID, fbErr.Error()), fbErr
+			}
+			if fb.Status == adapters.StatusAuthoritative && len(fb.Facts) > 0 {
+				warnings = append(warnings, fmt.Sprintf(
+					"semantic discovery was unavailable — fell back to a literal git grep for %q (tracked files only)", pattern))
+			}
+		}
 	}
 
 	// Stage 2: structural expansion. Only when codemap is the deferred
@@ -492,6 +517,90 @@ var interrogatives = map[string]bool{
 	"how": true, "where": true, "what": true, "why": true, "when": true,
 	"which": true, "who": true, "does": true, "do": true, "is": true,
 	"are": true, "can": true,
+}
+
+// semanticDiscoveryUnavailable reports whether the vecgrep discovery search step
+// ran but could not return an authoritative result (no index, missing binary, or
+// error) — the case where the literal git-grep fallback adds real value. An
+// authoritative search (even one that found nothing) returns false, so a clean
+// "nothing found" is never papered over with literal noise.
+func semanticDiscoveryUnavailable(steps []step, results []adapters.Result) bool {
+	for i, s := range steps {
+		if s.tool == "vecgrep" && s.op == "search" && i < len(results) {
+			switch results[i].Status {
+			case adapters.StatusUnavailable, adapters.StatusError:
+				return true
+			}
+			return false
+		}
+	}
+	return false
+}
+
+// grepStopwords are the generic non-interrogative words that carry no searchable
+// identity (the interrogatives themselves live in `interrogatives`). Both sets
+// are skipped when grepPattern picks a literal search term.
+var grepStopwords = map[string]bool{
+	"the": true, "a": true, "an": true, "of": true, "in": true, "on": true,
+	"at": true, "to": true, "for": true, "with": true, "by": true, "from": true,
+	"and": true, "or": true, "that": true, "this": true, "it": true, "be": true,
+	"used": true, "handled": true, "defined": true, "located": true,
+	"function": true, "file": true, "code": true, "work": true, "works": true,
+}
+
+// grepPattern derives a single literal search term from a natural-language
+// question for the git-grep discovery fallback. It deliberately stays simple —
+// one fixed-string pattern, preferring an identifier-like token (camelCase,
+// snake_case, or a digit-bearing identifier) over a plain word, then the longest
+// non-stopword of at least four runes. Returns "" when nothing usable remains.
+func grepPattern(question string) string {
+	tokens := strings.FieldsFunc(question, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+	})
+	var identifier, longest string
+	for _, tok := range tokens {
+		lower := strings.ToLower(tok)
+		if interrogatives[lower] || grepStopwords[lower] {
+			continue
+		}
+		if identifier == "" && looksLikeIdentifier(tok) {
+			identifier = tok
+		}
+		if len([]rune(tok)) > len([]rune(longest)) {
+			longest = tok
+		}
+	}
+	if identifier != "" {
+		return identifier
+	}
+	if len([]rune(longest)) >= 4 {
+		return longest
+	}
+	return ""
+}
+
+// looksLikeIdentifier reports whether a token looks like a code identifier
+// (snake_case, camelCase/PascalCase, or a digit-bearing name like sha256) rather
+// than an ordinary word — these make the most distinctive literal search terms.
+func looksLikeIdentifier(tok string) bool {
+	if strings.Contains(tok, "_") {
+		return true
+	}
+	var hasUpper, hasLower, hasDigit bool
+	for _, r := range tok {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		}
+	}
+	if hasUpper && hasLower {
+		return true // camelCase / PascalCase / OAuth
+	}
+	return hasDigit && (hasUpper || hasLower) // e.g. base64, sha256
 }
 
 // subQuestions decomposes a compound question into targeted sub-queries using

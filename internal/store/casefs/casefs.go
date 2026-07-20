@@ -72,7 +72,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create cases dir: %w", err)
 	}
-	if err := os.Chmod(root, 0o700); err != nil {
+	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- a directory needs owner-execute (0700); this is not a regular file
 		return nil, fmt.Errorf("secure cases dir: %w", err)
 	}
 	return &Store{root: root}, nil
@@ -841,7 +841,7 @@ func (s *Store) withTaskLockNoRecovery(taskID string, fn func() error) error {
 	lockPath := filepath.Join(s.root, "."+safeName(taskID)+".lock")
 	deadline := time.Now().Add(lockWait)
 	for {
-		f, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		f, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- lockPath derives from safeName(taskID)
 		if err == nil {
 			prefix := fmt.Sprintf("pid=%d\ntoken=%s\nheartbeat=", os.Getpid(), token)
 			heartbeatOffset := int64(len(prefix))
@@ -912,7 +912,7 @@ func maintainLockHeartbeat(f *os.File, offset int64, stop <-chan struct{}, stopp
 }
 
 func removeOwnedLock(lockPath, token string) {
-	data, err := os.ReadFile(lockPath)
+	data, err := os.ReadFile(lockPath) // #nosec G304 -- lockPath is a store-built path from a validated task id
 	if err != nil || !strings.Contains(string(data), "\ntoken="+token+"\n") {
 		return
 	}
@@ -999,7 +999,7 @@ func readJSON(path string, v any) error {
 }
 
 func readFileLimited(path string, limit int) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is a store-built path from a validated task id
 	if err != nil {
 		return nil, err
 	}
@@ -1025,7 +1025,7 @@ func appendJSONL(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- path is a store-built path from a validated task id
 	if err != nil {
 		return err
 	}
@@ -1039,7 +1039,7 @@ func appendJSONL(path string, v any) error {
 }
 
 func readJSONL(path string, fn func(line []byte) error) error {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is a store-built path from a validated task id
 	if err != nil {
 		return err
 	}

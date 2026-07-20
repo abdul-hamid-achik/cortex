@@ -70,6 +70,13 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			return errEnvelope(in.TaskID, actorErr.Error()), nil
 		}
 		in.Actor = actor
+	} else if owner := activeLeaseActor(c, k.now().UTC()); owner != "" {
+		// No actor supplied but the task has an active lease: default to the
+		// lease owner, so a single actor who ran begin-change need not repeat
+		// --actor at verify. An explicitly supplied actor is still checked
+		// against the owner below; released/expired leases return "" here and
+		// therefore still fail validation.
+		in.Actor = owner
 	}
 	if err := validateVerificationLease(c, in.Actor, k.now().UTC()); err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil

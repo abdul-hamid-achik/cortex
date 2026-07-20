@@ -20,7 +20,9 @@ var showCmd = &cobra.Command{
 	Long: `Show the current state of a session in one screen: its place in the reasoning
 loop, hypotheses, verification receipts, time spent in each phase, and recent
 activity with exact ledger totals. Works from any directory — the session is located by ID across the
-central store, so you can inspect a task from another repo without cd-ing there.`,
+central store, so you can inspect a task from another repo without cd-ing there. This is the
+recommended single-session view; for focused projections use cortex status (agent checkpoint),
+cortex timeline (chronological feed), or cortex metrics (outcome metrics).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		v, err := kernel.ShowSessionIn(workspaceArg(cmd), args[0])

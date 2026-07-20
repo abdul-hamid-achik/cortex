@@ -202,9 +202,10 @@ func EnsureStateIgnored(workspace, casesDir string) {
 	if _, err := os.Stat(gi); err == nil {
 		return
 	}
-	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil { // #nosec G301 -- state root holds owner-only case files; the directory entry itself is not secret
 		return
 	}
+	// #nosec G306 -- .gitignore is not secret; world-readable by design.
 	_ = os.WriteFile(gi, []byte("# Cortex local state — not source. Ignore everything here.\n*\n"), 0o644)
 }
 

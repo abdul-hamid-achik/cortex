@@ -185,6 +185,9 @@ func (c *Codemap) impact(ctx context.Context, dir, symbol string, depth int) (Re
 	if derr := decodeJSON(stdout, &r); derr != nil {
 		return degraded("codemap", "impact", stdout, stderr, code), nil
 	}
+	if rerr := requireFields(stdout, "found"); rerr != nil {
+		return schemaDrift("codemap", "impact", rerr, stdout), nil
+	}
 	if !r.Found {
 		return Result{Tool: "codemap", Operation: "impact", Status: StatusPartial,
 			Summary: "codemap found no symbol " + symbol, Raw: stdout}, nil
@@ -236,6 +239,9 @@ func (c *Codemap) relation(ctx context.Context, dir, op, symbol string) (Result,
 	var r cmRelation
 	if derr := decodeJSON(stdout, &r); derr != nil {
 		return degraded("codemap", op, stdout, stderr, code), nil
+	}
+	if rerr := requireFields(stdout, "found"); rerr != nil {
+		return schemaDrift("codemap", op, rerr, stdout), nil
 	}
 	conf := callGraphConfidence(r.CallGraph, r.Resolution)
 	return Result{
@@ -290,6 +296,9 @@ func (c *Codemap) searchLike(ctx context.Context, dir, op, query string, top int
 	var r cmSemantic
 	if derr := decodeJSON(stdout, &r); derr != nil {
 		return degraded("codemap", op, stdout, stderr, code), nil
+	}
+	if rerr := requireFields(stdout, "hits"); rerr != nil {
+		return schemaDrift("codemap", op, rerr, stdout), nil
 	}
 	// Search hits are candidates, not proof. find (name) is higher
 	// confidence than semantic (meaning).

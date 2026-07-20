@@ -76,6 +76,16 @@ diffs, scope drift, and revision-bound verification. The specialist tools it com
 at runtime** — every adapter degrades safely when its tool is absent, and Cortex never fabricates
 a missing tool's output.
 
+Even with none of them installed, Cortex can verify against **your own tests**: run `cortex init`
+once and it detects your test runner (Go, Rust, Node, Python) and writes a `cortex.yaml` command
+verifier for it. Command verifiers stay blocked until the trusted launcher sets
+`CORTEX_APPROVE_COMMANDS=1` — repository configuration cannot approve itself.
+
+To see everything a workspace still needs for full discovery and verification, run `cortex setup`:
+it reports whether the repo has git, a `cortex.yaml`, and whether `codemap`/`vecgrep` are installed
+**and indexed** — with the exact command to fix each gap. When semantic search has no index,
+`investigate` still falls back to a literal `git grep`, so discovery is never empty.
+
 ## Quick start (CLI)
 
 ```bash

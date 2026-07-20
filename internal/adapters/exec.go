@@ -21,6 +21,7 @@ type runner interface {
 type execRunner struct{}
 
 func (execRunner) run(ctx context.Context, dir, bin string, args ...string) ([]byte, []byte, int, error) {
+	// #nosec G204 G702 -- bin is a fixed adapter binary and args is a direct argv array; Cortex never invokes a shell, so there is no command-injection vector.
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
 	// Unix commands run in a dedicated process group so cancellation terminates
