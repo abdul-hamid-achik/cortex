@@ -5,6 +5,44 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-07-20
+
+### Added
+- **`cortex init`** — detects the project's test runner (Go, Rust, Node, Python) and writes a
+  starter `cortex.yaml` command verifier, so verification can run your own tests out of the box.
+  Refuses to clobber an existing config unless `--force`.
+- **`cortex setup`** — read-only readiness check: is the workspace a git repo, is there a
+  `cortex.yaml`, and are codemap/vecgrep installed **and indexed** — with the exact command to fix
+  each gap.
+- **`cortex prune`** — bulk-retire forgotten in-flight sessions. Dry run by default; `--apply`
+  aborts (recording the reason) and archives them, recoverable via `cortex unarchive`. `--older-than`
+  defaults to `7d` and accepts day forms (`7d`) as well as Go durations (`24h`).
+- **`verify --claim-spec`** — one self-contained typed claim
+  (`id=…|surface=…|verifier=…|contract=…|<statement>`), an ergonomic alternative to the coupled
+  `--claim-id/-surface/-verifier/-contract` flags (which still work).
+- **git-grep discovery fallback** — when semantic search (vecgrep) is unavailable (no index or
+  missing binary), `investigate` falls back to a literal `git grep` over tracked files, so discovery
+  is never empty without an index. It fires only on an *unavailable* search, never on a clean
+  "nothing found".
+- **CI hardening** — gosec enabled (justified `#nosec` on validated runtime sites; tests/eval
+  excluded) and a 78% coverage gate (`task cov-check`).
+- Direct test coverage for the ollama embedding HTTP call (via `httptest`).
+
+### Changed
+- **`verify --actor` now defaults to the active lease owner**, so a single actor who ran
+  `begin-change` need not repeat it; an explicit actor that is not the owner is still rejected.
+- **codemap decoders degrade loudly on schema drift** — impact/relation/find/semantic now fall back
+  to a partial result when a required field (`found`/`hits`) is renamed, instead of reading a zero
+  value and reporting a confidently-wrong "no symbol".
+- **Verification phase moves route through the transition gate** — `prepareVerificationPhase` no
+  longer assigns the phase by hand; every move (including the planned→changing→verifying
+  compatibility path) goes through `k.transition`, so the kernel enforces phases one way.
+- golangci-lint pinned to v2.12.2 in CI (was `latest`).
+
+### Docs
+- A "Choosing a read command" guide (show/status/timeline/metrics/sessions/overview) plus reference
+  for `cortex init`, `cortex setup`, `cortex prune`, and `verify --claim-spec`.
+
 ## [0.15.2] — 2026-07-16
 
 ### Fixed
