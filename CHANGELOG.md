@@ -5,6 +5,16 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-07-20
+
+### Changed
+- Internal refactoring only — no behavior change. Broke the ~377-line `Verify`
+  function into focused stage methods on a `verification` accumulator
+  (`verify_stages.go`); isolated the deep-mode question-decomposition heuristic
+  into `investigate_decompose.go`; and split the trajectory runner god-file into
+  `report.go` (report/provenance shapes) and `oracle.go` (independent-oracle
+  execution).
+
 ## [0.16.0] — 2026-07-20
 
 ### Added
