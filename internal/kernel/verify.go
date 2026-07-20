@@ -123,13 +123,6 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	}
 	scope := k.detectScopeDrift(ctx, c, changed)
 
-	var facts []domain.Evidence
-	stage := verificationStage{taskID: c.ID}
-	// surfaceStatus records each surface's verifier outcome this run. Surfaces
-	// with no entry were not verified at all.
-	surfaceStatus := map[domain.Surface]domain.VerificationStatus{}
-	verifierStatus := map[string]domain.VerificationStatus{}
-	contractStatus := map[string]domain.VerificationStatus{}
 	revision, revisionWarning := k.currentRevision(ctx)
 	if revisionWarning != "" {
 		warnings = append(warnings, revisionWarning)
@@ -138,209 +131,45 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	startCaseRevision := c.Revision
 	startLease := cloneChangeLease(c.ChangeLease)
 	startLeaseActive := startLease != nil && startLease.Active(verifyStarted)
-	batchID := ids.New("vb")
-	pendingReceipts := make([]domain.VerificationRecord, 0, len(c.VerificationRequired)+len(claims)+2)
-	var pendingAnnotations []behaviorAnnotation
 	receiptActor := firstNonEmptyStr(strings.TrimSpace(in.Actor), activeLeaseActor(c, k.now().UTC()), c.Actor)
 	ctx = withCommandActor(ctx, receiptActor)
-	writeReceipt := func(spec receiptSpec) error {
-		spec.Actor = receiptActor
-		pendingReceipts = append(pendingReceipts, k.makeReceipt(c.ID, batchID, revision, spec))
-		return nil
+
+	// The verifier stages accumulate into this accumulator (staged evidence and
+	// receipts are published atomically by the commit step below); see
+	// verify_stages.go for the individual stages.
+	v := &verification{
+		k: k, ctx: ctx, c: c, in: in, claims: claims,
+		changed:         changed,
+		scope:           scope,
+		stage:           verificationStage{taskID: c.ID},
+		warnings:        warnings,
+		surfaceStatus:   map[domain.Surface]domain.VerificationStatus{},
+		verifierStatus:  map[string]domain.VerificationStatus{},
+		contractStatus:  map[string]domain.VerificationStatus{},
+		pendingReceipts: make([]domain.VerificationRecord, 0, len(c.VerificationRequired)+len(claims)+2),
+		revision:        revision,
+		revisionWarning: revisionWarning,
+		batchID:         ids.New("vb"),
+		receiptActor:    receiptActor,
 	}
 
-	// 1) Structural review (always, for a change task with a diff). A review is
-	// passed only when codemap is indexed; an unindexed review is inconclusive.
-	if len(changed) > 0 {
-		res := k.run(ctx, "codemap", adapters.Request{TaskID: c.ID, Operation: "review", Input: map[string]any{"since": c.Workspace.BaseRef}})
-		warnings = append(warnings, res.Warnings...)
-		evs := stage.stampAll(k, res, &facts)
-		st := reviewStatus(res.Status)
-		reviewNote := ""
-		if st == domain.VerifyInconclusive {
-			reviewNote = "codemap not indexed — structural review has no blast radius or test selection"
-		}
-		// A review that RAN authoritatively but that codemap rated HIGH risk is not
-		// a clean structural pass — "the review ran on an indexed repo" must not be
-		// conflated with "the diff passed review" (review 2026-07-07). Downgrade the
-		// verdict to inconclusive so a high-risk diff can't satisfy the completion
-		// gate on the review alone; the risk factors are already in the warnings.
-		if st == domain.VerifyPassed && containsMarker(res.Warnings, "diff risk: high") {
-			st = domain.VerifyInconclusive
-			reviewNote = "codemap rated this diff HIGH risk — structural review is inconclusive, not a clean pass; address the risk factors or prove the change behaviorally (browser/terminal spec)"
-		}
-		surfaceStatus[domain.SurfaceCode] = st
-		mergeVerificationStatus(verifierStatus, "codemap", st)
-		mergeVerificationStatus(contractStatus, verificationTarget("codemap", "codemap_review"), st)
-		if err := writeReceipt(receiptSpec{Claim: "structural review of the diff", Surface: domain.SurfaceCode,
-			Purpose:     domain.VerificationPurposeVerifierRun,
-			Requirement: "codemap_review", Tool: "codemap", Version: k.toolVersion(ctx, "codemap"), Status: st, Evidence: evs, Notes: reviewNote}); err != nil {
-			warnings = append(warnings, "could not persist review receipt: "+err.Error())
-		}
-	}
+	v.runStructuralReview()
+	v.enforceChangeControlRigor()
+	v.runCommandVerifiers()
 
-	// Apply additional change-control rigor for change tasks.
-	if c.Mode == domain.ModeChange {
-		if len(changed) > 0 && (c.Risk == "medium" || c.Risk == "high") {
-			// Medium/high-risk tasks must have a passing structural review.
-			if st := surfaceStatus[domain.SurfaceCode]; st != domain.VerifyPassed {
-				warnings = append(warnings, fmt.Sprintf("%s-risk change requires a structural diff review that passed, but codemap review is %s — run `codemap index` and re-verify",
-					c.Risk, reviewStateWord(st)))
-			}
-		}
-	}
+	v.runBehavioralVerifiers()
+	v.runCapabilityVerifiers()
+	v.mapClaims()
+	v.recordScopeDriftEvidence()
 
-	// 1b) Repository-configured command verifiers. Planning resolves names from
-	// cortex.yaml; callers never provide executable text through MCP or the CLI.
-	for _, requirement := range c.VerificationRequired {
-		if !strings.HasPrefix(requirement, "command:") {
-			continue
-		}
-		name := strings.TrimPrefix(requirement, "command:")
-		res := k.run(ctx, "command", adapters.Request{
-			TaskID: c.ID, Operation: name, Input: map[string]any{"dir": k.cfg.Workspace},
-		})
-		warnings = append(warnings, res.Warnings...)
-		evs := stage.stampAll(k, res, &facts)
-		st := commandVerificationStatus(res)
-		surfaceStatus[domain.SurfaceCode] = worseStatus(surfaceStatus[domain.SurfaceCode], st)
-		verifier := "command:" + name
-		mergeVerificationStatus(verifierStatus, verifier, st)
-		mergeVerificationStatus(contractStatus, verificationTarget(verifier, name), st)
-		mergeVerificationStatus(contractStatus, verificationTarget(verifier, requirement), st)
-		if err := writeReceipt(receiptSpec{
-			Claim: "configured command verifier " + name, Surface: domain.SurfaceCode,
-			Purpose: domain.VerificationPurposeVerifierRun, Requirement: requirement,
-			Tool: "command", Status: st, Evidence: evs, Notes: commandLimitation(res, st),
-		}); err != nil {
-			warnings = append(warnings, "could not persist configured command receipt: "+err.Error())
-		}
-	}
-
-	// 2) Behavioral verifiers. An explicit spec wins; otherwise, when the surface
-	// is in the task's declared set and a diff exists, cortex auto-selects the
-	// specs whose coverage intersects the change (cairn --select-only / glyph
-	// affected-specs) and runs them — turning a not_run receipt into a real
-	// verification instead of requiring the agent to name the check.
-	// A failed run is stashed to fcheap and the receipt links the durable stash.
-	for _, bs := range behavioralSurfaces {
-		explicit := bs.specOf(in)
-		var specs []string
-		auto := false
-		switch {
-		case explicit != "":
-			specs = []string{explicit}
-		case !in.DisableAutoSpecs && surfaceInScope(c, bs.surface) && len(changed) > 0:
-			auto = true
-			specs = k.selectSpecs(ctx, c, bs.surface)
-			if len(specs) > maxAutoSpecs {
-				warnings = append(warnings, fmt.Sprintf("%d %s specs cover this change; running the first %d", len(specs), bs.surface, maxAutoSpecs))
-				specs = specs[:maxAutoSpecs]
-			}
-			if len(specs) == 0 {
-				warnings = append(warnings, fmt.Sprintf("no %s spec covers this change (auto-selection found none); %s claims stay unverified — supply a spec or add coverage", bs.surface, bs.surface))
-			}
-		}
-		for _, spec := range specs {
-			res := k.run(ctx, bs.tool, adapters.Request{TaskID: c.ID, Operation: "run", Input: map[string]any{"spec": spec}})
-			warnings = append(warnings, res.Warnings...)
-			evs := stage.stampAll(k, res, &facts)
-			st := behavioralStatus(res)
-			artifact, w := k.stashRunBundle(ctx, c, res, st == domain.VerifyPassed, string(bs.surface))
-			warnings = append(warnings, w...)
-			// The strongest evidence wins per surface: a pass on any covering spec
-			// proves it, but a failure on any covering spec must not be masked.
-			surfaceStatus[bs.surface] = worseStatus(surfaceStatus[bs.surface], st)
-			mergeVerificationStatus(verifierStatus, bs.tool, st)
-			mergeVerificationStatus(contractStatus, verificationTarget(bs.tool, spec), st)
-			label := string(bs.surface) + " flow "
-			if auto {
-				label = "auto-selected " + label
-			}
-			if err := writeReceipt(receiptSpec{Claim: label + spec, Surface: bs.surface,
-				Purpose:     domain.VerificationPurposeVerifierRun,
-				Requirement: behavioralRequirement(bs.surface), Tool: bs.tool, Version: k.toolVersion(ctx, bs.tool), Status: st, Evidence: evs,
-				Artifact: artifact, Notes: behavioralLimitation(res, st)}); err != nil {
-				warnings = append(warnings, "could not persist "+string(bs.surface)+" receipt: "+err.Error())
-			}
-			pendingAnnotations = append(pendingAnnotations, behaviorAnnotation{tool: bs.tool, spec: spec, status: st, artifact: artifact})
-		}
-	}
-
-	// 2b) Artifact and secret-capability verifiers. These are intentionally
-	// explicit: a stash URI proves a durable artifact exists; a tvault project
-	// proves value-free secret capability is available. Neither silently falls
-	// through to structural code verification.
-	for _, sv := range []struct {
-		surface                           domain.Surface
-		tool, operation, key, requirement string
-		value                             string
-	}{
-		{domain.SurfaceArtifact, "fcheap", "verify", "stash", "fcheap_artifact", in.ArtifactRef},
-		{domain.SurfaceSecret, "tvault", "availability", "project", "tvault_capability", in.SecretProject},
-	} {
-		if !surfaceInScope(c, sv.surface) && sv.value == "" {
-			continue
-		}
-		if sv.value == "" {
-			surfaceStatus[sv.surface] = domain.VerifyNotRun
-			warnings = append(warnings, fmt.Sprintf("%s verification needs %s input; claims on this surface stay unverified", sv.surface, sv.key))
-			continue
-		}
-		res := k.run(ctx, sv.tool, adapters.Request{TaskID: c.ID, Operation: sv.operation, Input: map[string]any{sv.key: sv.value}})
-		warnings = append(warnings, res.Warnings...)
-		evs := stage.stampAll(k, res, &facts)
-		st := capabilityStatus(res)
-		surfaceStatus[sv.surface] = st
-		mergeVerificationStatus(verifierStatus, sv.tool, st)
-		mergeVerificationStatus(contractStatus, verificationTarget(sv.tool, sv.value), st)
-		if err := writeReceipt(receiptSpec{Claim: fmt.Sprintf("%s verification %s", sv.surface, sv.value), Surface: sv.surface,
-			Purpose:     domain.VerificationPurposeVerifierRun,
-			Requirement: sv.requirement, Tool: sv.tool, Version: k.toolVersion(ctx, sv.tool), Status: st, Evidence: evs,
-			Artifact: firstArtifactURI(res), Notes: capabilityLimitation(sv.surface, st)}); err != nil {
-			warnings = append(warnings, "could not persist "+string(sv.surface)+" receipt: "+err.Error())
-		}
-	}
-
-	// 3) Map each named claim to a verifier receipt. Track the
-	// structured status per claim — never derive the pass count from strings
-	// that embed the free-text claim (a claim mentioning "passed" must not be
-	// counted as verified).
-	var claimStatuses []domain.VerificationStatus
-	for _, claim := range claims {
-		surf := claim.Surface
-		verifier := claim.Verifier
-		var st domain.VerificationStatus
-		var ran bool
-		if claim.Contract != "" {
-			st, ran = contractStatus[verificationTarget(verifier, claim.Contract)]
-		} else {
-			st, ran = verifierStatus[verifier]
-		}
-		if !ran {
-			st = domain.VerifyNotRun
-			target := verifier
-			if claim.Contract != "" {
-				target += " contract " + claim.Contract
-			}
-			warnings = append(warnings, fmt.Sprintf("claim %q needs %s, which was not run", clipStr(claim.Statement, 50), target))
-		}
-		if err := writeReceipt(receiptSpec{Claim: claim.Statement, ClaimID: claim.ID, Surface: surf,
-			Purpose: domain.VerificationPurposeNamedClaim, Tool: verifier, Contract: claim.Contract,
-			Status: st, Notes: claimLimitation(st)}); err != nil {
-			warnings = append(warnings, "could not persist claim receipt: "+err.Error())
-		}
-		claimStatuses = append(claimStatuses, st)
-	}
-
-	// Scope drift is a warning, not a failure.
-	if scope.Scope == "drift_detected" {
-		warnings = append(warnings, fmt.Sprintf("scope drift (%s risk): %s changed outside the boundary — %s",
-			scope.Risk, pluralizeGeneric(len(scope.UnexpectedFiles), "file", "files"), scope.Action))
-		ev := stage.stampFact(k, "git", adapters.Fact{Kind: "code_location", Confidence: "high",
-			Claim: "scope drift: changed outside declared boundary: " + strings.Join(scope.UnexpectedFiles, ", ")})
-		facts = append(facts, ev)
-	}
+	// Re-bind the accumulated state for the commit step below.
+	facts := v.facts
+	warnings = v.warnings
+	pendingReceipts := v.pendingReceipts
+	claimStatuses := v.claimStatuses
+	pendingAnnotations := v.pendingAnnotations
+	stage := v.stage
+	batchID := v.batchID
 
 	postRevision, postWarning := k.currentRevision(ctx)
 	if postWarning != "" {
