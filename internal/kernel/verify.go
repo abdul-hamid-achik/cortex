@@ -596,23 +596,39 @@ func (k *Kernel) prepareVerificationPhase(taskID, actor string, startRevision ui
 			return nil, nil, err
 		}
 	}
+	// Every phase move routes through the same transition gate the rest of the
+	// kernel uses; the switch only decides WHICH legal moves apply for the
+	// current phase/mode, and the moves list is recorded after the bundle
+	// commits. The planned→changing→verifying compatibility path (a change task
+	// verified by an old client that skipped begin-change) is synthesized as two
+	// legal steps rather than a hand-rolled status assignment.
 	var moves []verificationPhaseMove
 	switch c.Status {
 	case domain.PhaseVerifying:
 		// The bundle still advances the revision as its commit manifest.
 	case domain.PhaseChanging:
 		moves = append(moves, verificationPhaseMove{c.Status, domain.PhaseVerifying})
-		c.Status = domain.PhaseVerifying
+		if err := k.transition(c, domain.PhaseVerifying); err != nil {
+			return nil, nil, err
+		}
 	case domain.PhasePlanned:
 		if c.Mode == domain.ModeChange {
 			moves = append(moves,
 				verificationPhaseMove{domain.PhasePlanned, domain.PhaseChanging},
 				verificationPhaseMove{domain.PhaseChanging, domain.PhaseVerifying},
 			)
+			if err := k.transition(c, domain.PhaseChanging); err != nil {
+				return nil, nil, err
+			}
+			if err := k.transition(c, domain.PhaseVerifying); err != nil {
+				return nil, nil, err
+			}
 		} else {
 			moves = append(moves, verificationPhaseMove{domain.PhasePlanned, domain.PhaseVerifying})
+			if err := k.transition(c, domain.PhaseVerifying); err != nil {
+				return nil, nil, err
+			}
 		}
-		c.Status = domain.PhaseVerifying
 	default:
 		return nil, nil, fmt.Errorf("cannot commit verification in phase %q", c.Status)
 	}
