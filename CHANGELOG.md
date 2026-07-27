@@ -5,6 +5,8 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-07-27
+
 ### Fixed
 - **Custom case-store safety** — opening an existing `cases_dir` no longer chmods a directory
   Cortex does not own; `cases_dir` cannot be the workspace root; and automatic catch-all ignoring
