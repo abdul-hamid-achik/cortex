@@ -81,6 +81,10 @@ once and it detects your test runner (Go, Rust, Node, Python) and writes a `cort
 verifier for it. Command verifiers stay blocked until the trusted launcher sets
 `CORTEX_APPROVE_COMMANDS=1` — repository configuration cannot approve itself.
 
+Cross-case recall uses loopback embeddings by default. A non-loopback `recall.embed_url` is rejected
+unless the trusted launcher sets `CORTEX_APPROVE_REMOTE_RECALL=1`; repository configuration cannot
+approve its own network egress.
+
 To see everything a workspace still needs for full discovery and verification, run `cortex setup`:
 it reports whether the repo has git, a `cortex.yaml`, and whether `codemap`/`vecgrep` are installed
 **and indexed** — with the exact command to fix each gap. When semantic search has no index,

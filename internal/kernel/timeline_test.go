@@ -2,8 +2,12 @@ package kernel
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/abdul-hamid-achik/cortex/internal/config"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
 
@@ -46,6 +50,22 @@ func TestTimelineNotFound(t *testing.T) {
 	t.Setenv("CORTEX_HOME", t.TempDir())
 	if _, err := Timeline("task_does_not_exist"); err == nil {
 		t.Error("expected an error locating an unknown session")
+	}
+}
+
+func TestTimelineSurfacesCorruptLedger(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	ws := repoNamed(t, "timeline-corrupt")
+	env, err := kernelAt(t, ws).StartTask(context.Background(), StartInput{Goal: "audit corrupt timeline"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := filepath.Join(config.SessionsRoot(), filepath.Base(ws), env.TaskID, "evidence.jsonl")
+	if err := os.WriteFile(ledger, []byte("{corrupt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Timeline(env.TaskID); err == nil || !strings.Contains(err.Error(), "load timeline") {
+		t.Fatalf("corrupt timeline ledger should be surfaced, got %v", err)
 	}
 }
 

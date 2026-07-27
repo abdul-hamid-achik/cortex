@@ -402,7 +402,7 @@ func (k *Kernel) actionAllowed(taskID, tool, op string, class domain.ActionClass
 		}
 		return false // external mutation requires explicit approval
 	default:
-		return true
+		return false
 	}
 }
 

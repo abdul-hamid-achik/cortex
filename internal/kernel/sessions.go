@@ -94,18 +94,21 @@ func allSessionsIn(root string, filter SessionFilter) ([]SessionSummary, error) 
 		slug := e.Name()
 		store, err := casefs.New(filepath.Join(root, slug))
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("open session store %s: %w", slug, err)
 		}
 		ids, err := store.List()
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("list session store %s: %w", slug, err)
 		}
 		for _, id := range ids {
 			c, err := store.Load(id)
 			if err != nil {
-				continue // stray dir without a case.json — skip, never fabricate
+				return nil, fmt.Errorf("load session %s/%s: %w", slug, id, err)
 			}
-			s := summarizeSession(c, slug, store, git, revisions)
+			s, err := summarizeSession(c, slug, store, git, revisions)
+			if err != nil {
+				return nil, fmt.Errorf("summarize session %s/%s: %w", slug, id, err)
+			}
 			if filter.ActiveOnly && !s.Active {
 				continue
 			}
@@ -184,8 +187,11 @@ func LoadSession(slug, taskID string) (SessionDetail, error) {
 	return SessionDetail{Case: c, Evidence: ev, Hyps: hyps, Receipts: recs}, nil
 }
 
-func summarizeSession(c *domain.CaseFile, slug string, store *casefs.Store, git *adapters.Git, revisions map[string]revisionLookup) SessionSummary {
-	receipts, _ := store.Verifications(c.ID)
+func summarizeSession(c *domain.CaseFile, slug string, store *casefs.Store, git *adapters.Git, revisions map[string]revisionLookup) (SessionSummary, error) {
+	receipts, err := store.Verifications(c.ID)
+	if err != nil {
+		return SessionSummary{}, fmt.Errorf("load verifications: %w", err)
+	}
 	if !c.Status.IsTerminal() {
 		lookup, ok := revisions[c.Workspace.Root]
 		if !ok {
@@ -210,5 +216,5 @@ func summarizeSession(c *domain.CaseFile, slug string, store *casefs.Store, git 
 		Verified: verifiedRequired, Required: len(c.VerificationRequired),
 		VerificationOutcome: assessment.Outcome,
 		Active:              !c.Status.IsTerminal(),
-	}
+	}, nil
 }

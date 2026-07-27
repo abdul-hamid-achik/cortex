@@ -216,6 +216,12 @@ task install         # go install ./cmd/cortex
   `unit_test|build|lint` on the `code` surface, and fail configuration closed. Configured argv is
   arbitrary local code and remains blocked unless the trusted launcher sets
   `CORTEX_APPROVE_COMMANDS=1`; repository configuration cannot approve itself.
+- Cross-case recall embedding endpoints are loopback-only by default. A non-loopback
+  `recall.embed_url` requires `CORTEX_APPROVE_REMOTE_RECALL=1` from the trusted launching
+  environment; repository configuration cannot approve its own egress. Endpoint URLs containing
+  credentials are invalid.
+- Adapter operation classification is allowlisted. Unknown tool/verb pairs fail closed as
+  `external_mutation` until reviewed; they never inherit read-only policy by default.
 
 ### Storage
 - Case files are JSON/JSONL — files, not a DB, in v0.1 — under a **central, XDG-organized** root
@@ -231,14 +237,20 @@ task install         # go install ./cmd/cortex
 - `writeJSON` is atomic (temp + rename) so a crash mid-write can't corrupt `case.json`.
 - New case directories/files are owner-only (`0700`/`0600` on POSIX). Durable free text,
   collections, ledger records, and snapshot files have hard write/read bounds.
+- Opening an existing custom case-store root preserves its permissions. `cases_dir` cannot be the
+  workspace root, and automatic catch-all ignoring is confined to
+  `<workspace>/.cortex/.gitignore`; Cortex never hides an arbitrary custom parent directory.
 - `case.json` snapshots also use an optimistic revision check. Treat `casefs.ErrRevisionConflict`
   as retryable only after reloading; never overwrite a stale snapshot.
 - Multi-file Plan/Resolve updates go through `CommitPlan` / `UpdateHypotheses`; do not reintroduce
   separate `SavePlan` + `SaveHypotheses` writes in kernel workflows. Verification batches use
   `AppendVerificationBatch`; a later unbound batch must mask older passing proof.
-- Only when cases are workspace-local (opt-in) does the kernel write `<workspace>/.cortex/.gitignore`
-  (`*`) so Cortex's own state never registers as a workspace change. The central XDG default lives
-  outside every repo, so no in-repo ignore file is needed.
+- Cross-workspace session lists and timelines surface unreadable/corrupt canonical records as
+  errors instead of silently projecting an incomplete audit history.
+- Only when cases live at or below `<workspace>/.cortex` does the kernel write
+  `<workspace>/.cortex/.gitignore` (`*`) so Cortex's own state never registers as a workspace
+  change. Arbitrary custom parents are never hidden; the central XDG default needs no in-repo
+  ignore file.
 
 ### Redaction
 - `store/redact` masks secret shapes (AWS/GitHub/Stripe/JWT/bearer/`KEY=secret`) before any
@@ -384,7 +396,8 @@ boundary above; Bob's public BOB-5 fixtures are the consumer contract.
   strict schemas, workspace identity, timeout/truncation/redaction, retry-stable orientation,
   bounded/deduplicated path calls, warning/action provenance, and the rule that Bob facts cannot
   satisfy verification. Never require a live Bob binary in ordinary CI.
-- glyphrun specs in `specs/` are the E2E contract. Run with `task flows` (local only).
+- glyphrun specs in `specs/` are the E2E contract. Run with `task flows` (local only); the task
+  supplies and cleans up a temporary `CORTEX_HOME` so specs never pollute the operator's XDG state.
 - Public JSON/MCP compatibility goldens live in `contracts/v1/` and are generated from kernel,
   handoff, and MCP test paths. Update them only with `CORTEX_UPDATE_CONTRACTS=1` and review every
   diff; IDs, timestamps, digests, private paths, and secrets must remain normalized or absent.

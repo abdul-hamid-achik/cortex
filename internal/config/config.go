@@ -11,6 +11,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +71,16 @@ type CommandVerifier struct {
 // a misspelled verifier kind cannot degrade into a generic code pass.
 func (c Config) Validate() error {
 	problems := append([]error(nil), c.problems...)
+	if strings.TrimSpace(c.CasesDir) == "" {
+		problems = append(problems, errors.New("cases_dir must not be empty"))
+	} else if samePath(c.CasesDir, c.Workspace) {
+		problems = append(problems, errors.New("cases_dir must not be the workspace root"))
+	}
+	if c.Recall.Enabled {
+		if err := validateRecallEndpoint(c.Recall.EmbedURL, c.Recall.AllowRemote); err != nil {
+			problems = append(problems, err)
+		}
+	}
 	for _, budget := range []struct {
 		name  string
 		value int
@@ -115,6 +127,41 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+func samePath(a, b string) bool {
+	canonical := func(path string) (string, error) {
+		absolute, err := filepath.Abs(filepath.Clean(path))
+		if err != nil {
+			return "", err
+		}
+		if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
+			return resolved, nil
+		}
+		return absolute, nil
+	}
+	pathA, errA := canonical(a)
+	pathB, errB := canonical(b)
+	return errA == nil && errB == nil && pathA == pathB
+}
+
+func validateRecallEndpoint(raw string, allowRemote bool) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("recall embed_url must be an absolute http or https URL")
+	}
+	if u.User != nil {
+		return errors.New("recall embed_url must not contain credentials")
+	}
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost"
+	if ip := net.ParseIP(host); ip != nil {
+		loopback = ip.IsLoopback()
+	}
+	if !loopback && !allowRemote {
+		return errors.New("remote recall embed_url requires CORTEX_APPROVE_REMOTE_RECALL=1 from the launching environment")
+	}
+	return nil
 }
 
 func validVerifierName(name string) bool {
@@ -174,29 +221,24 @@ func isDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// EnsureStateIgnored writes a .gitignore containing "*" next to the case store
-// when that store lives inside the workspace (the repo-local opt-in:
-// <workspace>/.cortex/), so Cortex's own state never registers as a workspace
-// change and floods scope-drift / diff review. Best effort — failures are
-// silent. A cases dir outside the workspace (the XDG default, or an absolute
-// cases_dir) needs no in-repo ignore file and is left alone. This is the single
-// implementation shared by the kernel and the eval harness.
+// EnsureStateIgnored writes <workspace>/.cortex/.gitignore only when the case
+// store is .cortex itself or one of its descendants. It never places a catch-all
+// ignore in an arbitrary custom parent, which could hide unrelated project
+// files. Best effort — failures are silent. This is the single implementation
+// shared by the kernel and the eval harness.
 func EnsureStateIgnored(workspace, casesDir string) {
 	if casesDir == "" {
 		return
 	}
 	ws := filepath.Clean(workspace)
 	cd := filepath.Clean(casesDir)
-	rel, err := filepath.Rel(ws, cd)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		// cases live outside the workspace, OR are the workspace itself (rel ==
-		// ".", e.g. cases_dir: .) — never write an ignore file. Writing one for
-		// cases_dir==workspace would land "*" in the workspace's PARENT dir.
+	stateRoot := filepath.Join(ws, StateDir)
+	rel, err := filepath.Rel(stateRoot, cd)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return
 	}
-	stateRoot := filepath.Dir(cd) // e.g. <workspace>/.cortex
-	if filepath.Clean(stateRoot) == ws {
-		return // cases_dir is a direct child of the workspace root — don't write "*" at ws
+	if info, statErr := os.Lstat(stateRoot); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return
 	}
 	gi := filepath.Join(stateRoot, ".gitignore")
 	if _, err := os.Stat(gi); err == nil {

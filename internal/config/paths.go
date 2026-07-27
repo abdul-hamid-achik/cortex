@@ -118,6 +118,9 @@ type RecallConfig struct {
 	DBPath     string
 	EmbedModel string
 	EmbedURL   string
+	// AllowRemote is set only by the trusted process environment. Repository
+	// configuration cannot approve sending recall text off-machine.
+	AllowRemote bool
 }
 
 // DefaultRecall is the built-in recall config: a central veclite DB, the

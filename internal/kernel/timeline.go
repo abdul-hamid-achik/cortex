@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/config"
+	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 	"github.com/abdul-hamid-achik/cortex/internal/store/redact"
 )
@@ -33,8 +35,12 @@ func LocateSession(taskID string) (string, *casefs.Store, error) {
 // repo-local/custom cases_dir sessions addressable by MCP servers and CLI
 // commands whose process cwd is not the task's repository.
 func LocateSessionIn(workspace, taskID string) (string, *casefs.Store, error) {
-	if slug, store, err := locateUnder(config.SessionsRoot(), taskID); err == nil {
+	slug, store, err := locateUnder(config.SessionsRoot(), taskID)
+	if err == nil {
 		return slug, store, nil
+	}
+	if !errors.Is(err, casefs.ErrNotFound) {
+		return "", nil, err
 	}
 	// Fallback: a session kept repo-local (opt-in cases_dir, or a pre-existing
 	// .cortex/cases that DefaultCasesDir honors) in the requested workspace —
@@ -42,10 +48,14 @@ func LocateSessionIn(workspace, taskID string) (string, *casefs.Store, error) {
 	// lookup never creates one.
 	cfg := config.For(workspace)
 	if fi, statErr := os.Stat(cfg.CasesDir); statErr == nil && fi.IsDir() {
-		if store, err := casefs.New(cfg.CasesDir); err == nil {
-			if _, err := store.Load(taskID); err == nil {
-				return config.Slug(cfg.Workspace), store, nil
-			}
+		store, openErr := casefs.New(cfg.CasesDir)
+		if openErr != nil {
+			return "", nil, fmt.Errorf("open workspace session store: %w", openErr)
+		}
+		if _, loadErr := store.Load(taskID); loadErr == nil {
+			return config.Slug(cfg.Workspace), store, nil
+		} else if !errors.Is(loadErr, casefs.ErrNotFound) {
+			return "", nil, fmt.Errorf("load workspace session %s: %w", taskID, loadErr)
 		}
 	}
 	return "", nil, fmt.Errorf("session %s: %w", taskID, casefs.ErrNotFound)
@@ -65,12 +75,25 @@ func locateUnder(root, taskID string) (string, *casefs.Store, error) {
 		if !e.IsDir() {
 			continue
 		}
+		taskDir := filepath.Join(root, e.Name(), taskID)
+		fi, statErr := os.Stat(taskDir)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return "", nil, fmt.Errorf("inspect session %s/%s: %w", e.Name(), taskID, statErr)
+		}
+		if !fi.IsDir() {
+			return "", nil, fmt.Errorf("session %s/%s is not a directory", e.Name(), taskID)
+		}
 		store, err := casefs.New(filepath.Join(root, e.Name()))
 		if err != nil {
-			continue
+			return "", nil, fmt.Errorf("open session store %s: %w", e.Name(), err)
 		}
 		if _, err := store.Load(taskID); err == nil {
 			return e.Name(), store, nil
+		} else if !errors.Is(err, casefs.ErrNotFound) {
+			return "", nil, fmt.Errorf("load session %s/%s: %w", e.Name(), taskID, err)
 		}
 	}
 	return "", nil, fmt.Errorf("session %s: %w", taskID, casefs.ErrNotFound)
@@ -91,14 +114,15 @@ func TimelineIn(workspace, taskID string) ([]TimelineEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries := timelineFromStore(store, taskID)
-	if c, loadErr := store.Load(taskID); loadErr == nil {
-		r := redact.New(config.For(c.Workspace.Root).RedactLiterals...)
-		for i := range entries {
-			entries[i].Summary = r.String(entries[i].Summary)
-			entries[i].Detail = r.String(entries[i].Detail)
-			entries[i].Ref = r.String(entries[i].Ref)
-		}
+	entries, c, err := timelineFromStore(store, taskID)
+	if err != nil {
+		return nil, err
+	}
+	r := redact.New(config.For(c.Workspace.Root).RedactLiterals...)
+	for i := range entries {
+		entries[i].Summary = r.String(entries[i].Summary)
+		entries[i].Detail = r.String(entries[i].Detail)
+		entries[i].Ref = r.String(entries[i].Ref)
 	}
 	return entries, nil
 }
@@ -106,12 +130,12 @@ func TimelineIn(workspace, taskID string) ([]TimelineEntry, error) {
 // timelineFromStore builds the merged, time-sorted feed for an already-located
 // store — so callers that already hold the store (e.g. ShowSession) don't walk
 // the tree twice.
-func timelineFromStore(store *casefs.Store, taskID string) []TimelineEntry {
+func timelineFromStore(store *casefs.Store, taskID string) ([]TimelineEntry, *domain.CaseFile, error) {
 	snapshot, err := store.Snapshot(taskID)
 	if err != nil {
-		return nil
+		return nil, nil, fmt.Errorf("load timeline: %w", err)
 	}
-	return timelineFromSnapshot(snapshot)
+	return timelineFromSnapshot(snapshot), snapshot.Case, nil
 }
 
 func timelineFromSnapshot(snapshot casefs.TaskSnapshot) []TimelineEntry {

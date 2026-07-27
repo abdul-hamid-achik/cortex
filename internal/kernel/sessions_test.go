@@ -168,6 +168,38 @@ func TestAllSessionsEmpty(t *testing.T) {
 	}
 }
 
+func TestAllSessionsSurfacesCorruptSessionState(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	ws := repoNamed(t, "corrupt-audit")
+	started, err := kernelAt(t, ws).StartTask(context.Background(), StartInput{Goal: "surface corruption"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	casePath := filepath.Join(config.SessionsRoot(), filepath.Base(ws), started.TaskID, "case.json")
+	if err := os.WriteFile(casePath, []byte("{corrupt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AllSessions(SessionFilter{}); err == nil || !strings.Contains(err.Error(), started.TaskID) {
+		t.Fatalf("corrupt session should be visible as an audit error, got %v", err)
+	}
+}
+
+func TestAllSessionsSurfacesCorruptVerificationLedger(t *testing.T) {
+	t.Setenv("CORTEX_HOME", t.TempDir())
+	ws := repoNamed(t, "corrupt-receipts")
+	started, err := kernelAt(t, ws).StartTask(context.Background(), StartInput{Goal: "surface corrupt receipts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(config.SessionsRoot(), filepath.Base(ws), started.TaskID, "verification.json")
+	if err := os.WriteFile(receiptPath, []byte("{corrupt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AllSessions(SessionFilter{}); err == nil || !strings.Contains(err.Error(), "load verifications") {
+		t.Fatalf("corrupt verification ledger should be visible as an audit error, got %v", err)
+	}
+}
+
 func TestAllSessionsFailsClosedWhenActiveVerificationIsStale(t *testing.T) {
 	t.Setenv("CORTEX_HOME", t.TempDir())
 	ws := repoNamed(t, "freshness")

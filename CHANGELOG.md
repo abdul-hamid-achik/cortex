@@ -5,6 +5,24 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Custom case-store safety** — opening an existing `cases_dir` no longer chmods a directory
+  Cortex does not own; `cases_dir` cannot be the workspace root; and automatic catch-all ignoring
+  is confined to `<workspace>/.cortex/.gitignore` instead of hiding an arbitrary custom parent.
+- **Recall egress now fails closed** — enabled non-loopback `recall.embed_url` endpoints require
+  trusted-launcher `CORTEX_APPROVE_REMOTE_RECALL=1`, repository configuration cannot approve its
+  own network egress, and credential-bearing endpoint URLs are rejected.
+- **Canceled completion requests stop recall indexing** — the completion-time Veclite sweep now
+  uses the caller context instead of an uncancelable background context.
+- **Audit views surface corruption** — cross-workspace session enumeration and timelines return
+  contextual errors for unreadable case/receipt/ledger state instead of silently omitting it or
+  returning an empty feed.
+- **Unknown adapter operations fail closed** — only explicitly allowlisted query operations are
+  `read_only`; new tool/verb pairs default to approval-gated `external_mutation`.
+- **E2E runs no longer pollute operator state** — `task flows` supplies a temporary
+  `CORTEX_HOME` and cleans it after Glyphrun exits; the help spec also uses a viewport tall enough
+  to assert the complete command list instead of depending on terminal scrollback.
+
 ## [0.16.1] — 2026-07-20
 
 ### Changed

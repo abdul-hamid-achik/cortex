@@ -176,8 +176,9 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	// Cross-case disproof recall indexes all resolved hypotheses
 	// and definitive receipts now that the case is durably complete. The
 	// just-resolved hypothesis was already indexed at resolve time with its
-	// reason; this backfills the rest. Best-effort, background-decoupled.
-	k.indexCaseForRecall(context.Background(), c, hyps, receipts)
+	// reason; this backfills the rest. Best-effort and bounded by the caller's
+	// context so a canceled MCP/CLI request cannot keep Remember blocked.
+	k.indexCaseForRecall(ctx, c, hyps, receipts)
 
 	warnings := append([]string(nil), verificationWarnings...)
 	// Durable semantic memory via vecgrep is best-effort.

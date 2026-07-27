@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1992,12 +1993,14 @@ func (d *deadlineAdapter) Execute(ctx context.Context, _ adapters.Request) (adap
 type fakeRecaller struct {
 	indexed   []adapters.IndexRecord
 	indexErr  error
+	indexCtx  error
 	hits      []adapters.RecallHit
 	recallErr error
 }
 
-func (f *fakeRecaller) IndexCase(_ context.Context, rec adapters.IndexRecord) error {
+func (f *fakeRecaller) IndexCase(ctx context.Context, rec adapters.IndexRecord) error {
 	f.indexed = append(f.indexed, rec)
+	f.indexCtx = ctx.Err()
 	return f.indexErr
 }
 
@@ -2349,6 +2352,33 @@ func TestRememberIndexesResolvedHypothesesAndDefinitiveReceipts(t *testing.T) {
 	}
 	if activeCount != 0 {
 		t.Errorf("an active hypothesis must not be indexed, got %d", activeCount)
+	}
+}
+
+func TestRememberBoundsRecallIndexingByCallerContext(t *testing.T) {
+	fr := &fakeRecaller{}
+	k, taskID := verifyingInvestigation(t, oneHypothesis("bounded recall", "inspect evidence"))
+	k.SetRecaller(fr)
+	hyps, err := k.Store().Hypotheses(taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hyps) != 1 {
+		t.Fatalf("hypotheses = %d, want 1", len(hyps))
+	}
+	if _, err := k.Resolve(ResolveInput{TaskID: taskID, HypothesisID: hyps[0].ID, Status: "rejected", Reason: "disproved"}); err != nil {
+		t.Fatal(err)
+	}
+	fr.indexed = nil
+	fr.indexCtx = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := k.Remember(ctx, RememberInput{TaskID: taskID, Outcome: "done", VerificationNotPossible: true})
+	if err != nil || !got.OK {
+		t.Fatalf("remember should complete while best-effort recall is canceled: %+v (%v)", got, err)
+	}
+	if !errors.Is(fr.indexCtx, context.Canceled) {
+		t.Fatalf("recall indexing context error = %v, want context canceled", fr.indexCtx)
 	}
 }
 

@@ -67,13 +67,12 @@ type Store struct {
 	mu   sync.Mutex // guards AppendVerification read-modify-write
 }
 
-// New opens (creating if needed) a case store under the given cases root.
+// New opens (creating if needed) a case store under the given cases root. It
+// never changes permissions on a pre-existing custom root: Cortex owns the
+// task directories it creates beneath that root, not the operator's directory.
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create cases dir: %w", err)
-	}
-	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- a directory needs owner-execute (0700); this is not a regular file
-		return nil, fmt.Errorf("secure cases dir: %w", err)
 	}
 	return &Store{root: root}, nil
 }

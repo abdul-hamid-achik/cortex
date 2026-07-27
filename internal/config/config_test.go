@@ -176,6 +176,76 @@ func TestRecallDefaultsAndEnv(t *testing.T) {
 	}
 }
 
+func TestRecallEndpointFailsClosedForRemoteEgress(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	for _, endpoint := range []string{
+		"http://localhost:11434/api/embeddings",
+		"http://127.0.0.1:11434/api/embeddings",
+		"http://[::1]:11434/api/embeddings",
+	} {
+		cfg := For(dir)
+		cfg.Recall.EmbedURL = endpoint
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("loopback endpoint %q rejected: %v", endpoint, err)
+		}
+	}
+
+	cfg := For(dir)
+	cfg.Recall.EmbedURL = "https://embeddings.example.test/v1"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "CORTEX_APPROVE_REMOTE_RECALL") {
+		t.Fatalf("remote endpoint should require launcher approval, got %v", err)
+	}
+	cfg.Recall.AllowRemote = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("trusted launcher approval should allow remote recall: %v", err)
+	}
+
+	cfg = For(dir)
+	cfg.Recall.EmbedURL = "http://user:secret@localhost:11434/api/embeddings"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must not contain credentials") {
+		t.Fatalf("credential-bearing endpoint should be rejected, got %v", err)
+	}
+}
+
+func TestRemoteRecallApprovalComesOnlyFromEnvironment(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cortex.yaml"), []byte("recall:\n  embed_url: https://embeddings.example.test/v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := For(dir).Validate(); err == nil {
+		t.Fatal("repository config approved its own remote recall endpoint")
+	}
+	t.Setenv("CORTEX_APPROVE_REMOTE_RECALL", "1")
+	if err := For(dir).Validate(); err != nil {
+		t.Fatalf("launching environment approval was not honored: %v", err)
+	}
+}
+
+func TestCasesDirRejectsWorkspaceRoot(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	t.Setenv("CORTEX_CASES_DIR", dir)
+	err := For(dir).Validate()
+	if err == nil || !strings.Contains(err.Error(), "workspace root") {
+		t.Fatalf("cases_dir equal to workspace should fail closed, got %v", err)
+	}
+}
+
+func TestCasesDirRejectsSymlinkToWorkspaceRoot(t *testing.T) {
+	isolate(t)
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	t.Setenv("CORTEX_CASES_DIR", link)
+	if err := For(dir).Validate(); err == nil || !strings.Contains(err.Error(), "workspace root") {
+		t.Fatalf("cases_dir symlink to workspace should fail closed, got %v", err)
+	}
+}
+
 func TestConfigValidateRejectsBudgetsThatDisableSafetyBounds(t *testing.T) {
 	cfg := For(t.TempDir())
 	cfg.Budget.MaxParallelCalls = 0
@@ -252,6 +322,23 @@ func TestEnsureStateIgnored(t *testing.T) {
 	EnsureStateIgnored(ws2, ws2)
 	if _, err := os.Stat(filepath.Join(filepath.Dir(ws2), ".gitignore")); err == nil {
 		t.Error("must not write .gitignore in the workspace's parent when cases_dir == workspace")
+	}
+	// An arbitrary in-workspace custom parent may contain source files. Cortex
+	// must not hide the whole parent with a catch-all ignore.
+	custom := filepath.Join(ws, "custom", "cases")
+	EnsureStateIgnored(ws, custom)
+	if _, err := os.Stat(filepath.Join(ws, "custom", ".gitignore")); err == nil {
+		t.Error("must not write a catch-all .gitignore beside an arbitrary custom cases_dir")
+	}
+	// A repository-controlled .cortex symlink must not redirect the catch-all
+	// ignore write outside the workspace.
+	ws3 := t.TempDir()
+	outsideState := t.TempDir()
+	if err := os.Symlink(outsideState, filepath.Join(ws3, StateDir)); err == nil {
+		EnsureStateIgnored(ws3, filepath.Join(ws3, StateDir, "cases"))
+		if _, err := os.Stat(filepath.Join(outsideState, ".gitignore")); err == nil {
+			t.Error("must not follow a .cortex symlink for the catch-all ignore write")
+		}
 	}
 	// Empty cases dir is a no-op.
 	EnsureStateIgnored(ws, "")

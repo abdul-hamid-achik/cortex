@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,47 @@ import (
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
+
+func TestNewPreservesExistingRootPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission semantics")
+	}
+	root := filepath.Join(t.TempDir(), "shared-cases")
+	if err := os.Mkdir(root, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(root); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("New changed existing root permissions from %o to %o", before.Mode().Perm(), after.Mode().Perm())
+	}
+}
+
+func TestNewCreatesOwnerOnlyRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission semantics")
+	}
+	root := filepath.Join(t.TempDir(), "new-cases")
+	if _, err := New(root); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got&0o077 != 0 {
+		t.Fatalf("new cases root permissions = %o, want owner-only", got)
+	}
+}
 
 func TestAppendVerificationAcrossStoreInstances(t *testing.T) {
 	root := t.TempDir()

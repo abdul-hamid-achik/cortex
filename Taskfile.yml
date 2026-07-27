@@ -132,7 +132,10 @@ tasks:
     aliases: [e2e]
     deps: [build]
     cmds:
-      - glyph run specs/*.yml --format md --progress auto
+      - |
+        CORTEX_FLOW_HOME="$(mktemp -d)"
+        trap 'rm -rf -- "${CORTEX_FLOW_HOME:?}"' EXIT
+        CORTEX_HOME="$CORTEX_FLOW_HOME" glyph run specs/*.yml --format md --progress auto
 
   eval:
     desc: Run the evaluation harness (outcome + evidence-trail scorecard)

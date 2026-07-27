@@ -9,6 +9,7 @@ func TestClassifyOp(t *testing.T) {
 	}{
 		{"codemap", "impact", ActionReadOnly},
 		{"vecgrep", "search", ActionReadOnly},
+		{"git", "grep", ActionReadOnly},
 		{"cairntrace", "run", ActionReadOnly},
 		{"fcheap", "save", ActionLocalMutation},
 		{"vecgrep", "remember", ActionLocalMutation},
@@ -22,7 +23,8 @@ func TestClassifyOp(t *testing.T) {
 		{"anytool", "deploy", ActionExternalMutation},
 		{"anytool", "publish", ActionExternalMutation},
 		{"anytool", "push", ActionExternalMutation},
-		{"unknown", "whatever", ActionReadOnly},
+		{"codemap", "future-query", ActionExternalMutation},
+		{"unknown", "whatever", ActionExternalMutation},
 	}
 	for _, tc := range cases {
 		if got := ClassifyOp(tc.tool, tc.op); got != tc.want {

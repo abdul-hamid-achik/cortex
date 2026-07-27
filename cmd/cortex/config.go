@@ -28,7 +28,8 @@ Configurable in cortex.yaml:
 
 The resolved view lists verifier policy but deliberately omits executable argv.
 Configured commands remain blocked unless the trusted process launching Cortex
-sets CORTEX_APPROVE_COMMANDS=1; repository configuration cannot approve itself.`,
+sets CORTEX_APPROVE_COMMANDS=1. Remote recall endpoints similarly require
+CORTEX_APPROVE_REMOTE_RECALL=1; repository configuration cannot approve either.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ws, _ := cmd.Flags().GetString("workspace")
 		cfg := config.For(ws)
@@ -39,6 +40,7 @@ sets CORTEX_APPROVE_COMMANDS=1; repository configuration cannot approve itself.`
 		recall := map[string]any{
 			"enabled": cfg.Recall.Enabled, "dbPath": cfg.Recall.DBPath,
 			"embedModel": cfg.Recall.EmbedModel, "embedUrl": cfg.Recall.EmbedURL,
+			"remoteApproved": cfg.Recall.AllowRemote,
 		}
 
 		if jsonMode(cmd) {
@@ -81,6 +83,7 @@ sets CORTEX_APPROVE_COMMANDS=1; repository configuration cannot approve itself.`
 		pf(w, "  enabled=%t  model=%s\n", cfg.Recall.Enabled, cfg.Recall.EmbedModel)
 		pf(w, "  %s %s\n", paint(styLabel, "database"), cfg.Recall.DBPath)
 		pf(w, "  %s %s\n", paint(styLabel, "endpoint"), cfg.Recall.EmbedURL)
+		pf(w, "  %s %t\n", paint(styLabel, "remote approved"), cfg.Recall.AllowRemote)
 
 		pln(w, heading("Configured verifiers"))
 		if len(verifiers) == 0 {

@@ -70,6 +70,13 @@ redact_literals:
 # cases_dir: .cortex/cases
 ```
 
+Recall endpoints are local-only by default (`localhost`, `127.0.0.0/8`, or `::1`). A remote
+`embed_url` sends redacted goals, hypotheses, queries, and verification statements off-machine and
+therefore fails configuration validation unless the trusted launching process sets
+`CORTEX_APPROVE_REMOTE_RECALL=1`. A repository cannot approve its own endpoint, and endpoint URLs
+containing credentials are rejected. Disable recall with `recall.enabled: false` when no embedding
+call should be possible.
+
 ## Safe command verifiers
 
 Configured verifiers fill the gap between structural/behavioral tools and repository-specific
@@ -130,9 +137,11 @@ to its code:
 | `CORTEX_CASES_DIR` | same rules; wins over the file |
 
 A pre-existing `<workspace>/.cortex/cases` is honored automatically, so upgrading never strands
-active work. When cases are **repo-local**, Cortex writes `.cortex/.gitignore` (`*`) so its own
-state never registers as a workspace change; when they live outside the workspace (the default), no
-in-repo ignore file is written.
+active work. `cases_dir` cannot equal the workspace root. Cortex creates its task directories and
+files owner-only but preserves the permissions of an existing custom root. When the store is
+`.cortex` or one of its descendants, Cortex writes only `<workspace>/.cortex/.gitignore`; it never
+places a catch-all ignore beside an arbitrary custom directory. Add your own narrow ignore rule for
+another repo-local path. Stores outside the workspace need no in-repo ignore file.
 
 ## Environment variables
 
@@ -147,6 +156,7 @@ Env vars have the highest precedence, handy for CI or a one-off run:
 | `CORTEX_RECALL_DB` | `recall.db_path` |
 | `CORTEX_RECALL_EMBED_MODEL` | `recall.embed_model` |
 | `CORTEX_RECALL_EMBED_URL` | `recall.embed_url` |
+| `CORTEX_APPROVE_REMOTE_RECALL` | trusted-launcher approval for a non-loopback recall endpoint; unset denies egress |
 | `CORTEX_MAX_EVIDENCE_ITEMS` | `budget.max_evidence_items_returned` |
 | `CORTEX_MAX_CANDIDATE_FILES` | `budget.max_candidate_files_returned` |
 | `CORTEX_MAX_AUTO_RETRIES` | `budget.max_auto_retries_per_tool` |

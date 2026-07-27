@@ -174,6 +174,7 @@ func applyEnv(cfg *Config) {
 	envStr("CORTEX_RECALL_DB", &cfg.Recall.DBPath)
 	envStr("CORTEX_RECALL_EMBED_MODEL", &cfg.Recall.EmbedModel)
 	envStr("CORTEX_RECALL_EMBED_URL", &cfg.Recall.EmbedURL)
+	envBool("CORTEX_APPROVE_REMOTE_RECALL", &cfg.Recall.AllowRemote)
 }
 
 func resolveCasesDir(workspace, dir string) string {

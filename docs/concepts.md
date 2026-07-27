@@ -315,6 +315,8 @@ Every tool operation is classified by side-effect risk, and the class drives wha
 | `secreted_execution` | run with injected secrets | requires the tvault capability (values stay redacted) |
 
 The class is recorded in the case's command audit trail, so the security posture is inspectable.
+A tool operation is read-only only when its exact tool/verb pair is registered as such; an unknown
+tool or future verb is classified as `external_mutation` and refused until explicitly approved.
 A harness can install an approver to grant external mutations — the explicit approval integration
 point. Cortex v0.1 issues no external mutations itself (it's an evidence layer; the agent edits
 code), so the gate is a guard rail for future capabilities and any adapter that gains an

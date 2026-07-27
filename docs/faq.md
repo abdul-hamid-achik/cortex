@@ -232,8 +232,9 @@ auditable in one place: `$XDG_STATE_HOME/cortex/sessions/<repo>/<taskId>/` (case
 hypotheses, plan, receipts, command audit trail, phase history, raw tool output, and a generated
 `summary.md`). Config and cache follow XDG too (`$XDG_CONFIG_HOME/cortex`, `$XDG_CACHE_HOME/cortex`);
 `$CORTEX_HOME` or a legacy `~/.cortex` collapses them into one dir. Set `cases_dir` /
-`CORTEX_CASES_DIR` to keep a project's cases repo-local instead — and then Cortex gitignores them
-via `.cortex/.gitignore`. See [The case file](/case-file) and [Configuration](/configuration).
+`CORTEX_CASES_DIR` to keep a project's cases repo-local instead. Stores under `.cortex` are ignored
+via `.cortex/.gitignore`; another custom parent needs its own narrow ignore rule. See
+[The case file](/case-file) and [Configuration](/configuration).
 
 ### Does Cortex send my code anywhere?
 
@@ -243,7 +244,9 @@ is available, the adapter sends redacted goal, hypothesis, and resolution text t
 `recall.embed_url` to obtain embeddings. Recall queries and indexed verification statements also
 use that endpoint. The default endpoint is local Ollama at
 `http://localhost:11434`; if you configure a remote endpoint, that text leaves your machine.
-Set `recall.enabled: false` to disable this call, or keep `embed_url` on a trusted local endpoint.
+Remote endpoints fail closed unless the trusted process launching Cortex sets
+`CORTEX_APPROVE_REMOTE_RECALL=1`; a repository cannot authorize its own egress. Set
+`recall.enabled: false` to disable this call, or keep `embed_url` on a trusted loopback endpoint.
 
 Your LLM harness and any other configured specialist tools may have their own network behavior;
 review those separately.
