@@ -13,6 +13,12 @@ const (
 	maxDecisionOptions       = 16
 	maxStableIdentifierBytes = 256
 
+	// maxRejectionCandidates bounds how many real values (evidence IDs,
+	// candidate reasons, …) a rejection's structured Actions offers per input —
+	// enough to be genuinely useful without copying a long ledger into every
+	// error response.
+	maxRejectionCandidates = 20
+
 	// Completion summaries are intentionally much smaller than casefs's 1 MiB
 	// hard limit. Valid maximum-size plans must always remain completable, and a
 	// long append-only evidence ledger must not be copied wholesale into Markdown.

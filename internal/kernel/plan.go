@@ -51,10 +51,16 @@ func (k *Kernel) PlanContext(ctx context.Context, in PlanInput) (domain.Envelope
 		return errEnvelope(in.TaskID, "task belongs to a different workspace"), nil
 	}
 	if c.Status != domain.PhaseInvestigating && c.Status != domain.PhasePlanned {
-		return errEnvelope(in.TaskID, fmt.Sprintf("cannot plan in phase %q; investigate first", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot plan in phase %q; investigate first", c.Status)), nil
 	}
 	if len(in.Hypotheses) == 0 {
-		return errEnvelope(in.TaskID, "a plan needs at least one hypothesis with a disproof path"), nil
+		return k.errEnvelopeActions(in.TaskID, "a plan needs at least one hypothesis with a disproof path",
+			domain.NextAction{
+				Tool: "cortex_plan", Command: cortexCommand(c, "plan", c.ID,
+					"--hypothesis", "STATEMENT", "--disprove", "DISPROOF", "--uncertainty", firstNonEmptyStr(in.Uncertainty, "UNCERTAINTY")),
+				Reason: "state at least one hypothesis with a disproof path", Arguments: knownActionArgs(c),
+				Inputs: []string{"hypotheses"},
+			}), nil
 	}
 	if len(in.Hypotheses) > maxPlanHypotheses {
 		return errEnvelope(in.TaskID, fmt.Sprintf("plan has more than %d hypotheses", maxPlanHypotheses)), nil
@@ -93,7 +99,18 @@ func (k *Kernel) PlanContext(ctx context.Context, in PlanInput) (domain.Envelope
 		supports := dedupeStr(h.Supports)
 		for _, evidenceID := range supports {
 			if _, err := k.store.GetEvidence(c.ID, evidenceID); err != nil {
-				return errEnvelope(in.TaskID, fmt.Sprintf("plan rejected: hypothesis support %q is not evidence in task %s", evidenceID, c.ID)), nil
+				return k.errEnvelopeActions(in.TaskID,
+					fmt.Sprintf("plan rejected: hypothesis support %q is not evidence in task %s", evidenceID, c.ID),
+					domain.NextAction{
+						Tool: "cortex_plan", Command: cortexCommand(c, "plan", c.ID, "--hypothesis", h.Statement,
+							"--disprove", h.DisproveBy, "--uncertainty", firstNonEmptyStr(in.Uncertainty, "UNCERTAINTY")),
+						Reason:    "cite only evidence IDs that already exist in this task, or drop --support to plan without one",
+						Arguments: knownActionArgs(c),
+						Inputs:    []string{"support"},
+						Candidates: map[string][]string{
+							"support": k.evidenceIDCandidates(c.ID),
+						},
+					}), nil
 			}
 		}
 		hyp := domain.Hypothesis{

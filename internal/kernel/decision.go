@@ -46,16 +46,16 @@ func (k *Kernel) RequestDecision(in RequestDecisionInput) (domain.Envelope, erro
 		return k.decisionRequestEnvelope(paused, *pending, "recovered existing pending decision after an interrupted request"), nil
 	}
 	if c.Status == domain.PhaseNeedsHumanDecision {
-		return errEnvelope(c.ID, "task is waiting for a human decision but has no pending decision record"), nil
+		return k.errEnvelopeForCase(c, "task is waiting for a human decision but has no pending decision record"), nil
 	}
 	if c.Status.IsTerminal() {
-		return errEnvelope(c.ID, fmt.Sprintf("cannot request a decision in terminal phase %q", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot request a decision in terminal phase %q", c.Status)), nil
 	}
 	if c.PausedFrom != "" {
-		return errEnvelope(c.ID, fmt.Sprintf("cannot request a decision: stale pausedFrom %q is already set", c.PausedFrom)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot request a decision: stale pausedFrom %q is already set", c.PausedFrom)), nil
 	}
 	if !domain.CanTransition(c.Status, domain.PhaseNeedsHumanDecision) {
-		return errEnvelope(c.ID, fmt.Sprintf("cannot request a decision in phase %q", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot request a decision in phase %q", c.Status)), nil
 	}
 
 	decision, err := k.buildDecision(in)
@@ -164,7 +164,7 @@ func (k *Kernel) AnswerDecision(in AnswerDecisionInput) (domain.Envelope, error)
 	}
 	answer := strings.TrimSpace(in.Answer)
 	if answer == "" {
-		return errEnvelope(c.ID, "decision answer needs an option id"), nil
+		return k.errEnvelopeActions(c.ID, "decision answer needs an option id", k.answerDecisionAction(c, in, "answer")), nil
 	}
 	if textExceeds(answer, maxStableIdentifierBytes) || textExceeds(strings.TrimSpace(in.DecisionID), maxStableIdentifierBytes) {
 		return errEnvelope(c.ID, fmt.Sprintf("decision and answer ids must be at most %d bytes", maxStableIdentifierBytes)), nil
@@ -174,7 +174,7 @@ func (k *Kernel) AnswerDecision(in AnswerDecisionInput) (domain.Envelope, error)
 	}
 	responderRaw := strings.TrimSpace(in.Responder)
 	if responderRaw == "" {
-		return errEnvelope(c.ID, "decision answer needs a responder"), nil
+		return k.errEnvelopeActions(c.ID, "decision answer needs a responder", k.answerDecisionAction(c, in, "responder")), nil
 	}
 	if textExceeds(responderRaw, maxStableIdentifierBytes) {
 		return errEnvelope(c.ID, fmt.Sprintf("decision responder exceeds %d bytes", maxStableIdentifierBytes)), nil
@@ -189,7 +189,7 @@ func (k *Kernel) AnswerDecision(in AnswerDecisionInput) (domain.Envelope, error)
 			}
 			return k.decisionAnsweredEnvelope(c, answered, ev, true), nil
 		}
-		return errEnvelope(c.ID, fmt.Sprintf("cannot answer a decision in phase %q", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot answer a decision in phase %q", c.Status)), nil
 	}
 	if err := validateResumeTarget(c.PausedFrom); err != nil {
 		return errEnvelope(c.ID, err.Error()), nil
@@ -359,6 +359,60 @@ func (k *Kernel) resumeDecision(c *domain.CaseFile, decision domain.Decision, ev
 		return k.decisionAnsweredEnvelope(latest, decision, ev, false), nil
 	}
 	return errEnvelope(c.ID, "case changed concurrently too many times; retry decision resume"), nil
+}
+
+// answerDecisionAction builds a retryable cortex_answer_decision
+// continuation, pre-filling every value already supplied (skipping the field
+// named by missing) and naming what still needs fixing. When the task is
+// actually paused for a decision matching in.DecisionID (or none was given),
+// the pending record's real option IDs become Candidates for "answer" — the
+// exact ledger choices a caller could pick from, never invented.
+func (k *Kernel) answerDecisionAction(c *domain.CaseFile, in AnswerDecisionInput, missing string) domain.NextAction {
+	decisionID := strings.TrimSpace(in.DecisionID)
+	answer := strings.TrimSpace(in.Answer)
+	if missing == "answer" {
+		answer = ""
+	}
+	responder := strings.TrimSpace(in.Responder)
+	if missing == "responder" {
+		responder = ""
+	}
+	args := map[string]any{"taskId": c.ID}
+	if decisionID != "" {
+		args["decisionId"] = decisionID
+	}
+	if answer != "" {
+		args["answer"] = answer
+	}
+	if responder != "" {
+		args["responder"] = responder
+	}
+	var candidates map[string][]string
+	if pending, err := k.pendingDecision(c.ID); err == nil && pending != nil && (decisionID == "" || pending.ID == decisionID) {
+		if decisionID == "" {
+			decisionID = pending.ID
+			args["decisionId"] = decisionID
+		}
+		var optionIDs []string
+		for _, opt := range pending.Options {
+			optionIDs = append(optionIDs, opt.ID)
+		}
+		if len(optionIDs) > 0 {
+			candidates = map[string][]string{"answer": optionIDs}
+		}
+	}
+	command := cortexCommand(c, "decision", "answer", c.ID,
+		firstNonEmptyStr(decisionID, "DECISION_ID"),
+		"--answer", firstNonEmptyStr(answer, "ANSWER"),
+		"--responder", firstNonEmptyStr(responder, "RESPONDER"))
+	action := domain.NextAction{
+		Tool: "cortex_answer_decision", Command: command,
+		Reason: "supply the missing or corrected decision-answer field", Arguments: args, Inputs: []string{missing},
+	}
+	if len(candidates) > 0 {
+		action.Candidates = candidates
+	}
+	return action
 }
 
 func (k *Kernel) decisionAnsweredEnvelope(c *domain.CaseFile, decision domain.Decision, ev domain.Evidence, already bool) domain.Envelope {

@@ -22,20 +22,24 @@ type OpenInput struct {
 // agent to retry after losing a tool response.
 func (k *Kernel) OpenTask(ctx context.Context, in OpenInput) (domain.Envelope, error) {
 	if strings.TrimSpace(in.Goal) == "" {
-		return errEnvelope("", "a goal is required to open a task"), nil
+		return k.errEnvelopeActions("", "a goal is required to open a task",
+			k.openContinuation("cortex_open_task", "open", in.StartInput, "goal", nil)), nil
 	}
 	in.Goal = k.red.String(strings.TrimSpace(in.Goal))
 	mode, ok := normalizeMode(in.Mode)
 	if !ok {
-		return errEnvelope("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review (got %q)", in.Mode))), nil
+		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review (got %q)", in.Mode)),
+			k.openContinuation("cortex_open_task", "open", in.StartInput, "mode", map[string][]string{"mode": {"change", "investigate", "review"}})), nil
 	}
 	risk, ok := normalizeRisk(in.Risk)
 	if !ok {
-		return errEnvelope("", k.red.String(fmt.Sprintf("risk must be one of: low, medium, high (got %q)", in.Risk))), nil
+		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("risk must be one of: low, medium, high (got %q)", in.Risk)),
+			k.openContinuation("cortex_open_task", "open", in.StartInput, "risk", map[string][]string{"risk": {"low", "medium", "high"}})), nil
 	}
 	surfaces, err := normalizeSurfaces(in.Surfaces)
 	if err != nil {
-		return errEnvelope("", k.red.String(err.Error())), nil
+		return k.errEnvelopeActions("", k.red.String(err.Error()),
+			k.openContinuation("cortex_open_task", "open", in.StartInput, "surfaces", map[string][]string{"surfaces": {"code", "browser", "terminal", "artifact", "secret"}})), nil
 	}
 	criteria, err := k.normalizeAcceptanceCriteria(in.AcceptanceCriteria)
 	if err != nil {
@@ -48,10 +52,12 @@ func (k *Kernel) OpenTask(ctx context.Context, in OpenInput) (domain.Envelope, e
 	if parentTaskID != "" {
 		parent, loadErr := k.store.Load(parentTaskID)
 		if loadErr != nil {
-			return errEnvelope("", "parent task: "+loadErr.Error()), nil
+			return k.errEnvelopeActions("", "parent task: "+loadErr.Error(),
+				k.openContinuation("cortex_open_task", "open", in.StartInput, "parentTaskId", nil)), nil
 		}
 		if parent.Workspace.Root != k.cfg.Workspace {
-			return errEnvelope("", "parent task belongs to a different workspace"), nil
+			return k.errEnvelopeActions("", "parent task belongs to a different workspace",
+				k.openContinuation("cortex_open_task", "open", in.StartInput, "parentTaskId", nil)), nil
 		}
 		parentTaskID = parent.ID
 		in.ParentTaskID = parent.ID
@@ -168,6 +174,86 @@ func (k *Kernel) openCandidates(goal string, mode domain.Mode, branch, parentTas
 
 func normalizeGoal(goal string) string {
 	return strings.ToLower(strings.Join(strings.Fields(goal), " "))
+}
+
+// openContinuation builds a retryable cortex_open_task/cortex_start_task
+// continuation: it pre-fills every value the request already supplied
+// (skipping only the field named by missing, since that one is exactly what's
+// wrong) and names what still needs fixing. Candidates, when supplied, are
+// mode/risk/surface's own fixed vocabulary — the identical literal set the
+// rejection's prose already names — never invented content.
+func (k *Kernel) openContinuation(tool, verb string, in StartInput, missing string, candidates map[string][]string) domain.NextAction {
+	goal := strings.TrimSpace(in.Goal)
+	mode := string(in.Mode)
+	risk := in.Risk
+	args := map[string]any{}
+	if missing != "goal" && goal != "" {
+		args["goal"] = goal
+	}
+	if missing != "mode" && mode != "" {
+		args["mode"] = mode
+	}
+	if missing != "risk" && risk != "" {
+		args["risk"] = risk
+	}
+	if missing != "surfaces" && len(in.Surfaces) > 0 {
+		surfaces := make([]string, 0, len(in.Surfaces))
+		for _, s := range in.Surfaces {
+			surfaces = append(surfaces, string(s))
+		}
+		args["surfaces"] = surfaces
+	}
+	if in.Actor != "" {
+		args["actor"] = in.Actor
+	}
+	if missing != "parentTaskId" && in.ParentTaskID != "" {
+		args["parentTaskId"] = in.ParentTaskID
+	}
+	if in.IdempotencyKey != "" {
+		args["idempotencyKey"] = in.IdempotencyKey
+	}
+
+	command := []string{verb, firstNonEmptyStr(goal, "GOAL")}
+	if missing == "mode" {
+		command = append(command, "--mode", "MODE")
+	} else if mode != "" {
+		command = append(command, "--mode", mode)
+	}
+	if missing == "risk" {
+		command = append(command, "--risk", "RISK")
+	} else if risk != "" {
+		command = append(command, "--risk", risk)
+	}
+	if missing == "surfaces" {
+		command = append(command, "--surface", "SURFACE")
+	} else {
+		for _, s := range in.Surfaces {
+			command = append(command, "--surface", string(s))
+		}
+	}
+	if in.Actor != "" {
+		command = append(command, "--actor", in.Actor)
+	}
+	if missing == "parentTaskId" {
+		command = append(command, "--parent", firstNonEmptyStr(in.ParentTaskID, "PARENT_TASK_ID"))
+	} else if in.ParentTaskID != "" {
+		command = append(command, "--parent", in.ParentTaskID)
+	}
+	if in.IdempotencyKey != "" {
+		command = append(command, "--idempotency-key", in.IdempotencyKey)
+	}
+	// No case exists yet, but the workspace this call would open into is
+	// already known — reuse it for the same -C-pinned, shell-safe rendering
+	// every other structured command gets.
+	pseudo := &domain.CaseFile{Workspace: domain.Workspace{Root: k.cfg.Workspace}}
+	action := domain.NextAction{
+		Tool: tool, Command: cortexCommand(pseudo, command...),
+		Reason: "supply the missing or corrected field and retry " + verb, Arguments: args, Inputs: []string{missing},
+	}
+	if len(candidates) > 0 {
+		action.Candidates = candidates
+	}
+	return action
 }
 
 func (k *Kernel) normalizeTaskMetadata(actor, parentTaskID, idempotencyKey string) (string, string, string, error) {

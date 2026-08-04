@@ -38,6 +38,14 @@ type NextAction struct {
 	Arguments map[string]any `json:"arguments,omitempty"`
 	Inputs    []string       `json:"inputs,omitempty"`
 	BlockedBy []string       `json:"blockedBy,omitempty"`
+	// Candidates offers concrete options for entries named in Inputs, keyed by
+	// input name (e.g. "evidence" -> the evidence IDs that actually exist in
+	// this case, "reason" -> claims already recorded against the hypothesis
+	// being resolved). Cortex only populates a list here when every entry is
+	// derived from real stored state or a fixed, already-documented vocabulary
+	// (a status/mode/risk enum) — never invented content. A caller can offer
+	// these directly instead of asking a human to guess a value from prose.
+	Candidates map[string][]string `json:"candidates,omitempty"`
 }
 
 // FactView is the compact, model-facing projection of an Evidence record. Raw

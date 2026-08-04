@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/ids"
@@ -31,14 +32,16 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
 	if message := resolvePhaseError(c); message != "" {
-		return errEnvelope(in.TaskID, message), nil
+		return k.errEnvelopeForCase(c, message), nil
 	}
 	status, ok := parseHypStatus(in.Status)
 	if !ok {
-		return errEnvelope(in.TaskID, "status must be one of: confirmed, challenged, rejected"), nil
+		return k.errEnvelopeActions(in.TaskID, "status must be one of: confirmed, challenged, rejected",
+			k.resolveContinuation(c, in, []string{"status"}, map[string][]string{"status": {"confirmed", "challenged", "rejected"}})), nil
 	}
 	if in.Reason == "" {
-		return errEnvelope(in.TaskID, "resolve needs a reason (what evidence changed the status)"), nil
+		return k.errEnvelopeActions(in.TaskID, "resolve needs a reason (what evidence changed the status)",
+			k.resolveContinuation(c, in, []string{"reason"}, k.resolveReasonCandidates(in.TaskID, in.HypothesisID))), nil
 	}
 	// Confirmation raises a hypothesis to high confidence, so it must rest on
 	// evidence — a hypothesis can't be promoted on assertion alone. That
@@ -53,7 +56,8 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 	// phantom records.
 	for _, evID := range in.Evidence {
 		if _, err := k.store.GetEvidence(in.TaskID, evID); err != nil {
-			return errEnvelope(in.TaskID, "no evidence "+evID+" in this task to cite"), nil
+			return k.errEnvelopeActions(in.TaskID, "no evidence "+evID+" in this task to cite",
+				k.resolveContinuation(c, in, []string{"evidence"}, map[string][]string{"evidence": k.evidenceIDCandidates(in.TaskID)})), nil
 		}
 	}
 
@@ -74,7 +78,7 @@ func (k *Kernel) Resolve(in ResolveInput) (domain.Envelope, error) {
 				return errEnvelope(in.TaskID, err.Error()), nil
 			}
 			if message := resolvePhaseError(c); message != "" {
-				return errEnvelope(in.TaskID, message), nil
+				return k.errEnvelopeForCase(c, message), nil
 			}
 		}
 
@@ -210,4 +214,75 @@ func confidenceForResolution(s domain.HypothesisStatus) string {
 	default:
 		return "medium"
 	}
+}
+
+// resolveContinuation builds a retryable cortex_resolve continuation,
+// pre-filling every value the request already supplied (even a value that
+// belongs to a different, now-invalid field) and naming what's still
+// missing or invalid via missing. Candidates, when supplied, are always
+// derived from this task's real stored state or resolve's fixed status
+// vocabulary — never invented content — so a caller can offer them directly
+// instead of asking a human to guess.
+func (k *Kernel) resolveContinuation(c *domain.CaseFile, in ResolveInput, missing []string, candidates map[string][]string) domain.NextAction {
+	hypID := firstNonEmptyStr(in.HypothesisID, "HYPOTHESIS_ID")
+	status := firstNonEmptyStr(in.Status, "STATUS")
+	command := []string{"resolve", c.ID, hypID, "--status", status, "--reason", firstNonEmptyStr(in.Reason, "REASON")}
+	for _, evID := range in.Evidence {
+		command = append(command, "--evidence", evID)
+	}
+	args := map[string]any{"taskId": c.ID}
+	if in.HypothesisID != "" {
+		args["hypothesisId"] = in.HypothesisID
+	}
+	if in.Status != "" {
+		args["status"] = in.Status
+	}
+	if in.Reason != "" {
+		args["reason"] = in.Reason
+	}
+	if len(in.Evidence) > 0 {
+		args["evidence"] = append([]string(nil), in.Evidence...)
+	}
+	action := domain.NextAction{
+		Tool: "cortex_resolve", Command: cortexCommand(c, command...),
+		Reason: "supply the missing or corrected field(s) and retry resolve", Arguments: args, Inputs: missing,
+	}
+	if len(candidates) > 0 {
+		action.Candidates = candidates
+	}
+	return action
+}
+
+// resolveReasonCandidates surfaces candidate reasons for a hypothesis
+// resolution from evidence this task's ledger already ties to that specific
+// hypothesis (its Supports list) — real recorded claims, never invented
+// prose. Returns nil when the hypothesis is unknown or has no supporting
+// evidence yet; a rejection must not fabricate a reason where none exists.
+func (k *Kernel) resolveReasonCandidates(taskID, hypothesisID string) map[string][]string {
+	if strings.TrimSpace(hypothesisID) == "" {
+		return nil
+	}
+	hyps, err := k.store.Hypotheses(taskID)
+	if err != nil {
+		return nil
+	}
+	for _, h := range hyps {
+		if h.ID != hypothesisID {
+			continue
+		}
+		var claims []string
+		for _, evID := range h.Supports {
+			if len(claims) >= maxRejectionCandidates {
+				break
+			}
+			if ev, evErr := k.store.GetEvidence(taskID, evID); evErr == nil && strings.TrimSpace(ev.Claim) != "" {
+				claims = append(claims, ev.Claim)
+			}
+		}
+		if len(claims) == 0 {
+			return nil
+		}
+		return map[string][]string{"reason": claims}
+	}
+	return nil
 }

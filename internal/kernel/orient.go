@@ -32,7 +32,8 @@ type StartInput struct {
 func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope, error) {
 	goal := strings.TrimSpace(in.Goal)
 	if goal == "" {
-		return errEnvelope("", "a goal is required to start a task"), nil
+		return k.errEnvelopeActions("", "a goal is required to start a task",
+			k.openContinuation("cortex_start_task", "start", in, "goal", nil)), nil
 	}
 	if textExceeds(goal, maxGoalBytes) {
 		return errEnvelope("", fmt.Sprintf("goal exceeds %d bytes", maxGoalBytes)), nil
@@ -43,15 +44,18 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	goal = k.red.String(goal)
 	mode, ok := normalizeMode(in.Mode)
 	if !ok {
-		return errEnvelope("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review (got %q)", in.Mode))), nil
+		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review (got %q)", in.Mode)),
+			k.openContinuation("cortex_start_task", "start", in, "mode", map[string][]string{"mode": {"change", "investigate", "review"}})), nil
 	}
 	risk, ok := normalizeRisk(in.Risk)
 	if !ok {
-		return errEnvelope("", k.red.String(fmt.Sprintf("risk must be one of: low, medium, high (got %q)", in.Risk))), nil
+		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("risk must be one of: low, medium, high (got %q)", in.Risk)),
+			k.openContinuation("cortex_start_task", "start", in, "risk", map[string][]string{"risk": {"low", "medium", "high"}})), nil
 	}
 	surfaces, err := normalizeSurfaces(in.Surfaces)
 	if err != nil {
-		return errEnvelope("", k.red.String(err.Error())), nil
+		return k.errEnvelopeActions("", k.red.String(err.Error()),
+			k.openContinuation("cortex_start_task", "start", in, "surfaces", map[string][]string{"surfaces": {"code", "browser", "terminal", "artifact", "secret"}})), nil
 	}
 	criteria, err := k.normalizeAcceptanceCriteria(in.AcceptanceCriteria)
 	if err != nil {
@@ -64,10 +68,12 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	if parentTaskID != "" {
 		parent, loadErr := k.store.Load(parentTaskID)
 		if loadErr != nil {
-			return errEnvelope("", "parent task: "+loadErr.Error()), nil
+			return k.errEnvelopeActions("", "parent task: "+loadErr.Error(),
+				k.openContinuation("cortex_start_task", "start", in, "parentTaskId", nil)), nil
 		}
 		if parent.Workspace.Root != k.cfg.Workspace {
-			return errEnvelope("", "parent task belongs to a different workspace"), nil
+			return k.errEnvelopeActions("", "parent task belongs to a different workspace",
+				k.openContinuation("cortex_start_task", "start", in, "parentTaskId", nil)), nil
 		}
 		// Store lookup sanitizes path-like input defensively; persist the case's
 		// canonical minted ID so linkage never retains an alias such as task/x.

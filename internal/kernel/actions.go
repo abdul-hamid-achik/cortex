@@ -149,6 +149,26 @@ func knownActionArgs(c *domain.CaseFile) map[string]any {
 	return map[string]any{"taskId": c.ID, "workspace": c.Workspace.Root}
 }
 
+// evidenceIDCandidates lists the evidence IDs that actually exist in a task's
+// ledger, most recent first, bounded to maxRejectionCandidates. It is the
+// shared source of truth behind every "no evidence X in this task to cite"
+// rejection (resolve, plan hypothesis supports): rather than leaving the
+// caller to guess a real ID, offer the ones that are really there.
+func (k *Kernel) evidenceIDCandidates(taskID string) []string {
+	evs, err := k.store.Evidence(taskID)
+	if err != nil || len(evs) == 0 {
+		return nil
+	}
+	if len(evs) > maxRejectionCandidates {
+		evs = evs[len(evs)-maxRejectionCandidates:]
+	}
+	ids := make([]string, 0, len(evs))
+	for _, ev := range evs {
+		ids = append(ids, ev.ID)
+	}
+	return ids
+}
+
 // cortexCommand renders a workspace-pinned, shell-safe human continuation.
 // Structured consumers should invoke Tool + Arguments; Command is deliberately
 // safe to copy into a POSIX shell without allowing case text to expand `$`,
@@ -226,8 +246,38 @@ func (k *Kernel) redactStructuredActions(actions []domain.NextAction) []domain.N
 				actions[i].Arguments[key] = k.red.String(text)
 			}
 		}
+		for key, values := range actions[i].Candidates {
+			actions[i].Candidates[key] = k.redactStrings(values)
+		}
 	}
 	return actions
+}
+
+// errEnvelopeActions builds a rejection envelope (same OK/Summary/Error shape
+// as errEnvelope) with structured continuations attached. Existing prose is
+// unchanged; Actions is redacted exactly like the success path so a
+// caller-supplied value that looks secret-shaped never round-trips unmasked.
+func (k *Kernel) errEnvelopeActions(taskID, msg string, actions ...domain.NextAction) domain.Envelope {
+	env := errEnvelope(taskID, msg)
+	if len(actions) > 0 {
+		env.Actions = k.redactStructuredActions(actions)
+	}
+	return env
+}
+
+// errEnvelopeForCase builds a rejection envelope for a genuine phase-gate
+// failure ("cannot X in phase Y") where the case is already loaded and valid.
+// It reuses the exact same next-action machinery as the success path
+// (structuredNextForCaseAt, including half-committed decision recovery), so
+// the rejection names what IS possible from the case's real current phase
+// instead of leaving the caller to guess. Only appropriate when the
+// rejection is about the phase itself, not a same-call missing/invalid field
+// that remains valid across multiple phases (that case needs a bespoke
+// same-tool retry action instead).
+func (k *Kernel) errEnvelopeForCase(c *domain.CaseFile, msg string) domain.Envelope {
+	env := errEnvelope(c.ID, msg)
+	k.attachStructuredActions(&env, c)
+	return env
 }
 
 // hydrateDecisionActions makes both normal and crash-recovery decision states
