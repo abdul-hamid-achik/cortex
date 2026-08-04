@@ -49,7 +49,11 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 		detail = "standard"
 	}
 	if detail != "standard" && detail != "full" {
-		return StatusReport{Envelope: errEnvelope(taskID, "status detail must be standard or full")}, nil
+		return StatusReport{Envelope: k.errEnvelopeActions(taskID, "status detail must be standard or full", domain.NextAction{
+			Tool: "cortex_status", Command: cortexCommand(nil, "status", taskID, "--detail", "DETAIL"),
+			Reason: "use a valid detail level", Arguments: map[string]any{"taskId": taskID},
+			Inputs: []string{"detail"}, Candidates: map[string][]string{"detail": {"standard", "full"}},
+		})}, nil
 	}
 	snapshot, err := k.store.StatusSnapshot(taskID)
 	if err != nil {
@@ -280,7 +284,10 @@ func nextForPhase(p domain.Phase) []string {
 func (k *Kernel) AbortTask(taskID, reason string) (domain.Envelope, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return errEnvelope(taskID, "abort requires a reason"), nil
+		return k.errEnvelopeActions(taskID, "abort requires a reason", domain.NextAction{
+			Tool: "cortex_abort_task", Command: cortexCommand(nil, "abort", taskID, "REASON"),
+			Reason: "state why the task is being stopped", Arguments: map[string]any{"taskId": taskID}, Inputs: []string{"reason"},
+		}), nil
 	}
 	reason = k.red.String(reason)
 	c, err := k.store.Load(taskID)

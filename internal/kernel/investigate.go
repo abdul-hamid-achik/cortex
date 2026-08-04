@@ -33,10 +33,13 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	}
 	in.Question = strings.TrimSpace(in.Question)
 	if in.Question == "" {
-		return errEnvelope(in.TaskID, "investigate needs a question"), nil
+		return k.errEnvelopeActions(in.TaskID, "investigate needs a question", domain.NextAction{
+			Tool: "cortex_investigate", Command: cortexCommand(c, "investigate", c.ID, "QUESTION"),
+			Reason: "state the question to investigate", Arguments: knownActionArgs(c), Inputs: []string{"question"},
+		}), nil
 	}
 	if c.Status != domain.PhaseInvestigating && c.Status != domain.PhasePlanned {
-		return errEnvelope(in.TaskID, fmt.Sprintf("cannot investigate in phase %q; investigate happens after start", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot investigate in phase %q; investigate happens after start", c.Status)), nil
 	}
 	depth, err := normalizeDepth(in.Depth)
 	if err != nil {

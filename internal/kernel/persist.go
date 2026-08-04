@@ -35,11 +35,14 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
 	if c.Status != domain.PhaseVerifying && c.Status != domain.PhasePersisting {
-		return errEnvelope(in.TaskID, fmt.Sprintf("cannot remember in phase %q; call cortex_verify first, then cortex_remember", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot remember in phase %q; call cortex_verify first, then cortex_remember", c.Status)), nil
 	}
 	in.Outcome = strings.TrimSpace(in.Outcome)
 	if in.Outcome == "" {
-		return errEnvelope(in.TaskID, "remember needs an outcome summary"), nil
+		return k.errEnvelopeActions(in.TaskID, "remember needs an outcome summary", domain.NextAction{
+			Tool: "cortex_remember", Command: cortexCommand(c, "remember", c.ID, "OUTCOME"),
+			Reason: "state a concise, provenance-rich outcome", Arguments: knownActionArgs(c), Inputs: []string{"outcome"},
+		}), nil
 	}
 	if textExceeds(in.Outcome, maxRecordTextBytes) {
 		return errEnvelope(in.TaskID, fmt.Sprintf("remember outcome exceeds %d bytes", maxRecordTextBytes)), nil
@@ -64,7 +67,7 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	}
 	c = snapshot.Case
 	if c.Status != domain.PhaseVerifying && c.Status != domain.PhasePersisting {
-		return errEnvelope(in.TaskID, fmt.Sprintf("cannot remember in phase %q; call cortex_verify first, then cortex_remember", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot remember in phase %q; call cortex_verify first, then cortex_remember", c.Status)), nil
 	}
 	receipts := snapshot.Verifications
 	hyps := snapshot.Hypotheses
@@ -98,15 +101,21 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		// No acknowledgement is needed.
 	case VerificationFailed:
 		if !in.AcceptFailed {
-			return errEnvelope(c.ID, "cannot complete: verification failed. fix the change and re-run cortex verify, or set accept_failed=true to record the failed outcome explicitly"), nil
+			return k.rememberAcknowledgmentEnvelope(c,
+				"cannot complete: verification failed. fix the change and re-run cortex verify, or set accept_failed=true to record the failed outcome explicitly",
+				"acceptFailed"), nil
 		}
 	case VerificationPartial:
 		if !in.VerificationNotPossible {
-			return errEnvelope(c.ID, "cannot complete: verification is partial (a required verifier or named claim did not pass). run the missing verification, or set verification_not_possible=true to acknowledge the incomplete result explicitly"), nil
+			return k.rememberAcknowledgmentEnvelope(c,
+				"cannot complete: verification is partial (a required verifier or named claim did not pass). run the missing verification, or set verification_not_possible=true to acknowledge the incomplete result explicitly",
+				"verificationNotPossible"), nil
 		}
 	case VerificationUnverified:
 		if !in.VerificationNotPossible {
-			return errEnvelope(c.ID, "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed"), nil
+			return k.rememberAcknowledgmentEnvelope(c,
+				"cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed",
+				"verificationNotPossible"), nil
 		}
 	}
 	fullyVerified := assessment.Outcome == VerificationVerified && !in.VerificationNotPossible && !in.AcceptFailed
@@ -225,6 +234,28 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 			pluralizeGeneric(n, "hypothesis was", "hypotheses were")))
 	}
 	return env, nil
+}
+
+// rememberAcknowledgmentEnvelope rejects a remember call that's missing one of
+// the completion invariant's explicit acknowledgment flags. The prose already
+// names the flag; this also reuses the ordinary phase-based next actions
+// (cortex_verify to fix it, cortex_remember to acknowledge it) and sets the
+// exact flag the rejection is asking for directly on the remember action's
+// Arguments — the retry a caller who agrees with the prose would make,
+// offered as a ready call instead of something to reconstruct by hand.
+func (k *Kernel) rememberAcknowledgmentEnvelope(c *domain.CaseFile, msg, flag string) domain.Envelope {
+	env := errEnvelope(c.ID, msg)
+	k.attachStructuredActions(&env, c)
+	for i := range env.Actions {
+		if env.Actions[i].Tool != "cortex_remember" {
+			continue
+		}
+		if env.Actions[i].Arguments == nil {
+			env.Actions[i].Arguments = map[string]any{}
+		}
+		env.Actions[i].Arguments[flag] = true
+	}
+	return env
 }
 
 // hasDefinitiveVerification reports whether any receipt carries a definitive

@@ -9,6 +9,30 @@
     "ok": false,
     "taskId": "$TASK_ID_1",
     "summary": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed",
+    "actions": [
+      {
+        "tool": "cortex_verify",
+        "command": "cortex -C $WORKSPACE verify $TASK_ID_1",
+        "reason": "rerun missing or stale verifiers",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        }
+      },
+      {
+        "tool": "cortex_remember",
+        "command": "cortex -C $WORKSPACE remember $TASK_ID_1",
+        "reason": "preserve the outcome once verification is adequate",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "verificationNotPossible": true,
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "outcome"
+        ]
+      }
+    ],
     "rawAvailable": false,
     "error": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed"
   }

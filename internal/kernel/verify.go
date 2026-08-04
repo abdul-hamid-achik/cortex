@@ -62,7 +62,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
 	if c.Status != domain.PhasePlanned && c.Status != domain.PhaseChanging && c.Status != domain.PhaseVerifying {
-		return errEnvelope(in.TaskID, fmt.Sprintf("cannot verify in phase %q; plan the task first", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot verify in phase %q; plan the task first", c.Status)), nil
 	}
 	if strings.TrimSpace(in.Actor) != "" {
 		actor, actorErr := k.changeLeaseActor(in.Actor)

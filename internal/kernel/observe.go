@@ -32,11 +32,14 @@ func (k *Kernel) RecordObservation(in ObservationInput) (domain.Envelope, error)
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
 	if c.Status.IsTerminal() {
-		return errEnvelope(in.TaskID, fmt.Sprintf("cannot record an observation in terminal phase %q", c.Status)), nil
+		return k.errEnvelopeForCase(c, fmt.Sprintf("cannot record an observation in terminal phase %q", c.Status)), nil
 	}
 	claim := strings.TrimSpace(in.Claim)
 	if claim == "" {
-		return errEnvelope(in.TaskID, "observation needs a claim"), nil
+		return k.errEnvelopeActions(in.TaskID, "observation needs a claim", domain.NextAction{
+			Tool: "cortex_note", Command: cortexCommand(c, "note", c.ID, "CLAIM"),
+			Reason: "state the observation, decision, or constraint to record", Arguments: knownActionArgs(c), Inputs: []string{"claim"},
+		}), nil
 	}
 	if textExceeds(claim, maxRecordTextBytes) {
 		return errEnvelope(in.TaskID, fmt.Sprintf("observation claim exceeds %d bytes", maxRecordTextBytes)), nil
@@ -54,7 +57,8 @@ func (k *Kernel) RecordObservation(in ObservationInput) (domain.Envelope, error)
 	switch category {
 	case "observation", "decision", "constraint", "handoff":
 	default:
-		return errEnvelope(in.TaskID, "observation category must be observation, decision, constraint, or handoff"), nil
+		return k.errEnvelopeActions(in.TaskID, "observation category must be observation, decision, constraint, or handoff",
+			noteEnumAction(c, "category", []string{"observation", "decision", "constraint", "handoff"})), nil
 	}
 	origin := strings.ToLower(strings.TrimSpace(in.Origin))
 	if origin == "" {
@@ -63,14 +67,16 @@ func (k *Kernel) RecordObservation(in ObservationInput) (domain.Envelope, error)
 	switch origin {
 	case "human", "agent", "reviewer":
 	default:
-		return errEnvelope(in.TaskID, "observation origin must be human, agent, or reviewer"), nil
+		return k.errEnvelopeActions(in.TaskID, "observation origin must be human, agent, or reviewer",
+			noteEnumAction(c, "origin", []string{"human", "agent", "reviewer"})), nil
 	}
 	confidence := domain.Confidence(strings.ToLower(strings.TrimSpace(in.Confidence)))
 	if confidence == "" {
 		confidence = domain.ConfidenceMedium
 	}
 	if confidence != domain.ConfidenceLow && confidence != domain.ConfidenceMedium {
-		return errEnvelope(in.TaskID, "observation confidence must be low or medium"), nil
+		return k.errEnvelopeActions(in.TaskID, "observation confidence must be low or medium",
+			noteEnumAction(c, "confidence", []string{"low", "medium"})), nil
 	}
 	redactedClaim := k.red.String(claim)
 	redactedURI := k.red.String(in.URI)
@@ -104,4 +110,25 @@ func (k *Kernel) RecordObservation(in ObservationInput) (domain.Envelope, error)
 	}
 	k.attachStructuredActions(&env, c)
 	return env, nil
+}
+
+// noteEnumAction offers a retryable cortex_note continuation naming which
+// enum field was invalid, with the field's fixed, already-documented
+// vocabulary as Candidates — the identical literal set the rejection's prose
+// already names, never invented.
+func noteEnumAction(c *domain.CaseFile, field string, values []string) domain.NextAction {
+	return domain.NextAction{
+		Tool: "cortex_note", Command: cortexCommand(c, "note", c.ID, "CLAIM", "--"+noteFlagName(field), values[0]),
+		Reason: "use a valid value for " + field, Arguments: knownActionArgs(c),
+		Inputs: []string{field}, Candidates: map[string][]string{field: values},
+	}
+}
+
+// noteFlagName maps an ObservationInput field name to its cortex note CLI
+// flag (category is exposed as --kind, matching cmd/cortex/note.go).
+func noteFlagName(field string) string {
+	if field == "category" {
+		return "kind"
+	}
+	return field
 }
