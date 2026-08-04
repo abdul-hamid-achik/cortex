@@ -115,10 +115,21 @@ shell-safe for human copy/paste. `cortex_begin_change` actions also carry the
 explicit default `ttl` (`15m`). Interrupted `new`/`orienting` cases project a retry-safe open; a
 half-committed decision request or answer projects the exact request/resume repair.
 
+An action may also carry `candidates`, keyed by an `inputs` name, when Cortex already knows real
+options for that value — e.g. `{"reason": ["…claim already recorded against this hypothesis…"]}` or
+`{"evidence": ["ev_06FJ…", "ev_06FK…"]}` for the evidence IDs that actually exist in the task.
+Candidates are always drawn from stored state or a fixed, already-documented vocabulary (status,
+mode, risk, surface) — Cortex never fabricates one to fill a gap.
+
 A lifecycle rule rejection keeps this JSON envelope (`ok: false`, task ID, and any recovery
-context) and also sets MCP `isError: true`. If an internal write fails after Cortex constructed an
-error envelope, that structured envelope is retained rather than replaced by plain error text.
-Clients may therefore use MCP error signaling without losing the fields needed to recover.
+context) and also sets MCP `isError: true`. Rejections carry the same `actions` array as a success
+envelope: a retryable continuation for the same call, pre-filled with every value the request
+already supplied and naming what's still missing or invalid via `inputs`/`candidates`, or — for a
+rejection about the task's phase itself — the ordinary next lifecycle action for where the task
+actually is. `summary`/`error` text is unchanged by this; `actions` is additive. If an internal
+write fails after Cortex constructed an error envelope, that structured envelope is retained rather
+than replaced by plain error text. Clients may therefore use MCP error signaling without losing the
+fields needed to recover.
 
 ### Cross-tool Bob actions
 

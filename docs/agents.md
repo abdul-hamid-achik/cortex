@@ -96,15 +96,22 @@ base64.
 ## Structured continuation
 
 Use `actions`, not prose parsing, to continue a run. Each action can carry `tool`, `command`, known
-`arguments`, still-required `inputs`, a `reason`, and `blockedBy`. `nextActions` remains as the
-human-readable compatibility field. Every task action includes `workspace`; pass it back so the
-continuation is independent of the caller's cwd. Human-facing `command` values are also pinned with
-`-C` and POSIX-shell quote every case-derived argument; machine clients should still prefer
-`tool` + `arguments`. Begin-change actions include the explicit `15m` default TTL. A pending
-decision action includes its exact `decisionId` and names the
-answer/responder inputs still needed. If a process stopped between durable writes, Cortex instead
-returns an executable repair: retry the stored decision request, resume its stored answer, or
-retry-safe open a `new`/`orienting` case.
+`arguments`, still-required `inputs`, a `reason`, `blockedBy`, and `candidates` (real options for an
+`inputs` entry, keyed by its name). `nextActions` remains as the human-readable compatibility field.
+Every task action includes `workspace`; pass it back so the continuation is independent of the
+caller's cwd. Human-facing `command` values are also pinned with `-C` and POSIX-shell quote every
+case-derived argument; machine clients should still prefer `tool` + `arguments`. Begin-change
+actions include the explicit `15m` default TTL. A pending decision action includes its exact
+`decisionId` and names the answer/responder inputs still needed — when a decision is pending, its
+answer's `candidates` are the real option IDs you can pick from. If a process stopped between
+durable writes, Cortex instead returns an executable repair: retry the stored decision request,
+resume its stored answer, or retry-safe open a `new`/`orienting` case.
+
+Rejections use this same mechanism: a call missing a required field gets a same-tool retry action
+pre-filled with what was already supplied, naming the gap via `inputs` and, when Cortex can
+substantiate it from real stored state (existing evidence IDs, a hypothesis's own supporting
+evidence, a pending decision's options) or a fixed vocabulary already named in the error text
+(status/mode/risk/surface), offering it via `candidates` — never fabricated.
 
 ## Human collaboration
 

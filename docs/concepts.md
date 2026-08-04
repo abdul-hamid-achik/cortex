@@ -202,6 +202,14 @@ anything in `blockedBy`. Agents and UIs can therefore offer or invoke the next s
 English strings. Every task action carries its originating `workspace`; its CLI command is also
 rendered with `-C` and shell-safe quoting for people who copy it from Status, Show, or a handoff.
 
+A rejection carries `actions` too, not just prose: a same-call retry pre-filled with everything the
+request already supplied plus the field(s) named in `inputs` — for example, `resolve` missing its
+`reason` returns a `cortex_resolve` continuation with `taskId`/`hypothesisId`/`status` already set
+and, when the hypothesis already has supporting evidence, that evidence's own recorded claims as
+`candidates` for `reason`. Citing an evidence ID that doesn't exist enumerates the IDs that actually
+do. `candidates` never invents a value — only real stored state or an already-documented fixed
+vocabulary (status/mode/risk/surface) qualifies.
+
 Bob boundary guidance uses the same action envelope with read-only `bob_path` and `bob_playbook`
 continuations. They are recommendations for an approved local tool registry, not tools registered
 by Cortex's MCP server. Cortex never turns one into `bob apply` or any hidden mutation.
