@@ -101,10 +101,9 @@ func runTrustCommands(cmd *cobra.Command, k *kernel.Kernel, yes bool) error {
 	if len(verifiers) == 0 {
 		return fmt.Errorf("no command verifiers configured in this workspace")
 	}
-	w := os.Stderr
-	fmt.Fprintln(w, "Granting these argv arrays (stored as digests in Cortex config, not the repo):")
+	pln(os.Stderr, "Granting these argv arrays (stored as digests in Cortex config, not the repo):")
 	for name, argv := range verifiers {
-		fmt.Fprintf(w, "  %s: %s\n", name, strings.Join(argv, " "))
+		pf(os.Stderr, "  %s: %s\n", name, strings.Join(argv, " "))
 	}
 	if !yes {
 		if err := confirmTrust(os.Stdin, os.Stderr); err != nil {
@@ -133,7 +132,7 @@ func confirmTrust(in *os.File, out *os.File) error {
 	if st.Mode()&os.ModeCharDevice == 0 {
 		return fmt.Errorf("refusing to grant command verifiers without a TTY; pass --yes from a trusted launcher")
 	}
-	fmt.Fprint(out, "Grant these command verifiers for this workspace? [y/N] ")
+	pf(out, "Grant these command verifiers for this workspace? [y/N] ")
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil {
 		return err
