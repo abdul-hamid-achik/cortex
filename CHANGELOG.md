@@ -5,6 +5,8 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.3] — 2026-08-14
+
 ### Added
 - **Studio can answer a pending decision** — with a pending human decision selected, keys
   `1`–`9` record that option through the same kernel `AnswerDecision` path and resume the
@@ -28,6 +30,9 @@ All notable changes to Cortex are documented here. The format follows
 - **Handoff overflow continuation** — when the 90 KiB completion proof set cannot fit,
   the packet carries a structured action pointing at `status` / `read_evidence` instead of
   a dead end.
+- **Structured rejections** — phase-gate, plan, open, decision, remember, note, and abort
+  failures return the same `actions` continuation contract as success paths, including
+  `actions.candidates` when Cortex already knows valid option values.
 
 ### Changed
 - **Declared surfaces beat question keywords** in `RouteFor`. A code-surface task whose
