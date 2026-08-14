@@ -115,6 +115,46 @@ func TestBoardNavigationKeys(t *testing.T) {
 	}
 }
 
+func TestBoardAnswersPendingDecision(t *testing.T) {
+	var answered string
+	session := kernel.SessionSummary{ID: "task_d", Slug: "repo", Goal: "decide", Phase: domain.PhaseNeedsHumanDecision, Active: true}
+	view := kernel.SessionView{
+		Case: &domain.CaseFile{ID: "task_d", Goal: "decide", Status: domain.PhaseNeedsHumanDecision},
+		Decisions: []domain.Decision{{
+			ID: "dec_1", Status: domain.DecisionPending,
+			Options: []domain.DecisionOption{{ID: "keep", Label: "Keep"}, {ID: "drop", Label: "Drop"}},
+		}},
+	}
+	source := &fakeBoardSource{
+		sessionsFn: func(kernel.SessionFilter) ([]kernel.SessionSummary, error) {
+			return []kernel.SessionSummary{session}, nil
+		},
+		detailFn: func(string, string) (kernel.SessionView, error) { return view, nil },
+		answerFn: func(_, _, optionID, responder string) error {
+			answered = optionID + "/" + responder
+			return nil
+		},
+	}
+	m := newModelWithSource(allFilter(), source)
+	loaded, cmd := m.Update(m.sessionsCmd(m.refreshRequest, m.filter)())
+	m = loaded.(model)
+	if cmd != nil {
+		loaded, _ = m.Update(cmd())
+		m = loaded.(model)
+	}
+	_, cmd = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+	if cmd == nil {
+		t.Fatal("expected an answer command")
+	}
+	msg := cmd()
+	if _, errMsg := msg.(decisionAnsweredMsg); !errMsg {
+		t.Fatalf("got %T", msg)
+	}
+	if answered != "keep/studio" {
+		t.Fatalf("answered %q", answered)
+	}
+}
+
 func TestBoardSearchEditorIsModalUnicodeSafeAndBounded(t *testing.T) {
 	a := kernel.SessionSummary{ID: "task_a", Slug: "billing", Goal: "repair redirect", Phase: domain.PhaseInvestigating}
 	b := kernel.SessionSummary{ID: "task_b", Slug: "search", Goal: "other work", Phase: domain.PhasePlanned}
@@ -496,6 +536,7 @@ func TestClipUsesTerminalCellsAndRemovesControls(t *testing.T) {
 type fakeBoardSource struct {
 	sessionsFn   func(kernel.SessionFilter) ([]kernel.SessionSummary, error)
 	detailFn     func(string, string) (kernel.SessionView, error)
+	answerFn     func(slug, taskID, optionID, responder string) error
 	sessionCalls int
 	detailCalls  int
 }
@@ -508,6 +549,13 @@ func (f *fakeBoardSource) Sessions(filter kernel.SessionFilter) ([]kernel.Sessio
 func (f *fakeBoardSource) Detail(slug, taskID string) (kernel.SessionView, error) {
 	f.detailCalls++
 	return f.detailFn(slug, taskID)
+}
+
+func (f *fakeBoardSource) AnswerDecision(slug, taskID, optionID, responder string) error {
+	if f.answerFn != nil {
+		return f.answerFn(slug, taskID, optionID, responder)
+	}
+	return errors.New("studio source cannot answer decisions")
 }
 
 func TestBoardSourceRunsOnlyWhenCommandExecutes(t *testing.T) {

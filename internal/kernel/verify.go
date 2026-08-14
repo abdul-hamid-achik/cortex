@@ -34,6 +34,12 @@ type VerifyInput struct {
 	// in deliberately rather than a missing edit being treated as a successful
 	// change lifecycle.
 	NoOpAcknowledged bool
+	// FromPlan materializes typed claims from acceptance criteria and the plan's
+	// verification requirements when the caller supplied none.
+	FromPlan bool
+	// DriftAcknowledged permits a high-risk change with detected scope drift to
+	// enter verification. Medium/low risk still records drift without blocking.
+	DriftAcknowledged bool
 }
 
 // behavioralSurfaces pairs each behavioral surface with its verifier tool and a
@@ -81,6 +87,13 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	if err := validateVerificationLease(c, in.Actor, k.now().UTC()); err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
+	if in.FromPlan && len(in.Claims) == 0 && len(in.ClaimSpecs) == 0 {
+		planned, planErr := k.claimsFromPlan(c, in)
+		if planErr != nil {
+			return errEnvelope(in.TaskID, k.red.String(planErr.Error())), nil
+		}
+		in.ClaimSpecs = planned
+	}
 	claims, claimErr := k.normalizeClaims(in.Claims, in.ClaimSpecs)
 	if claimErr != nil {
 		return errEnvelope(in.TaskID, k.red.String(claimErr.Error())), nil
@@ -122,6 +135,18 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 		warnings = append(warnings, "no diff/change record detected — intentional no-op explicitly acknowledged")
 	}
 	scope := k.detectScopeDrift(ctx, c, changed)
+	if c.Mode == domain.ModeChange && c.Risk == "high" && scope.Scope == "drift_detected" && !in.DriftAcknowledged {
+		files := strings.Join(clipList(scope.UnexpectedFiles, 5), ", ")
+		return k.errEnvelopeActions(c.ID, "cannot verify high-risk change with unacknowledged scope drift: "+files, domain.NextAction{
+			Tool: "cortex_verify", Command: cortexCommand(c, "verify", c.ID, "--ack-drift"),
+			Reason:    "acknowledge the unexpected files or revert them and expand the plan boundary",
+			Arguments: knownActionArgs(c), Inputs: []string{"driftAcknowledged"},
+			Candidates: map[string][]string{"unexpectedFiles": append([]string(nil), scope.UnexpectedFiles...)},
+		}), nil
+	}
+	if c.Mode == domain.ModeChange && c.Status == domain.PhasePlanned && (c.ChangeLease == nil || !c.ChangeLease.Active(k.now().UTC())) {
+		warnings = append(warnings, "verifying an unleased planned change uses the compatibility path; new agent flows should call begin-change first")
+	}
 
 	revision, revisionWarning := k.currentRevision(ctx)
 	if revisionWarning != "" {
@@ -541,6 +566,97 @@ func (k *Kernel) normalizeClaims(legacy []string, typed []domain.VerificationCla
 		out = append(out, claim)
 	}
 	return out, nil
+}
+
+func (k *Kernel) claimsFromPlan(c *domain.CaseFile, in VerifyInput) ([]domain.VerificationClaim, error) {
+	bindings, err := planClaimBindings(c, in)
+	if err != nil {
+		return nil, err
+	}
+	if len(c.AcceptanceCriteria) > 0 {
+		out := make([]domain.VerificationClaim, 0, len(c.AcceptanceCriteria))
+		for _, criterion := range c.AcceptanceCriteria {
+			out = append(out, domain.VerificationClaim{
+				ID: criterion.ID, Statement: criterion.Statement,
+				Surface: bindings[0].Surface, Verifier: bindings[0].Verifier,
+				Contract: bindings[0].Contract, Required: true,
+			})
+		}
+		return out, nil
+	}
+	out := make([]domain.VerificationClaim, 0, len(bindings))
+	for _, binding := range bindings {
+		out = append(out, domain.VerificationClaim{
+			ID: claimID(binding.Surface, binding.Statement), Statement: binding.Statement,
+			Surface: binding.Surface, Verifier: binding.Verifier,
+			Contract: binding.Contract, Required: true,
+		})
+	}
+	return out, nil
+}
+
+type planClaimBinding struct {
+	Statement string
+	Surface   domain.Surface
+	Verifier  string
+	Contract  string
+}
+
+func planClaimBindings(c *domain.CaseFile, in VerifyInput) ([]planClaimBinding, error) {
+	reqs := c.VerificationRequired
+	if len(reqs) == 0 {
+		return nil, fmt.Errorf("verify --from-plan needs registered acceptance criteria or a planned verification requirement")
+	}
+	var out []planClaimBinding
+	for _, requirement := range reqs {
+		binding, err := bindingForRequirement(requirement, in)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, binding)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("verify --from-plan could not bind any planned verification requirement")
+	}
+	return out, nil
+}
+
+func bindingForRequirement(requirement string, in VerifyInput) (planClaimBinding, error) {
+	switch {
+	case strings.HasPrefix(requirement, "command:"):
+		name := strings.TrimPrefix(requirement, "command:")
+		return planClaimBinding{Statement: "configured command " + name + " passes", Surface: domain.SurfaceCode,
+			Verifier: requirement, Contract: name}, nil
+	case requirement == "codemap_review":
+		return planClaimBinding{Statement: "structural review of the diff", Surface: domain.SurfaceCode,
+			Verifier: "codemap", Contract: "codemap_review"}, nil
+	case requirement == "cairntrace_flow":
+		if strings.TrimSpace(in.BrowserSpec) == "" {
+			return planClaimBinding{}, fmt.Errorf("verify --from-plan for cairntrace_flow needs a browser spec")
+		}
+		return planClaimBinding{Statement: "browser flow holds", Surface: domain.SurfaceBrowser,
+			Verifier: "cairntrace", Contract: in.BrowserSpec}, nil
+	case requirement == "glyphrun_flow":
+		if strings.TrimSpace(in.TerminalSpec) == "" {
+			return planClaimBinding{}, fmt.Errorf("verify --from-plan for glyphrun_flow needs a terminal spec")
+		}
+		return planClaimBinding{Statement: "terminal flow holds", Surface: domain.SurfaceTerminal,
+			Verifier: "glyphrun", Contract: in.TerminalSpec}, nil
+	case requirement == "fcheap_artifact":
+		if strings.TrimSpace(in.ArtifactRef) == "" {
+			return planClaimBinding{}, fmt.Errorf("verify --from-plan for fcheap_artifact needs an artifact ref")
+		}
+		return planClaimBinding{Statement: "artifact is present", Surface: domain.SurfaceArtifact,
+			Verifier: "fcheap", Contract: in.ArtifactRef}, nil
+	case requirement == "tvault_capability":
+		if strings.TrimSpace(in.SecretProject) == "" {
+			return planClaimBinding{}, fmt.Errorf("verify --from-plan for tvault_capability needs a secret project")
+		}
+		return planClaimBinding{Statement: "secret capability is available", Surface: domain.SurfaceSecret,
+			Verifier: "tvault", Contract: in.SecretProject}, nil
+	default:
+		return planClaimBinding{}, fmt.Errorf("verify --from-plan cannot bind requirement %q", requirement)
+	}
 }
 
 func (k *Kernel) validateStableClaimIdentities(taskID string, claims []domain.VerificationClaim) error {

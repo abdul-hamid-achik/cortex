@@ -96,15 +96,31 @@ var RoutingMatrix = []RoutingRule{
 // implementation prefers explicit routing over telemetry-derived policy.
 func RouteFor(question string, surfaces []Surface) Route {
 	q := strings.ToLower(question)
+	if len(surfaces) > 0 {
+		for _, rule := range RoutingMatrix {
+			if rule.surfaceHit(surfaces) {
+				return Route{First: rule.First, FollowUp: rule.FollowUp, Why: rule.Why}
+			}
+		}
+		for _, rule := range RoutingMatrix {
+			if len(rule.Surfaces) > 0 {
+				continue
+			}
+			if rule.matchesKeywords(question, q) {
+				return Route{First: rule.First, FollowUp: rule.FollowUp, Why: rule.Why}
+			}
+		}
+		return Route{}
+	}
 	for _, rule := range RoutingMatrix {
-		if rule.matches(question, q, surfaces) {
+		if rule.matchesKeywords(question, q) {
 			return Route{First: rule.First, FollowUp: rule.FollowUp, Why: rule.Why}
 		}
 	}
 	return Route{}
 }
 
-func (r RoutingRule) matches(question, lowerQuestion string, surfaces []Surface) bool {
+func (r RoutingRule) surfaceHit(surfaces []Surface) bool {
 	for _, want := range r.Surfaces {
 		for _, got := range surfaces {
 			if got == want {
@@ -112,6 +128,10 @@ func (r RoutingRule) matches(question, lowerQuestion string, surfaces []Surface)
 			}
 		}
 	}
+	return false
+}
+
+func (r RoutingRule) matchesKeywords(question, lowerQuestion string) bool {
 	if r.Symbol && looksLikeSymbol(question) {
 		return true
 	}

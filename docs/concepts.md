@@ -138,7 +138,8 @@ reasoning.
 
 The declared set of files and symbols expected to change. It is a reasoning and review guardrail,
 not a security boundary. After a change, Cortex compares the real diff against it and flags
-**scope drift** — accidental expansion becomes visible instead of silent.
+**scope drift** — accidental expansion becomes visible instead of silent. On a `risk: high`
+change, unacknowledged drift blocks `verify` until `--ack-drift` (or MCP `driftAcknowledged`).
 
 ### Verification surface & receipts
 

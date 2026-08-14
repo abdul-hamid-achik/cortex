@@ -58,6 +58,17 @@ func LocateSessionIn(workspace, taskID string) (string, *casefs.Store, error) {
 			return "", nil, fmt.Errorf("load workspace session %s: %w", taskID, loadErr)
 		}
 	}
+	for _, extra := range loadKnownStores() {
+		store, openErr := casefs.New(extra.Root)
+		if openErr != nil {
+			return "", nil, fmt.Errorf("open known session store %s: %w", extra.Slug, openErr)
+		}
+		if _, loadErr := store.Load(taskID); loadErr == nil {
+			return extra.Slug, store, nil
+		} else if !errors.Is(loadErr, casefs.ErrNotFound) {
+			return "", nil, fmt.Errorf("load known session %s/%s: %w", extra.Slug, taskID, loadErr)
+		}
+	}
 	return "", nil, fmt.Errorf("session %s: %w", taskID, casefs.ErrNotFound)
 }
 

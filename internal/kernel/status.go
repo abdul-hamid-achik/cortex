@@ -16,6 +16,7 @@ type StatusReport struct {
 	Actor                string                  `json:"actor,omitempty"`
 	ParentTaskID         string                  `json:"parentTaskId,omitempty"`
 	ChildTaskIDs         []string                `json:"childTaskIds,omitempty"`
+	Children             []ChildStatus           `json:"children,omitempty"`
 	PausedFrom           domain.Phase            `json:"pausedFrom,omitempty"`
 	ChangeLease          *domain.ChangeLease     `json:"changeLease,omitempty"`
 	PendingDecision      *domain.Decision        `json:"pendingDecision,omitempty"`
@@ -79,7 +80,9 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 		},
 		Mode: c.Mode, Risk: c.Risk, Workspace: c.Workspace, Surfaces: c.Surfaces,
 		Revision: c.Revision, Actor: c.Actor, ParentTaskID: c.ParentTaskID,
-		ChildTaskIDs: append([]string(nil), c.ChildTaskIDs...), PausedFrom: c.PausedFrom,
+		ChildTaskIDs:         append([]string(nil), c.ChildTaskIDs...),
+		Children:             k.childStatuses(c.ChildTaskIDs),
+		PausedFrom:           c.PausedFrom,
 		ChangeLease:          c.ChangeLease,
 		VerificationRequired: c.VerificationRequired,
 		EvidenceCount:        snapshot.EvidenceTotal,

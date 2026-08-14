@@ -191,18 +191,20 @@ type verificationClaimArg struct {
 }
 
 type verifyInput struct {
-	TaskID           string                 `json:"taskId" jsonschema:"the task to verify"`
-	Actor            string                 `json:"actor,omitempty" jsonschema:"active change-lease owner when the task is leased"`
-	Claims           []string               `json:"claims,omitempty" jsonschema:"legacy free-text claims; prefer claimSpecs so verifier routing is explicit"`
-	ClaimSpecs       []verificationClaimArg `json:"claimSpecs,omitempty" jsonschema:"typed claims bound to an explicit surface and required exact contract; verifier may default from surface"`
-	ChangedFiles     []string               `json:"changedFiles,omitempty" jsonschema:"changed files; derived from git when omitted"`
-	BrowserSpec      string                 `json:"browserSpec,omitempty" jsonschema:"cairntrace spec path to prove browser claims"`
-	TerminalSpec     string                 `json:"terminalSpec,omitempty" jsonschema:"glyphrun spec path to prove terminal claims"`
-	ArtifactRef      string                 `json:"artifactRef,omitempty" jsonschema:"fcheap stash ID or fcheap:// URI to prove an artifact claim"`
-	SecretProject    string                 `json:"secretProject,omitempty" jsonschema:"tvault project whose value-free availability proves secret capability"`
-	DisableAutoSpecs bool                   `json:"disableAutoSpecs,omitempty" jsonschema:"skip auto-selection of covering browser/terminal specs"`
-	NoOpAcknowledged bool                   `json:"noOpAcknowledged,omitempty" jsonschema:"explicitly acknowledge that this change task intentionally produced no diff"`
-	Workspace        string                 `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
+	TaskID            string                 `json:"taskId" jsonschema:"the task to verify"`
+	Actor             string                 `json:"actor,omitempty" jsonschema:"active change-lease owner when the task is leased"`
+	Claims            []string               `json:"claims,omitempty" jsonschema:"legacy free-text claims; prefer claimSpecs so verifier routing is explicit"`
+	ClaimSpecs        []verificationClaimArg `json:"claimSpecs,omitempty" jsonschema:"typed claims bound to an explicit surface and required exact contract; verifier may default from surface"`
+	ChangedFiles      []string               `json:"changedFiles,omitempty" jsonschema:"changed files; derived from git when omitted"`
+	BrowserSpec       string                 `json:"browserSpec,omitempty" jsonschema:"cairntrace spec path to prove browser claims"`
+	TerminalSpec      string                 `json:"terminalSpec,omitempty" jsonschema:"glyphrun spec path to prove terminal claims"`
+	ArtifactRef       string                 `json:"artifactRef,omitempty" jsonschema:"fcheap stash ID or fcheap:// URI to prove an artifact claim"`
+	SecretProject     string                 `json:"secretProject,omitempty" jsonschema:"tvault project whose value-free availability proves secret capability"`
+	DisableAutoSpecs  bool                   `json:"disableAutoSpecs,omitempty" jsonschema:"skip auto-selection of covering browser/terminal specs"`
+	NoOpAcknowledged  bool                   `json:"noOpAcknowledged,omitempty" jsonschema:"explicitly acknowledge that this change task intentionally produced no diff"`
+	FromPlan          bool                   `json:"fromPlan,omitempty" jsonschema:"materialize typed claims from acceptance criteria and planned verification requirements when claimSpecs are omitted"`
+	DriftAcknowledged bool                   `json:"driftAcknowledged,omitempty" jsonschema:"acknowledge unexpected files on a high-risk change so verification may proceed"`
+	Workspace         string                 `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
 type rememberInput struct {
@@ -212,6 +214,7 @@ type rememberInput struct {
 	Tags                    []string `json:"tags,omitempty" jsonschema:"tags for recall"`
 	VerificationNotPossible bool     `json:"verificationNotPossible,omitempty" jsonschema:"explicitly acknowledge a partial or unverified assessment when adequate verification could not be completed"`
 	AcceptFailed            bool     `json:"acceptFailed,omitempty" jsonschema:"explicitly acknowledge and preserve a canonical failed verification assessment"`
+	AcceptOpenChildren      bool     `json:"acceptOpenChildren,omitempty" jsonschema:"explicitly complete a parent while child tasks are still in-flight"`
 	Workspace               string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -527,8 +530,10 @@ func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 		ClaimSpecs:  claimSpecs,
 		BrowserSpec: in.BrowserSpec, TerminalSpec: in.TerminalSpec,
 		ArtifactRef: in.ArtifactRef, SecretProject: in.SecretProject,
-		DisableAutoSpecs: in.DisableAutoSpecs,
-		NoOpAcknowledged: in.NoOpAcknowledged,
+		DisableAutoSpecs:  in.DisableAutoSpecs,
+		NoOpAcknowledged:  in.NoOpAcknowledged,
+		FromPlan:          in.FromPlan,
+		DriftAcknowledged: in.DriftAcknowledged,
 	})
 	return result(env, err)
 }
@@ -541,7 +546,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	env, err := k.Remember(ctx, kernel.RememberInput{
 		TaskID: in.TaskID, Outcome: in.Outcome, Importance: in.Importance,
 		Tags: in.Tags, VerificationNotPossible: in.VerificationNotPossible,
-		AcceptFailed: in.AcceptFailed,
+		AcceptFailed: in.AcceptFailed, AcceptOpenChildren: in.AcceptOpenChildren,
 	})
 	return result(env, err)
 }

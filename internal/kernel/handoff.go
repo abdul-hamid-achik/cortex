@@ -576,6 +576,11 @@ func boundCompletionHandoff(h Handoff) Handoff {
 
 	proofOnly.Receipts = nil
 	proofOnly.Warnings = []string{completionProofOverflowWarning}
+	proofOnly.Actions = []domain.NextAction{{
+		Tool: "cortex_status", Command: cortexCommand(nil, "status", proofOnly.TaskID),
+		Reason:    "read the full bound proof from the case; this handoff omitted receipts atomically",
+		Arguments: map[string]any{"taskId": proofOnly.TaskID},
+	}}
 	boundCompletionIdentity(&proofOnly)
 	if completionHandoffFits(proofOnly) {
 		return proofOnly

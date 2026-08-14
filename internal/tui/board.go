@@ -1,8 +1,8 @@
-// Package tui is the Cortex studio: a live, read-only Charm v2 (bubbletea) board
-// of every session across every repository. It shows a session list and the
-// selected case's loop progress, hypotheses, evidence ledger, and verification
-// receipts in a responsive split or stacked layout. It reads the central XDG
-// sessions tree via internal/kernel and auto-refreshes; it never mutates a case.
+// Package tui is the Cortex studio: a live Charm v2 (bubbletea) board of every
+// session across every repository. It shows a session list and the selected
+// case's loop progress, hypotheses, evidence ledger, and verification receipts.
+// The only mutation it performs is answering a pending human decision; every
+// other view is read-only against the same case files as CLI and MCP.
 package tui
 
 import (
@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/abdul-hamid-achik/cortex/internal/config"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 )
@@ -47,6 +48,7 @@ func Run(ctx context.Context, filter kernel.SessionFilter) error {
 type boardSource interface {
 	Sessions(kernel.SessionFilter) ([]kernel.SessionSummary, error)
 	Detail(slug, taskID string) (kernel.SessionView, error)
+	AnswerDecision(slug, taskID, optionID, responder string) error
 }
 
 type kernelBoardSource struct{}
@@ -57,6 +59,34 @@ func (kernelBoardSource) Sessions(filter kernel.SessionFilter) ([]kernel.Session
 
 func (kernelBoardSource) Detail(slug, taskID string) (kernel.SessionView, error) {
 	return kernel.LoadSessionView(slug, taskID)
+}
+
+func (kernelBoardSource) AnswerDecision(slug, taskID, optionID, responder string) error {
+	view, err := kernel.LoadSessionView(slug, taskID)
+	if err != nil {
+		return err
+	}
+	if view.Case == nil {
+		return fmt.Errorf("session %s has no case", taskID)
+	}
+	pending := pendingDecision(view.Decisions)
+	if pending == nil {
+		return fmt.Errorf("session %s has no pending decision", taskID)
+	}
+	k, err := kernel.New(config.For(view.Case.Workspace.Root))
+	if err != nil {
+		return err
+	}
+	env, err := k.AnswerDecision(kernel.AnswerDecisionInput{
+		TaskID: taskID, DecisionID: pending.ID, Answer: optionID, Responder: responder,
+	})
+	if err != nil {
+		return err
+	}
+	if !env.OK {
+		return fmt.Errorf("%s", env.Error)
+	}
+	return nil
 }
 
 type model struct {
@@ -110,6 +140,10 @@ type detailLoadedMsg struct {
 	err     error
 }
 
+type decisionAnsweredMsg struct {
+	err error
+}
+
 func tick() tea.Cmd {
 	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
@@ -142,6 +176,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSessionsLoaded(msg)
 	case detailLoadedMsg:
 		return m.handleDetailLoaded(msg)
+	case decisionAnsweredMsg:
+		if msg.err != nil {
+			m.detailErr = msg.err.Error()
+			return m, nil
+		}
+		return m, m.requestRefresh(true)
 	case tea.KeyPressMsg:
 		if m.searchEditing {
 			return m.updateSearch(msg)
@@ -179,9 +219,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "r":
 			return m, m.requestRefresh(true)
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			return m, m.answerPendingOption(int(msg.String()[0] - '1'))
 		}
 	}
 	return m, nil
+}
+
+func (m model) answerPendingOption(index int) tea.Cmd {
+	if index < 0 || !m.detail.loaded || m.detail.view.Case == nil {
+		return nil
+	}
+	decision := pendingDecision(m.detail.view.Decisions)
+	if decision == nil || index >= len(decision.Options) {
+		return nil
+	}
+	session, ok := m.selectedSession()
+	if !ok {
+		return nil
+	}
+	optionID := decision.Options[index].ID
+	source := m.source
+	return func() tea.Msg {
+		return decisionAnsweredMsg{err: source.AnswerDecision(session.Slug, session.ID, optionID, "studio")}
+	}
 }
 
 func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -530,7 +591,7 @@ func (m model) render() string {
 		title += tWarn.Render(fmt.Sprintf("  ⚠ %d stale", stale))
 	}
 	title = truncateStyled(title, l.width)
-	helpText := "j/k sessions · PgUp/PgDn detail · / search · a active · r refresh · q quit"
+	helpText := "j/k sessions · 1-9 answer · PgUp/PgDn detail · / search · a active · r refresh · q quit"
 	if m.filter.Query != "" {
 		helpText = "j/k sessions · PgUp/PgDn detail · / search · c clear · a active · r refresh · q quit"
 	}
@@ -754,10 +815,11 @@ func (m model) renderDetail(w int) string {
 	if decision := pendingDecision(v.Decisions); decision != nil {
 		b.WriteString(tSection.Render("Decision needed") + "\n")
 		fmt.Fprintf(&b, "  %s %s\n", tWarn.Render("?"), clip(decision.Question, w-6))
-		for _, option := range decision.Options {
-			optionText := fmt.Sprintf("[%s] %s — %s", option.ID, option.Label, option.Consequence)
+		for i, option := range decision.Options {
+			optionText := fmt.Sprintf("%d. [%s] %s — %s", i+1, option.ID, option.Label, option.Consequence)
 			fmt.Fprintf(&b, "  %s\n", tPhase.Render(clip(optionText, w-2)))
 		}
+		fmt.Fprintf(&b, "  %s\n", tDim.Render(clip("press 1–9 to answer", w-2)))
 		b.WriteString("\n")
 	}
 

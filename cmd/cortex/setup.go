@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/abdul-hamid-achik/cortex/internal/kernel"
 	"github.com/spf13/cobra"
@@ -18,14 +20,19 @@ verification to work: is it a git repo, is there a cortex.yaml, and are codemap
 and vecgrep installed and indexed. For each gap it prints the exact command to
 fix it.
 
-setup is read-only — it never runs indexing (which can be long-running and, for
-vecgrep, needs a local embedding service). Run cortex init first if you have no
-cortex.yaml.`,
+setup is read-only unless --trust-commands is passed. It never runs indexing
+(which can be long-running and, for vecgrep, needs a local embedding service).
+Run cortex init first if you have no cortex.yaml.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		k, err := kernelFor(cmd)
 		if err != nil {
 			return err
+		}
+		trust, _ := cmd.Flags().GetBool("trust-commands")
+		yes, _ := cmd.Flags().GetBool("yes")
+		if trust {
+			return runTrustCommands(cmd, k, yes)
 		}
 		rep := k.Setup(cmd.Context())
 		if jsonMode(cmd) {
@@ -89,6 +96,58 @@ func renderSetup(rep kernel.SetupReport) {
 	}
 }
 
+func runTrustCommands(cmd *cobra.Command, k *kernel.Kernel, yes bool) error {
+	verifiers := k.ConfiguredCommandVerifiers()
+	if len(verifiers) == 0 {
+		return fmt.Errorf("no command verifiers configured in this workspace")
+	}
+	w := os.Stderr
+	fmt.Fprintln(w, "Granting these argv arrays (stored as digests in Cortex config, not the repo):")
+	for name, argv := range verifiers {
+		fmt.Fprintf(w, "  %s: %s\n", name, strings.Join(argv, " "))
+	}
+	if !yes {
+		if err := confirmTrust(os.Stdin, os.Stderr); err != nil {
+			return err
+		}
+	}
+	grants, err := k.TrustCommandVerifiers()
+	if err != nil {
+		return err
+	}
+	if jsonMode(cmd) {
+		return emitJSON(map[string]any{"grants": grants})
+	}
+	pln(os.Stdout, heading("command grants"))
+	for _, grant := range grants {
+		pf(os.Stdout, "  %s %s\n", paint(styOK, "✓"), grant.Name+" → "+grant.ArgvDigest)
+	}
+	return nil
+}
+
+func confirmTrust(in *os.File, out *os.File) error {
+	st, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if st.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("refusing to grant command verifiers without a TTY; pass --yes from a trusted launcher")
+	}
+	fmt.Fprint(out, "Grant these command verifiers for this workspace? [y/N] ")
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	default:
+		return fmt.Errorf("command grants not written")
+	}
+}
+
 func init() {
+	setupCmd.Flags().Bool("trust-commands", false, "grant configured command-verifier argv for this workspace (digests stored outside the repo)")
+	setupCmd.Flags().Bool("yes", false, "skip the TTY confirmation (trusted launcher only)")
 	rootCmd.AddCommand(setupCmd)
 }

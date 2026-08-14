@@ -139,8 +139,8 @@ the task verified.
 
 At `plan` you declare a **change boundary** (`--file` / `--symbol`). At `verify`, Cortex diffs your
 actual edits against that boundary. Touch a file you didn't declare and it reports `drifted` and
-names the file. It doesn't stop you — it makes accidental scope expansion *visible* instead of
-silent. Expand the plan deliberately if the scope really did change.
+names the file. On a `risk: high` change that blocks verification until you pass `--ack-drift`
+(or expand/revert). Lower risk still makes the expansion *visible* without stopping you.
 
 ### Why did `plan` reject my hypothesis?
 

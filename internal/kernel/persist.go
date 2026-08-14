@@ -22,6 +22,10 @@ type RememberInput struct {
 	// (review 2026-07-08). Reviews that REQUEST CHANGES set this so the task can
 	// complete with an honest failed outcome.
 	AcceptFailed bool
+	// AcceptOpenChildren allows a parent to complete while a child task is still
+	// in-flight. The default refuses so a delegated change cannot vanish into a
+	// green parent.
+	AcceptOpenChildren bool
 }
 
 // Remember persists a concise, provenance-rich conclusion to durable memory and
@@ -85,6 +89,9 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	receipts, _ = verificationReceiptsAtRevision(receipts, current, revisionErr)
 	if revisionErr != nil {
 		verificationWarnings = append(verificationWarnings, "could not check verification freshness: "+revisionErr.Error())
+	}
+	if err := k.refuseOpenChildren(c, in.AcceptOpenChildren); err != nil {
+		return errEnvelope(c.ID, err.Error()), nil
 	}
 	// One canonical assessment drives completion, status, metrics, overview, and
 	// review. A pass on one surface cannot launder a failed/unrun named claim or a

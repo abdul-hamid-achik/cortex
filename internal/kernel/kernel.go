@@ -47,6 +47,7 @@ func New(cfg config.Config) (*Kernel, error) {
 	// cases parent dir when cases are repo-local; no-op for the XDG default (out
 	// of the tree). Shared with the eval harness (config.EnsureStateIgnored).
 	config.EnsureStateIgnored(cfg.Workspace, cfg.CasesDir)
+	RegisterKnownStore(cfg.CasesDir, config.Slug(cfg.Workspace))
 	git := adapters.NewGit()
 	registered := []adapters.Adapter{
 		git,
@@ -148,6 +149,7 @@ func NewWith(cfg config.Config, store *casefs.Store, reg *adapters.Registry) *Ke
 		k.recaller = vl
 	}
 	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool)
+	RegisterKnownStore(cfg.CasesDir, config.Slug(cfg.Workspace))
 	if approveExternal() {
 		k.SetApprover(envApprover{})
 	}
@@ -389,10 +391,13 @@ func (k *Kernel) actionAllowed(taskID, tool, op string, class domain.ActionClass
 	case domain.ActionReadOnly, domain.ActionLocalMutation:
 		return true
 	case domain.ActionConfiguredExecution:
+		if approveCommands() || k.commandGrantAllows(op) {
+			return true
+		}
 		if k.approver != nil {
 			return k.approver.Approve(taskID, tool, op, class)
 		}
-		return approveCommands()
+		return false
 	case domain.ActionExternalMutation, domain.ActionSecretedExecution:
 		if k.approver != nil {
 			return k.approver.Approve(taskID, tool, op, class)

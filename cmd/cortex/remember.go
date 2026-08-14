@@ -26,6 +26,7 @@ normally completes only when its canonical assessment is verified. Explicit ackn
 		tags, _ := cmd.Flags().GetStringArray("tag")
 		unverified, _ := cmd.Flags().GetBool("unverified")
 		acceptFailed, _ := cmd.Flags().GetBool("accept-failed")
+		acceptChildren, _ := cmd.Flags().GetBool("accept-open-children")
 		env, err := k.Remember(cmd.Context(), kernel.RememberInput{
 			TaskID:                  args[0],
 			Outcome:                 joinArgs(args[1:]),
@@ -33,6 +34,7 @@ normally completes only when its canonical assessment is verified. Explicit ackn
 			Tags:                    tags,
 			VerificationNotPossible: unverified,
 			AcceptFailed:            acceptFailed,
+			AcceptOpenChildren:      acceptChildren,
 		})
 		if err != nil {
 			return err
@@ -46,5 +48,6 @@ func init() {
 	rememberCmd.Flags().StringArray("tag", nil, "tag for recall (repeatable)")
 	rememberCmd.Flags().Bool("unverified", false, "complete with an explicit partial/unverified assessment acknowledgment")
 	rememberCmd.Flags().Bool("accept-failed", false, "complete with an explicit failed-verification acknowledgment")
+	rememberCmd.Flags().Bool("accept-open-children", false, "complete a parent while child tasks are still in-flight")
 	rootCmd.AddCommand(rememberCmd)
 }

@@ -22,6 +22,16 @@
     "verification": {
       "outcome": "verified"
     },
+    "actions": [
+      {
+        "tool": "cortex_status",
+        "command": "cortex status task_oversize_proof",
+        "reason": "read the full bound proof from the case; this handoff omitted receipts atomically",
+        "arguments": {
+          "taskId": "task_oversize_proof"
+        }
+      }
+    ],
     "warnings": [
       "completion proof receipts omitted atomically because the complete non-sensitive proof closure exceeds the 90 KiB local-agent result budget; treat acceptance proof as unavailable"
     ]

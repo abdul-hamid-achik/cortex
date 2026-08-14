@@ -1,8 +1,9 @@
 # Studio: the human operator surface
 
-Cortex Studio is a live, read-only terminal board for people supervising agent work. It reads the
-same case files as the CLI and MCP server, so the view does not create a second source of truth or
-change a case.
+Cortex Studio is a live terminal board for people supervising agent work. It reads the
+same case files as the CLI and MCP server, so the view does not create a second source of truth.
+The only mutation it performs is answering a pending human decision (keys `1`–`9`); everything
+else is read-only.
 
 ```bash
 cortex studio
@@ -19,9 +20,10 @@ human decision with option consequences, the first structured next action, hypot
 recent receipts, and bounded recent evidence. The displayed projection retains at most the 200
 newest receipts and combined activity entries; its composite store read also streams only the 200
 newest evidence, command, and phase records while reporting exact totals. Studio refreshes the
-central session store every two seconds; index and detail reads run in the background, and refresh
-bursts are coalesced so repository scans do not block keyboard navigation. If a refresh fails,
-Studio keeps the matching last good projection visible and reports that the snapshot may be stale.
+central session store and any registered extra case-store roots every two seconds; index and detail
+reads run in the background, and refresh bursts are coalesced so repository scans do not block
+keyboard navigation. If a refresh fails, Studio keeps the matching last good projection visible and
+reports that the snapshot may be stale.
 
 ## Filter the board
 
@@ -45,6 +47,7 @@ Inside Studio:
 | `↑` / `k`, `↓` / `j` | select the previous or next session |
 | `g`, `G` | jump to the first or last session |
 | `Page Up` / `Page Down`, `Ctrl-U` / `Ctrl-D` | scroll the selected case detail |
+| `1`–`9` | answer the selected session's pending decision (option index) |
 | `/`, then `Enter` | edit and apply session search |
 | `Esc` | cancel search editing |
 | `c` | clear the applied search |
@@ -64,15 +67,15 @@ cortex sessions --stale       # only stale in-flight sessions
 
 ## Which sessions appear?
 
-Studio reads the central XDG store at `$XDG_STATE_HOME/cortex/sessions/`, the default case-file
-location. A project configured with a repo-local `cases_dir` is intentionally outside this global
-walk; use `cortex list` from that workspace instead. Run `cortex config` to see the resolved paths.
+Studio reads the central XDG store at `$XDG_STATE_HOME/cortex/sessions/` plus extra roots
+registered when a kernel opens a custom `cases_dir`. A project that has never been opened with
+Cortex on this machine stays outside the board until then; use `cortex list` from that workspace.
 
 ## The three surfaces
 
 - **CLI** — direct operation, inspection, and shell automation.
 - **MCP server** — the compact tool interface an agent calls.
-- **Studio** — the read-only operator view for humans.
+- **Studio** — the operator view for humans (answer pending decisions; otherwise read-only).
 
 All three call the same kernel and read the same evidence model.
 

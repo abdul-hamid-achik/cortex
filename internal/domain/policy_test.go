@@ -20,6 +20,7 @@ func TestRouteFor(t *testing.T) {
 		{"secret question → tvault", "does the deploy have the api key credential", nil, "tvault"},
 		{"artifact surface override → fcheap", "perform the operation", []Surface{SurfaceArtifact}, "fcheap"},
 		{"secret surface override → tvault", "perform the operation", []Surface{SurfaceSecret}, "tvault"},
+		{"declared code surface beats browser keywords", "the page redirects to the wrong place", []Surface{SurfaceCode}, "vecgrep"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

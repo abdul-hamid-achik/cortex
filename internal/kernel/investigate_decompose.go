@@ -21,6 +21,8 @@ var interrogatives = map[string]bool{
 	"how": true, "where": true, "what": true, "why": true, "when": true,
 	"which": true, "who": true, "does": true, "do": true, "is": true,
 	"are": true, "can": true,
+	"cómo": true, "como": true, "dónde": true, "donde": true, "qué": true,
+	"cual": true, "cuál": true, "cuáles": true, "quién": true, "quien": true,
 }
 
 // grepStopwords are the generic non-interrogative words that carry no searchable
@@ -32,6 +34,9 @@ var grepStopwords = map[string]bool{
 	"and": true, "or": true, "that": true, "this": true, "it": true, "be": true,
 	"used": true, "handled": true, "defined": true, "located": true,
 	"function": true, "file": true, "code": true, "work": true, "works": true,
+	"el": true, "la": true, "los": true, "las": true, "un": true, "una": true,
+	"de": true, "del": true, "en": true, "por": true, "para": true, "con": true,
+	"se": true, "es": true, "al": true, "lo": true, "su": true, "sus": true,
 }
 
 // grepPattern derives a single literal search term from a natural-language
@@ -40,29 +45,41 @@ var grepStopwords = map[string]bool{
 // snake_case, or a digit-bearing identifier) over a plain word, then the longest
 // non-stopword of at least four runes. Returns "" when nothing usable remains.
 func grepPattern(question string) string {
+	patterns := grepPatterns(question)
+	if len(patterns) == 0 {
+		return ""
+	}
+	return patterns[0]
+}
+
+// grepPatterns returns up to three distinctive literal tokens so the git-grep
+// fallback can OR a handful of identifiers instead of betting on one word.
+func grepPatterns(question string) []string {
 	tokens := strings.FieldsFunc(question, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
 	})
-	var identifier, longest string
+	var identifiers, words []string
+	seen := map[string]bool{}
 	for _, tok := range tokens {
 		lower := strings.ToLower(tok)
-		if interrogatives[lower] || grepStopwords[lower] {
+		if interrogatives[lower] || grepStopwords[lower] || seen[lower] {
 			continue
 		}
-		if identifier == "" && looksLikeIdentifier(tok) {
-			identifier = tok
+		seen[lower] = true
+		if looksLikeIdentifier(tok) {
+			identifiers = append(identifiers, tok)
+			continue
 		}
-		if len([]rune(tok)) > len([]rune(longest)) {
-			longest = tok
+		if len([]rune(tok)) >= 4 {
+			words = append(words, tok)
 		}
 	}
-	if identifier != "" {
-		return identifier
+	out := append([]string{}, identifiers...)
+	out = append(out, words...)
+	if len(out) > 3 {
+		out = out[:3]
 	}
-	if len([]rune(longest)) >= 4 {
-		return longest
-	}
-	return ""
+	return out
 }
 
 // looksLikeIdentifier reports whether a token looks like a code identifier
@@ -119,7 +136,7 @@ func subQuestions(q string, max int) []string {
 	var b strings.Builder
 	for i := 0; i < len(marked); {
 		cut := 0
-		for _, sep := range []string{", ", " and "} {
+		for _, sep := range []string{", ", " and ", " y ", " e "} {
 			if hasFoldPrefix(marked[i:], sep) && interrogatives[firstWordLower(marked[i+len(sep):])] {
 				cut = len(sep)
 				break
@@ -202,12 +219,17 @@ func lastIndexFoldASCII(s, sub string) int {
 // the original clause alongside these, so a heuristic miss adds noise but
 // never loses the real query. Returns nil when the shape doesn't hold.
 func objectConjunctSplit(p string) []string {
-	i := lastIndexFoldASCII(p, " and ")
+	sep := " and "
+	i := lastIndexFoldASCII(p, sep)
+	if i < 0 {
+		sep = " y "
+		i = lastIndexFoldASCII(p, sep)
+	}
 	if i < 0 {
 		return nil
 	}
 	left := strings.TrimSpace(p[:i])
-	right := strings.TrimSpace(p[i+len(" and "):])
+	right := strings.TrimSpace(p[i+len(sep):])
 	lw, rw := splitWS(left), splitWS(right)
 	if len(lw) < 5 || len(rw) < 2 || len(rw) > 3 || interrogatives[strings.ToLower(rw[0])] {
 		return nil

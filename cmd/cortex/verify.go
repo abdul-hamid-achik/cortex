@@ -69,19 +69,23 @@ the coupled --claim-id/-surface/-verifier/-contract flags (repeat per claim):
 		secretProject, _ := cmd.Flags().GetString("secret-project")
 		noAuto, _ := cmd.Flags().GetBool("no-auto-specs")
 		noOp, _ := cmd.Flags().GetBool("no-op")
+		fromPlan, _ := cmd.Flags().GetBool("from-plan")
+		ackDrift, _ := cmd.Flags().GetBool("ack-drift")
 		actor, _ := cmd.Flags().GetString("actor")
 		env, err := k.Verify(cmd.Context(), kernel.VerifyInput{
-			TaskID:           args[0],
-			Actor:            actor,
-			Claims:           claims,
-			ClaimSpecs:       claimSpecs,
-			ChangedFiles:     changed,
-			BrowserSpec:      browser,
-			TerminalSpec:     terminal,
-			ArtifactRef:      artifact,
-			SecretProject:    secretProject,
-			DisableAutoSpecs: noAuto,
-			NoOpAcknowledged: noOp,
+			TaskID:            args[0],
+			Actor:             actor,
+			Claims:            claims,
+			ClaimSpecs:        claimSpecs,
+			ChangedFiles:      changed,
+			BrowserSpec:       browser,
+			TerminalSpec:      terminal,
+			ArtifactRef:       artifact,
+			SecretProject:     secretProject,
+			DisableAutoSpecs:  noAuto,
+			NoOpAcknowledged:  noOp,
+			FromPlan:          fromPlan,
+			DriftAcknowledged: ackDrift,
 		})
 		if err != nil {
 			return err
@@ -104,6 +108,8 @@ func init() {
 	verifyCmd.Flags().String("secret-project", "", "tvault project whose value-free availability proves secret capability")
 	verifyCmd.Flags().Bool("no-auto-specs", false, "don't auto-select and run the specs that cover the change when none is supplied")
 	verifyCmd.Flags().Bool("no-op", false, "explicitly acknowledge that this change task intentionally produced no diff")
+	verifyCmd.Flags().Bool("from-plan", false, "materialize typed claims from acceptance criteria and the plan's verification requirements")
+	verifyCmd.Flags().Bool("ack-drift", false, "acknowledge unexpected files on a high-risk change so verification may proceed")
 	verifyCmd.Flags().String("actor", "", "change-lease owner (defaults to the active lease owner when the task is leased)")
 	rootCmd.AddCommand(verifyCmd)
 }

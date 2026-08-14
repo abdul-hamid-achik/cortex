@@ -209,17 +209,27 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// purpose: an authoritative empty search is a real result, not a degraded one
 	// to paper over.
 	if semanticDiscoveryUnavailable(steps, results) {
-		if pattern := grepPattern(in.Question); pattern != "" {
-			fb := k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
-				Input: map[string]any{"pattern": pattern, "limit": candLimit}})
+		if patterns := grepPatterns(in.Question); len(patterns) > 0 {
+			var greps []adapters.Result
+			for _, pattern := range patterns {
+				greps = append(greps, k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
+					Input: map[string]any{"pattern": pattern, "limit": candLimit}}))
+			}
 			var fbErr error
-			facts, warnings, _, fbErr = k.stampResults(c, []adapters.Result{fb}, discoveryBudget, "git-grep fallback", facts, warnings, nil)
+			facts, warnings, _, fbErr = k.stampResults(c, greps, discoveryBudget, "git-grep fallback", facts, warnings, nil)
 			if fbErr != nil {
 				return errEnvelope(c.ID, fbErr.Error()), fbErr
 			}
-			if fb.Status == adapters.StatusAuthoritative && len(fb.Facts) > 0 {
+			matched := false
+			for _, fb := range greps {
+				if fb.Status == adapters.StatusAuthoritative && len(fb.Facts) > 0 {
+					matched = true
+					break
+				}
+			}
+			if matched {
 				warnings = append(warnings, fmt.Sprintf(
-					"semantic discovery was unavailable — fell back to a literal git grep for %q (tracked files only)", pattern))
+					"semantic discovery was unavailable — fell back to a literal git grep for %q (tracked files only)", strings.Join(patterns, ", ")))
 			}
 		}
 	}

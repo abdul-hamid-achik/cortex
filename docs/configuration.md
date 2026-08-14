@@ -87,7 +87,9 @@ tests, builds, or lint checks. They are deliberately configuration-only:
 - A CLI/MCP caller may choose only the configured name, never replace or append arguments.
 - Configuring argv does **not** authorize it. Repository commands are arbitrary local code and stay
   blocked unless the trusted process launching Cortex sets `CORTEX_APPROVE_COMMANDS=1` (truthy
-  values `true`, `yes`, and `on` also work). A repository cannot grant itself this permission.
+  values `true`, `yes`, and `on` also work) **or** `cortex setup --trust-commands` writes a matching
+  argv digest to `$XDG_CONFIG_HOME/cortex/command-grants.json`. A repository cannot grant itself
+  this permission.
 - Names contain letters, digits, `-`, or `_`; `kind` is `unit_test`, `build`, or `lint`; v0.1
   requires the `code` surface and a positive timeout.
 - Defaults for omitted fields are `unit_test`, `code`, and two minutes.

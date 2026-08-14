@@ -59,7 +59,23 @@ func ShowSessionIn(workspace, taskID string) (SessionView, error) {
 // LoadSessionView loads the canonical session projection when the repository
 // slug is already known (Studio uses this to avoid a second global tree walk).
 func LoadSessionView(slug, taskID string) (SessionView, error) {
-	store, err := casefs.New(filepath.Join(config.SessionsRoot(), slug))
+	central := filepath.Join(config.SessionsRoot(), slug)
+	if store, err := casefs.New(central); err == nil {
+		if _, loadErr := store.Load(taskID); loadErr == nil {
+			return sessionViewFromStore(slug, store, taskID)
+		}
+	}
+	for _, extra := range loadKnownStores() {
+		if extra.Slug != slug {
+			continue
+		}
+		store, err := casefs.New(extra.Root)
+		if err != nil {
+			return SessionView{}, err
+		}
+		return sessionViewFromStore(slug, store, taskID)
+	}
+	store, err := casefs.New(central)
 	if err != nil {
 		return SessionView{}, err
 	}

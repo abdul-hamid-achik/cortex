@@ -64,7 +64,53 @@ func (s SessionSummary) StaleSince(now time.Time, age time.Duration) bool {
 // every repository. Sessions pinned to a repo-local store via cases_dir are not
 // walked here; they stay visible through that workspace's `cortex list`.
 func AllSessions(filter SessionFilter) ([]SessionSummary, error) {
-	return allSessionsIn(config.SessionsRoot(), filter)
+	out, err := allSessionsIn(config.SessionsRoot(), filter)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, s := range out {
+		seen[s.Slug+"\x00"+s.ID] = true
+	}
+	git := adapters.NewGit()
+	revisions := make(map[string]revisionLookup)
+	for _, extra := range loadKnownStores() {
+		store, storeErr := casefs.New(extra.Root)
+		if storeErr != nil {
+			return nil, fmt.Errorf("open known session store %s: %w", extra.Slug, storeErr)
+		}
+		ids, listErr := store.List()
+		if listErr != nil {
+			return nil, fmt.Errorf("list known session store %s: %w", extra.Slug, listErr)
+		}
+		for _, id := range ids {
+			key := extra.Slug + "\x00" + id
+			if seen[key] {
+				continue
+			}
+			c, loadErr := store.Load(id)
+			if loadErr != nil {
+				return nil, fmt.Errorf("load session %s/%s: %w", extra.Slug, id, loadErr)
+			}
+			s, sumErr := summarizeSession(c, extra.Slug, store, git, revisions)
+			if sumErr != nil {
+				return nil, fmt.Errorf("summarize session %s/%s: %w", extra.Slug, id, sumErr)
+			}
+			if filter.ActiveOnly && !s.Active {
+				continue
+			}
+			if filter.Repo != "" && !strings.Contains(s.Slug, filter.Repo) && !strings.Contains(s.Repository, filter.Repo) {
+				continue
+			}
+			if !sessionMatchesQuery(s, filter.Query) {
+				continue
+			}
+			seen[key] = true
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out, nil
 }
 
 // ArchivedSessions lists sessions that have been moved to the archive (out of

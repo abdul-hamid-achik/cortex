@@ -5,6 +5,40 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Studio can answer a pending decision** — with a pending human decision selected, keys
+  `1`–`9` record that option through the same kernel `AnswerDecision` path and resume the
+  paused phase. Studio remains otherwise read-only.
+- **Known extra case stores** — opening a workspace whose `cases_dir` is outside the central
+  XDG sessions tree registers that root (slug + path) under Cortex state. `sessions`, Studio,
+  and session location walk those roots so repo-local cases are not invisible to the board.
+- **`verify --from-plan`** — when no claims are supplied, Cortex materializes typed claims
+  from registered acceptance criteria and the plan's verification requirements (exact
+  surface/verifier/contract). MCP: `fromPlan`.
+- **High-risk scope-drift gate** — a `risk: high` change with unexpected files cannot enter
+  verification unless `--ack-drift` / `driftAcknowledged` is set. Medium/low risk still
+  records drift as evidence without blocking.
+- **Out-of-repo command grants** — `cortex setup --trust-commands` (confirm, or `--yes` in a
+  trusted harness) writes argv digests to `$XDG_CONFIG_HOME/cortex/command-grants.json`.
+  Matching workspace+argv may run without `CORTEX_APPROVE_COMMANDS=1`. `cortex.yaml` still
+  cannot approve itself.
+- **Parent/child rollup** — `status` includes each child's phase and verification outcome.
+  `remember` on a parent refuses while a child is in-flight unless
+  `--accept-open-children` / `acceptOpenChildren`.
+- **Handoff overflow continuation** — when the 90 KiB completion proof set cannot fit,
+  the packet carries a structured action pointing at `status` / `read_evidence` instead of
+  a dead end.
+
+### Changed
+- **Declared surfaces beat question keywords** in `RouteFor`. A code-surface task whose
+  question mentions "page" or "redirect" no longer routes to cairntrace.
+- **Deep-mode decomposition understands Spanish** clause markers (`y`, interrogatives) the
+  same way as English `and`.
+- **Git-grep fallback** searches up to three identifier-like tokens from the question, not
+  a single longest word.
+- **Unleased `planned` → `verify`** emits an explicit compatibility warning so new agent
+  flows keep using `begin-change`.
+
 ## [0.16.2] — 2026-07-27
 
 ### Fixed

@@ -1,10 +1,11 @@
 version: 1
 name: studio
 intent: |
-    cortex studio opens a read-only terminal UI over the case store: it renders
+    cortex studio opens a terminal UI over the case store: it renders
     the "Cortex studio" header, lists the workspace's tasks with their phase, and
     shows the selected case's detail (goal + evidence). It navigates with the
-    arrow/j-k keys and quits cleanly on q, restoring the screen.
+    arrow/j-k keys and quits cleanly on q, restoring the screen. Pending
+    decisions can be answered with 1–9; other views stay read-only.
 target:
     cmd:
         - "/bin/sh"

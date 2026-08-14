@@ -235,6 +235,8 @@ cortex verify task_06FK… \
 | `--secret-project` | tvault project for a value-free capability claim |
 | `--no-auto-specs` | disable automatic selection of covering browser/terminal specs |
 | `--no-op` | acknowledge that a change task intentionally produced no diff; does not create a pass |
+| `--from-plan` | materialize typed claims from registered acceptance criteria and the plan's verification requirements |
+| `--ack-drift` | acknowledge unexpected files on a `risk: high` change so verification may proceed |
 | `--actor` | change-lease owner; defaults to the active lease owner when the task is leased |
 
 `--claim-spec` bundles a whole typed claim into one value (recognized keys `id`, `surface`,
@@ -252,9 +254,11 @@ unless that exact verifier/contract ran. A registered criterion additionally req
 and byte-for-byte statement. Legacy
 `--claim` without typed flags remains available but infers the surface heuristically.
 
-Repository-configured checks execute only when the process launching Cortex explicitly sets
-`CORTEX_APPROVE_COMMANDS=1`; `cortex.yaml` cannot authorize its own arbitrary argv. Without approval,
-the requirement remains blocked and the canonical assessment stays non-green.
+Repository-configured checks execute when the process launching Cortex sets
+`CORTEX_APPROVE_COMMANDS=1` **or** when `cortex setup --trust-commands` has stored a
+matching workspace+argv digest in `$XDG_CONFIG_HOME/cortex/command-grants.json`.
+`cortex.yaml` cannot authorize its own arbitrary argv. Without approval, the requirement
+remains blocked and the canonical assessment stays non-green.
 
 ### `cortex remember <taskId> <outcome>`
 
@@ -270,6 +274,7 @@ cortex remember task_06FK… "returnTo was dropped; fixed and browser-verified" 
 | `--tag` (repeatable) | tags for recall |
 | `--unverified` | explicitly accept a `partial` or `unverified` completion when adequate proof could not be completed |
 | `--accept-failed` | explicitly accept a `failed` completion — records a failed outcome, not a green one |
+| `--accept-open-children` | complete a parent while child tasks are still in-flight |
 
 These acknowledgments preserve legacy tasks honestly; they do not bypass an explicitly registered
 acceptance contract. Every registered criterion needs current bound proof before completion.
@@ -493,7 +498,7 @@ Keys: `↑/↓` navigate · `g/G` jump · `Page Up/Page Down` (or `Ctrl-U/Ctrl-D
 | `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
 | `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
 | `cortex init` | write a starter `cortex.yaml`, detecting your test runner (Go/Rust/Node/Python) as a command verifier; refuses to clobber an existing config unless `--force` |
-| `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** — with the exact command to fix each gap |
+| `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** — with the exact command to fix each gap; `--trust-commands` grants configured verifier argv outside the repo |
 | `cortex config` | resolved workspace/storage paths, budget, recall policy, safe verifier metadata (argv omitted), redaction count, and applied `cortex.yaml` sources |
 | `cortex abort <taskId> <reason>` | stop a task without deleting evidence |
 | `cortex read-evidence <taskId> <evidenceId>` | print a full evidence record (with its `rawRef`) |

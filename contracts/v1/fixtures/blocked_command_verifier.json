@@ -138,6 +138,7 @@
       "phase": "verifying",
       "summary": "verification run complete; scope within_boundary",
       "warnings": [
+        "verifying an unleased planned change uses the compatibility path; new agent flows should call begin-change first",
         "command.unit (configured_execution) blocked: requires explicit approval"
       ],
       "nextActions": [
