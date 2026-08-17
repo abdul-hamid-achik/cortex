@@ -89,6 +89,17 @@ func TestDetectVerifiersNone(t *testing.T) {
 	}
 }
 
+func TestDetectVerifiersGodotDoesNotEmitVerifier(t *testing.T) {
+	// project.godot is recognized as a workspace marker but does not emit a
+	// verifier — Cortex treats .gd as code but does not exec the Godot binary.
+	ws := t.TempDir()
+	writeMarker(t, ws, "project.godot", "")
+	got := DetectVerifiers(ws)
+	if len(got) != 0 {
+		t.Fatalf("project.godot should not emit a verifier, got %+v", got)
+	}
+}
+
 func TestRenderInitYAMLRoundTripsThroughLoader(t *testing.T) {
 	ws := t.TempDir()
 	writeMarker(t, ws, "go.mod", "module x\n")
