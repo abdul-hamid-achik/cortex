@@ -48,7 +48,6 @@ func TestDetectVerifiersEachEcosystem(t *testing.T) {
 		{name: "node-bun", markers: []string{"package.json", "bun.lockb"}, wantArgv: "bun test"},
 		{name: "python-pyproject", markers: []string{"pyproject.toml"}, wantArgv: "python -m pytest"},
 		{name: "python-requirements", markers: []string{"requirements.txt"}, wantArgv: "python -m pytest"},
-		{name: "godot", markers: []string{"project.godot"}, wantArgv: "godot --headless --quit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ws := t.TempDir()
@@ -87,6 +86,17 @@ func TestDetectVerifiersMultipleEcosystemsUseDistinctNames(t *testing.T) {
 func TestDetectVerifiersNone(t *testing.T) {
 	if got := DetectVerifiers(t.TempDir()); len(got) != 0 {
 		t.Fatalf("expected no verifiers in an empty dir, got %+v", got)
+	}
+}
+
+func TestDetectVerifiersGodotDoesNotEmitVerifier(t *testing.T) {
+	// project.godot is recognized as a workspace marker but does not emit a
+	// verifier — Cortex treats .gd as code but does not exec the Godot binary.
+	ws := t.TempDir()
+	writeMarker(t, ws, "project.godot", "")
+	got := DetectVerifiers(ws)
+	if len(got) != 0 {
+		t.Fatalf("project.godot should not emit a verifier, got %+v", got)
 	}
 }
 

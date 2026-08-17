@@ -121,9 +121,8 @@ func DetectVerifiers(workspace string) []VerifierSuggestion {
 	if marker := pythonMarker(workspace); marker != "" {
 		found = append(found, candidate{"python", []string{"python", "-m", "pytest"}, marker + " found"})
 	}
-	if isFile(filepath.Join(workspace, "project.godot")) {
-		found = append(found, candidate{"godot", []string{"godot", "--headless", "--quit"}, "project.godot found"})
-	}
+	// Godot projects are detected (project.godot) but no verifier is emitted —
+	// Cortex recognizes .gd as code but does not exec the Godot binary.
 
 	out := make([]VerifierSuggestion, 0, len(found))
 	for _, c := range found {
