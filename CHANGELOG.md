@@ -5,6 +5,12 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Godot workspace awareness** — `cortex init` detects `project.godot` and suggests
+  a `godot --headless --quit` verifier. Investigate recognizes `.gd` (GDScript) as a
+  code file for structural expansion when codemap has GDScript support. Degrades cleanly
+  when codemap has not indexed GDScript yet.
+
 ## [0.16.3] — 2026-08-14
 
 ### Added

@@ -389,6 +389,27 @@ func TestCandidatesFromFiltersNonCodeFiles(t *testing.T) {
 	}
 }
 
+func TestIsCodeFileRecognizesGodotScript(t *testing.T) {
+	// GDScript (.gd) should be recognized as a code file for structural
+	// expansion when codemap has GDScript support.
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"player.gd", true},
+		{"scripts/Player.gd", true},
+		{"README.md", false},
+		{"project.godot", false},
+		{"scene.tscn", false},
+		{"callback.go", true},
+		{"auth.py", true},
+	} {
+		if got := isCodeFile(tc.path); got != tc.want {
+			t.Errorf("isCodeFile(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestStructuralStepsKeepsProvenanceAlignedAcrossSkips(t *testing.T) {
 	// A skipped candidate (dotfile with an empty query token) must skip its
 	// provenance link too — indexing candidates by result position after a

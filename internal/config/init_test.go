@@ -48,6 +48,7 @@ func TestDetectVerifiersEachEcosystem(t *testing.T) {
 		{name: "node-bun", markers: []string{"package.json", "bun.lockb"}, wantArgv: "bun test"},
 		{name: "python-pyproject", markers: []string{"pyproject.toml"}, wantArgv: "python -m pytest"},
 		{name: "python-requirements", markers: []string{"requirements.txt"}, wantArgv: "python -m pytest"},
+		{name: "godot", markers: []string{"project.godot"}, wantArgv: "godot --headless --quit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ws := t.TempDir()

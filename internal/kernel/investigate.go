@@ -634,7 +634,7 @@ var codeFileExts = map[string]bool{
 	".mjs": true, ".cjs": true, ".py": true, ".rs": true, ".java": true,
 	".rb": true, ".lua": true, ".vue": true, ".c": true, ".h": true,
 	".cc": true, ".cpp": true, ".hpp": true, ".cs": true, ".kt": true,
-	".swift": true, ".php": true, ".scala": true,
+	".swift": true, ".php": true, ".scala": true, ".gd": true,
 }
 
 // isCodeFile reports whether a discovery hit's file can meaningfully feed the
