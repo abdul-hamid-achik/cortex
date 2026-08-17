@@ -5,11 +5,13 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.4] — 2026-08-17
+
 ### Added
-- **Godot workspace awareness** — Investigate recognizes `.gd` (GDScript) as a code file
-  for structural expansion when codemap has GDScript support. `project.godot` is detected
-  as a workspace marker but does not emit a verifier (Cortex does not exec the Godot binary).
-  Degrades cleanly when codemap has not indexed GDScript yet.
+- **Godot workspace awareness** — Investigate detects `project.godot` as a workspace
+  marker but does not emit a verifier. `.gd` (GDScript) is treated as code for
+  structural expansion when codemap has GDScript support. Cortex does not exec or
+  ship a Godot binary. Degrades cleanly if GDScript is not indexed.
 
 ## [0.16.3] — 2026-08-14
 
