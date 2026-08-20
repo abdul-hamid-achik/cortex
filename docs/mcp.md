@@ -45,7 +45,7 @@ collaboration. See [Empirical trajectory runner: MCP profile decision gate](/eva
 | `cortex_begin_change` | `agent`, `all` | atomically acquire the actor's expiring change lease and enter `changing`; same-owner retries are safe |
 | `cortex_verify` | `agent`, `all` | run planned verifiers, detect scope drift, and bind typed `claimSpecs` (or `fromPlan`) to an exact surface/verifier/contract; high-risk drift requires `driftAcknowledged`; leased tasks require the owner actor; intentional no-diff changes require `noOpAcknowledged` |
 | `cortex_remember` | `agent`, `all` | persist the outcome and complete; normal completion requires the canonical assessment to be `verified`, while explicit `verificationNotPossible` / `acceptFailed` / `acceptOpenChildren` acknowledgments preserve non-green or still-open child work |
-| `cortex_status` | `agent`, `all` | phase, case revision/actor/linkage/lease, pending decision, scope, bounded named-claim proof manifest, structured actions, and canonical `verified / partial / failed / unverified` assessment |
+| `cortex_status` | `agent`, `all` | phase, case revision/actor/linkage/lease, pending decision, scope, bounded named-claim proof manifest, structured actions, and canonical `verified / partial / failed / unverified` assessment. `detail=full` adds per-tool binary health **and** discovery index readiness (`index`, `fixCommand`) |
 | `cortex_resolve` | `agent`, `all` | mark a hypothesis confirmed/challenged/rejected as evidence accumulates (history retained) |
 | `cortex_note` | `agent`, `all` | append redacted human/agent/reviewer context as provenance-bearing `human_report`; never satisfies verification alone |
 | `cortex_request_decision` | `agent`, `all` | pause on one bounded human question with at least two options and explicit consequences |
@@ -54,7 +54,7 @@ collaboration. See [Empirical trajectory runner: MCP profile decision gate](/eva
 | `cortex_abort_task` | `agent`, `all` | stop without deleting evidence (reason required) |
 | `cortex_read_evidence` | `agent`, `all` | full evidence record by ID |
 | `cortex_read_artifact` | `agent`, `all` | bounded preview of a task-owned raw ref or task-referenced fcheap ref; safe relative `path`; 32 KiB default/128 KiB cap; discovery ≤512 entries/100 files; binary refused unless `allowBinary` |
-| `cortex_recall_cases` | `agent`, `all` | recall prior resolved cases (rejected/challenged hypotheses + definitive receipts) related to a query, cross-repo or scoped — prior disproofs to read before re-deriving a theory |
+| `cortex_recall_cases` | `agent`, `all` | recall prior resolved cases related to a query. Omit `repo` for an explicit cross-repo search; orient/investigate no longer do that automatically |
 | `cortex_list_tasks` | `all` | list all tasks in the workspace (newest first) |
 | `cortex_sessions` | `all` | **cross-repo**: every session everywhere — id, goal, phase, repo, verified/required, active, timestamps (filter by `repo`/`active`/AND-token `query`) |
 | `cortex_timeline` | `all` | a session's time-sorted activity — phases, evidence, tool calls, receipts; optional workspace fallback finds repo-local/custom cases |

@@ -34,6 +34,78 @@ func (c *Codemap) Health(ctx context.Context) error {
 	return err
 }
 
+// status is the cheap readiness probe: `codemap status --json`. Prefer this
+// over a dummy find/search — status is bounded and does not walk the graph.
+func (c *Codemap) status(ctx context.Context, dir string) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	stdout, stderr, code, err := c.exec(ctx, dir, "status", "--json")
+	if err != nil {
+		return failExec("codemap", "status", err, 5*time.Second), nil
+	}
+	if res, ok := codemapError("status", stdout); ok {
+		return withFix(res, fixFromText(res.Summary+" "+strings.Join(res.Warnings, " "), "codemap index")), nil
+	}
+	var st struct {
+		Project    string `json:"project"`
+		Registered bool   `json:"registered"`
+		Nodes      int    `json:"nodes"`
+		Files      int    `json:"files"`
+		// Older codemap emitted stale as a bare count; current builds emit an
+		// object {changed,new,deleted}. Accept either.
+		Stale json.RawMessage `json:"stale"`
+	}
+	if derr := decodeJSON(stdout, &st); derr != nil {
+		return degraded("codemap", "status", stdout, stderr, code), nil
+	}
+	if !st.Registered || (st.Nodes == 0 && st.Files == 0) {
+		msg := "codemap project is not indexed"
+		if st.Project != "" {
+			msg = fmt.Sprintf("codemap project %q is not registered/indexed", st.Project)
+		}
+		return withFix(unavailable("codemap", "status", msg), "codemap index"), nil
+	}
+	staleCount := decodeCodemapStale(st.Stale)
+	warns := []string{}
+	status := StatusAuthoritative
+	summary := fmt.Sprintf("codemap ready: %s (%s, %s)",
+		firstNonEmpty(st.Project, "project"), pluralize(st.Nodes, "node"), pluralize(st.Files, "file"))
+	if staleCount > 0 {
+		status = StatusPartial
+		warns = append(warns, fmt.Sprintf("codemap index is stale (%d changed file(s)) — run `codemap index` before trusting structural results", staleCount))
+		summary = fmt.Sprintf("codemap indexed but stale: %s", pluralize(staleCount, "changed file"))
+	}
+	return Result{
+		Tool: "codemap", Operation: "status", Status: status, Summary: summary,
+		Warnings: warns, Raw: stdout,
+		Facts: []Fact{{
+			Kind: "code_graph", Confidence: "high", Claim: summary,
+			Attributes: map[string]string{"index": "ready", "fix": "codemap index"},
+		}},
+	}, nil
+}
+
+// decodeCodemapStale accepts both legacy `stale: N` and current
+// `stale: {changed,new,deleted}` shapes.
+func decodeCodemapStale(raw json.RawMessage) int {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0
+	}
+	var n int
+	if json.Unmarshal(raw, &n) == nil {
+		return n
+	}
+	var obj struct {
+		Changed int `json:"changed"`
+		New     int `json:"new"`
+		Deleted int `json:"deleted"`
+	}
+	if json.Unmarshal(raw, &obj) == nil {
+		return obj.Changed + obj.New + obj.Deleted
+	}
+	return 0
+}
+
 // Execute routes codemap operations. Each shells out with --json and maps the
 // documented output shape into normalized facts.
 func (c *Codemap) Execute(ctx context.Context, req Request) (Result, error) {
@@ -52,6 +124,8 @@ func (c *Codemap) Execute(ctx context.Context, req Request) (Result, error) {
 		return c.semantic(ctx, dir, req.Str("query"), req.Int("top", 10))
 	case "review":
 		return c.review(ctx, dir, req.Str("since"), boolOf(req.Input["staged"]))
+	case "status":
+		return c.status(ctx, dir)
 	default:
 		return Result{Tool: "codemap", Operation: req.Operation, Status: StatusError,
 			Summary: "unknown codemap operation: " + req.Operation}, nil
@@ -176,7 +250,7 @@ func (c *Codemap) impact(ctx context.Context, dir, symbol string, depth int) (Re
 	}
 	stdout, stderr, code, err := c.exec(ctx, dir, "impact", symbol, "--depth", strconv.Itoa(depth), "--json")
 	if err != nil {
-		return unavailable("codemap", "impact", err.Error()), nil
+		return failExec("codemap", "impact", err, c.timeout), nil
 	}
 	if res, ok := codemapError("impact", stdout); ok {
 		return res, nil
@@ -231,7 +305,7 @@ func (c *Codemap) relation(ctx context.Context, dir, op, symbol string) (Result,
 	}
 	stdout, stderr, code, err := c.exec(ctx, dir, op, symbol, "--json")
 	if err != nil {
-		return unavailable("codemap", op, err.Error()), nil
+		return failExec("codemap", op, err, c.timeout), nil
 	}
 	if res, ok := codemapError(op, stdout); ok {
 		return res, nil
@@ -288,7 +362,7 @@ func (c *Codemap) searchLike(ctx context.Context, dir, op, query string, top int
 	}
 	stdout, stderr, code, err := c.exec(ctx, dir, op, query, "--top", strconv.Itoa(top), "--json")
 	if err != nil {
-		return unavailable("codemap", op, err.Error()), nil
+		return failExec("codemap", op, err, c.timeout), nil
 	}
 	if res, ok := codemapError(op, stdout); ok {
 		return res, nil
@@ -559,7 +633,7 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 	}
 	stdout, stderr, code, err := c.exec(ctx, dir, args...)
 	if err != nil {
-		return unavailable("codemap", "review", err.Error()), nil
+		return failExec("codemap", "review", err, c.timeout), nil
 	}
 	if res, ok := codemapError("review", stdout); ok {
 		return res, nil

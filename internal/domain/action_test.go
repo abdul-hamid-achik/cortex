@@ -8,7 +8,9 @@ func TestClassifyOp(t *testing.T) {
 		want     ActionClass
 	}{
 		{"codemap", "impact", ActionReadOnly},
+		{"codemap", "status", ActionReadOnly},
 		{"vecgrep", "search", ActionReadOnly},
+		{"vecgrep", "status", ActionReadOnly},
 		{"git", "grep", ActionReadOnly},
 		{"cairntrace", "run", ActionReadOnly},
 		{"fcheap", "save", ActionLocalMutation},

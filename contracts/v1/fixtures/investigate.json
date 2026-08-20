@@ -9,21 +9,21 @@
     "ok": true,
     "taskId": "$TASK_ID_1",
     "phase": "investigating",
-    "summary": "investigated \"HandleCallback\" via codemap→codemap: 4 evidence items recorded (a known symbol resolves directly with the code graph)",
+    "summary": "investigated \"HandleCallback\" via codemap→codemap: 3 evidence items recorded (a known symbol resolves directly with the code graph)",
     "facts": [
       {
         "id": "$EVIDENCE_ID_1",
+        "claim": "callback diff is structurally sound",
+        "confidence": "high",
+        "source": "codemap",
+        "kind": "code_graph"
+      },
+      {
+        "id": "$EVIDENCE_ID_2",
         "claim": "callback.go is a candidate",
         "confidence": "medium",
         "source": "vecgrep",
         "kind": "semantic_search"
-      },
-      {
-        "id": "$EVIDENCE_ID_2",
-        "claim": "no prior disproof matched",
-        "confidence": "low",
-        "source": "veclite",
-        "kind": "model_inference"
       },
       {
         "id": "$EVIDENCE_ID_3",
@@ -31,13 +31,6 @@
         "confidence": "low",
         "source": "veclite",
         "kind": "model_inference"
-      },
-      {
-        "id": "$EVIDENCE_ID_4",
-        "claim": "callback diff is structurally sound",
-        "confidence": "high",
-        "source": "codemap",
-        "kind": "code_graph"
       }
     ],
     "nextActions": [

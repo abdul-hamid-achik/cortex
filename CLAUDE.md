@@ -29,10 +29,11 @@ Surfaces / key files:
   to: README, AGENTS, CLAUDE, CHANGELOG.
 
 Deployment guardrail: follow the canonical delivery contract in `AGENTS.md`. Vercel Git Integration
-deploys `docs/` automatically from `main`; tag workflows publish GitHub binaries and Homebrew only.
-Keep the docs versionless (`Latest release` → `/releases/latest`). Do not add `docs/scripts/`, a
+deploys `docs/` automatically from **`main` only** (other branches do not build; non-docs commits
+are ignored). Tag workflows publish GitHub binaries and Homebrew only. Do not `vercel promote`
+docs — `main` is the site release. Keep the docs versionless (`Latest release` → `/releases/latest`). Do not add `docs/scripts/`, a
 release-version file or environment source, Vercel CLI/API calls in GitHub Actions, Vercel
-credentials in tracked files or GitHub Actions, or a disabled Git deployment setting. Validate docs
+credentials in tracked files or GitHub Actions, or enable Git deploys on every branch. Validate docs
 with `task docstest` and `task docsbuild`, then push `main`; never deploy them manually.
 
 ## Gotchas (learned the hard way)

@@ -14,8 +14,10 @@ import (
 // subcommand — health is probed via `vecgrep --version`.
 type Vecgrep struct{ tool }
 
-// NewVecgrep builds a vecgrep adapter with the 15-second code-search budget.
-func NewVecgrep() *Vecgrep { return &Vecgrep{tool: newTool("vecgrep", 15*time.Second)} }
+// NewVecgrep builds a vecgrep adapter with a 30-second code-search budget.
+// Status probes use a tighter caller deadline; hybrid failures retry keyword
+// once so a slow embedder does not consume the whole budget twice.
+func NewVecgrep() *Vecgrep { return &Vecgrep{tool: newTool("vecgrep", 30*time.Second)} }
 
 func (v *Vecgrep) Name() string { return "vecgrep" }
 
@@ -45,6 +47,8 @@ func (v *Vecgrep) Execute(ctx context.Context, req Request) (Result, error) {
 		return v.similar(ctx, dir, req.Str("target"), req.Int("limit", 10))
 	case "memory_recall":
 		return v.memoryRecall(ctx, dir, req.Str("query"), req.StrSlice("tags"), req.Int("limit", 5))
+	case "status":
+		return v.status(ctx, dir)
 	default:
 		return Result{Tool: "vecgrep", Operation: req.Operation, Status: StatusError,
 			Summary: "unknown vecgrep operation: " + req.Operation}, nil
@@ -86,9 +90,33 @@ func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int
 	if query == "" {
 		return Result{Tool: "vecgrep", Operation: "search", Status: StatusError, Summary: "search needs a query"}, nil
 	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "hybrid"
+	}
+	res, err := v.searchOnce(ctx, dir, query, mode, limit)
+	if err != nil {
+		return res, err
+	}
+	// Hybrid depends on the embedder. When the index exists but embeddings fail,
+	// keyword still searches BM25 without waiting on a slow/dead Ollama path.
+	// Skip the retry for an absent/corrupt index — keyword cannot invent chunks.
+	if mode == "hybrid" && shouldRetryVecgrepKeyword(res) {
+		kw, kwErr := v.searchOnce(ctx, dir, query, "keyword", limit)
+		if kwErr == nil && kw.Status == StatusAuthoritative {
+			kw.Warnings = append([]string{
+				"vecgrep hybrid was unavailable — retried as keyword (embedding path skipped)",
+			}, kw.Warnings...)
+			return kw, nil
+		}
+	}
+	return res, nil
+}
+
+func (v *Vecgrep) searchOnce(ctx context.Context, dir, query, mode string, limit int) (Result, error) {
 	stdout, stderr, code, err := v.exec(ctx, dir, "search", query, "-m", mode, "-n", strconv.Itoa(limit), "-f", "json-envelope")
 	if err != nil {
-		return unavailable("vecgrep", "search", err.Error()), nil
+		return failExec("vecgrep", "search", err, v.timeout), nil
 	}
 	// New binary: an index-status envelope distinguishes an absent index from an
 	// empty match set, so cortex never reads "no index" as "no such code".
@@ -120,7 +148,7 @@ func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int
 	// `-f json` shape so it still returns hits.
 	so, se, code2, err2 := v.exec(ctx, dir, "search", query, "-m", mode, "-n", strconv.Itoa(limit), "-f", "json")
 	if err2 != nil {
-		return unavailable("vecgrep", "search", err2.Error()), nil
+		return failExec("vecgrep", "search", err2, v.timeout), nil
 	}
 	// The old binary reports "not in a vecgrep project" on the fallback call too;
 	// keep it an honest "no index" signal rather than a degraded parse failure.
@@ -139,17 +167,102 @@ func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int
 	return v.hitsResult("search", query, mode, hits, so), nil
 }
 
+// status is the cheap readiness probe (`vecgrep status -f json`). Prefer this
+// over a dummy search — search can hit a slow embedder path.
+func (v *Vecgrep) status(ctx context.Context, dir string) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	stdout, stderr, code, err := v.exec(ctx, dir, "status", "-f", "json")
+	combined := firstNonEmpty(stdout, stderr)
+	if err != nil {
+		if isTimeout(err) {
+			return timedOut("vecgrep", "status", 5*time.Second), nil
+		}
+		return withFix(unavailable("vecgrep", "status", err.Error()),
+			fixFromText(err.Error(), "vecgrep init && vecgrep index")), nil
+	}
+	if containsFold(combined, "not in a vecgrep project") {
+		return withFix(unavailable("vecgrep", "status", "not in a vecgrep project"),
+			"vecgrep init && vecgrep index"), nil
+	}
+	if containsFold(combined, "collection not found") || containsFold(combined, "failed to initialize veclite") {
+		fix := fixFromText(combined, "vecgrep reset --force && vecgrep index")
+		return withFix(unavailable("vecgrep", "status", firstLine(combined)), fix), nil
+	}
+	if code != 0 {
+		fix := fixFromText(combined, "vecgrep init && vecgrep index")
+		return withFix(unavailable("vecgrep", "status", firstNonEmpty(firstLine(stderr), firstLine(stdout), fmt.Sprintf("exit %d", code))), fix), nil
+	}
+	var st map[string]any
+	if decodeJSON(stdout, &st) != nil {
+		// Some builds print a human status with exit 0; treat non-error as ready.
+		if strings.TrimSpace(stdout) == "" && strings.TrimSpace(stderr) != "" {
+			return withFix(unavailable("vecgrep", "status", firstLine(stderr)),
+				fixFromText(stderr, "vecgrep init && vecgrep index")), nil
+		}
+		return Result{
+			Tool: "vecgrep", Operation: "status", Status: StatusAuthoritative,
+			Summary: "vecgrep status ok", Raw: stdout,
+			Facts: []Fact{{Kind: "semantic_search", Confidence: "medium", Claim: "vecgrep status ok",
+				Attributes: map[string]string{"index": "ready"}}},
+		}, nil
+	}
+	indexed := true
+	if idx, ok := st["index"].(map[string]any); ok {
+		if v, ok := idx["indexed"].(bool); ok {
+			indexed = v
+		}
+	} else if v, ok := st["indexed"].(bool); ok {
+		indexed = v
+	}
+	if !indexed {
+		return withFix(unavailable("vecgrep", "status", "vecgrep index is not searchable"),
+			"vecgrep init && vecgrep index"), nil
+	}
+	summary := "vecgrep ready"
+	if project, ok := st["project"].(string); ok && project != "" {
+		summary = "vecgrep ready: " + project
+	}
+	return Result{
+		Tool: "vecgrep", Operation: "status", Status: StatusAuthoritative,
+		Summary: summary, Raw: stdout,
+		Facts: []Fact{{Kind: "semantic_search", Confidence: "high", Claim: summary,
+			Attributes: map[string]string{"index": "ready"}}},
+	}, nil
+}
+
+// shouldRetryVecgrepKeyword reports whether a failed hybrid search is likely an
+// embedder/path problem on an existing index (keyword can still help), not a
+// missing/corrupt store (keyword cannot).
+func shouldRetryVecgrepKeyword(res Result) bool {
+	if res.Status != StatusPartial && res.Status != StatusError {
+		return false
+	}
+	if IsTimeoutResult(res) {
+		// Hybrid burned the budget on the embedder — keyword skips that path.
+		return true
+	}
+	blob := strings.ToLower(res.Summary + " " + strings.Join(res.Warnings, " "))
+	if strings.Contains(blob, "no index") || strings.Contains(blob, "not in a vecgrep project") ||
+		strings.Contains(blob, "collection not found") || strings.Contains(blob, "not_indexed") {
+		return false
+	}
+	return strings.Contains(blob, "embed") || strings.Contains(blob, "ollama") ||
+		strings.Contains(blob, "provider") || strings.Contains(blob, "profile") ||
+		strings.Contains(blob, "hybrid") || res.Status == StatusPartial
+}
+
 // vecgrepNoIndex reports that semantic discovery is unavailable because the
 // workspace has no vecgrep index — an actionable, non-fabricating signal that a
 // silent empty result would hide.
 func vecgrepNoIndex(query string) Result {
 	msg := "vecgrep semantic discovery unavailable: no index in this workspace (run `vecgrep init && vecgrep index`)"
-	return Result{
+	return withFix(Result{
 		Tool: "vecgrep", Operation: "search", Status: StatusUnavailable,
 		Summary:  msg,
 		Facts:    []Fact{{Kind: "tool_unavailable", Confidence: "unknown", Claim: msg}},
 		Warnings: []string{msg},
-	}
+	}, "vecgrep init && vecgrep index")
 }
 
 func firstNonZero(a, b int) int {

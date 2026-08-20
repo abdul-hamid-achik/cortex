@@ -90,6 +90,19 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		c.Notes = append(c.Notes, "budget: "+note)
 	}
 
+	// Sticky git-grep floor: after one not-indexed/corrupt specialist round,
+	// keep using the zero-dependency path until setup says the indexes are
+	// ready again. Avoids re-paying slow/broken vecgrep+codemap on every
+	// follow-up question while those tools are being optimized.
+	if k.discoveryFloorGitGrep(c) {
+		if k.discoveryIndexesReady(ctx) {
+			c.Notes = clearDiscoveryFloorNote(c.Notes)
+			warnings = append(warnings, "discovery indexes are ready again — resumed vecgrep→codemap routing")
+		} else {
+			return k.investigateGitGrepFloor(ctx, c, in, route, candLimit, budget, facts, warnings, true)
+		}
+	}
+
 	// Causal routing runs discovery (vecgrep/vidtrace) first; the
 	// top deduplicated file/symbol candidates are then fed into codemap as a
 	// second structural stage, recording derivedFrom provenance on the
@@ -128,37 +141,6 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 				len(subsUsed), strings.Join(subsUsed, " | ")))
 		}
 	}
-	// Recall prior durable conclusions for THIS repo first (semantic
-	// recall): cortex writes a memory on every completed task, so a related past
-	// case ("returnTo was dropped in HandleCallback…") becomes low-confidence
-	// orientation instead of being re-derived. Scoped by the cortex+repo:<name>
-	// tags the persist phase writes (never a bare repo name — "cortex" the
-	// product must not match every project also named cortex).
-	// Recall is orientation, not discovery: it stamps FIRST and therefore
-	// eats the discovery budget before any search hit lands. At candLimit per
-	// step the three recall steps could contribute 3×candLimit facts and
-	// crowd every real search hit out of a reserved-down budget (panel review
-	// 2026-07-16) — a few memories are plenty.
-	recallLimit := 3
-	if candLimit < recallLimit {
-		recallLimit = candLimit
-	}
-	steps = append([]step{
-		{tool: "vecgrep", op: "memory_recall", input: map[string]any{
-			"query": in.Question, "tags": memoryTags(c), "limit": recallLimit,
-		}},
-		// Cross-case disproof recall includes prior rejected/challenged
-		// hypotheses and definitive receipts, scoped to this repo. A second
-		// unscoped step adds the cross-repo tier. Both are model_inference/low
-		// orientation — candidatesFrom skips model_inference, so they never
-		// become codemap candidates.
-		{tool: "veclite", op: "case_recall", input: map[string]any{
-			"query": in.Question, "repo": c.Workspace.Repository, "limit": recallLimit,
-		}},
-		{tool: "veclite", op: "case_recall", input: map[string]any{
-			"query": in.Question, "repo": "", "limit": recallLimit,
-		}},
-	}, steps...)
 	if in.Video != "" {
 		steps = append([]step{{tool: "vidtrace", op: "investigate", input: map[string]any{
 			"query": in.Question, "bundle": videoBundle(in.Video), "stash": videoStash(in.Video),
@@ -208,7 +190,11 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// them. Deliberately skipped when semantic search ran and found nothing on
 	// purpose: an authoritative empty search is a real result, not a degraded one
 	// to paper over.
+	stickyNext := false
 	if semanticDiscoveryUnavailable(steps, results) {
+		// Stick for not-indexed/corrupt only. A timeout is temporary — fall back
+		// this round, but keep routing specialists next time.
+		stickyNext = !discoveryTimedOut(results)
 		if patterns := grepPatterns(in.Question); len(patterns) > 0 {
 			var greps []adapters.Result
 			for _, pattern := range patterns {
@@ -229,18 +215,18 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 			}
 			if matched {
 				warnings = append(warnings, fmt.Sprintf(
-					"semantic discovery was unavailable — fell back to a literal git grep for %q (tracked files only)", strings.Join(patterns, ", ")))
+					"semantic discovery was unavailable — fell back to a literal git grep for %q (tracked files only); further rounds stay on git-grep until indexes are ready", strings.Join(patterns, ", ")))
+			} else {
+				warnings = append(warnings, fmt.Sprintf(
+					"semantic discovery was unavailable — git grep for %q found no tracked-file hits; further rounds stay on git-grep until indexes are ready", strings.Join(patterns, ", ")))
 			}
+		} else {
+			warnings = append(warnings, "semantic discovery was unavailable — sticking to git-grep floor until indexes are ready")
 		}
 	}
 
-	// Stage 2: structural expansion. Only when codemap is the deferred
-	// structural follow-up of a discovery-first route, depth allows it, and the
-	// evidence budget is not yet exhausted. Discovery candidates are deduplicated
-	// and fed into codemap; each structural fact records derivedFrom provenance
-	// linking it back to the discovery candidate that produced it. When
-	// discovery yields no locatable candidates, the raw question falls through
-	// to codemap exactly as the previous parallel route did (byte-identical).
+	// Stage 2: structural expansion. Sticky floor is checked at the top of
+	// Investigate (prior round); this round still expands when structure works.
 	expanded := 0
 	structuralAttempted := false
 	structuralFacts := 0
@@ -297,6 +283,29 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		}
 	}
 
+	// Orientation recall runs AFTER discovery/structure so search hits and the
+	// git-grep floor keep the evidence budget. Memory is this repo's prior
+	// conclusions; case recall is repo-scoped only — cross-repo is opt-in via
+	// cortex_recall_cases.
+	recallLimit := 3
+	if candLimit < recallLimit {
+		recallLimit = candLimit
+	}
+	if leftover := budget - len(facts); leftover > 0 {
+		osteps := orientationRecallSteps(c, in.Question, recallLimit)
+		if len(osteps) > 0 {
+			ores := k.runStepsParallel(ctx, c.ID, osteps)
+			facts, warnings, _, sErr = k.stampResults(c, ores, budget, "orientation recall", facts, warnings, nil)
+			if sErr != nil {
+				return errEnvelope(c.ID, sErr.Error()), sErr
+			}
+		}
+	}
+
+	if stickyNext {
+		c.Notes = setDiscoveryFloorNote(c.Notes)
+	}
+
 	if err := k.store.Save(c); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
@@ -326,6 +335,12 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	}
 	env := k.envelope(c, summary, facts, dedupeStr(warnings), next)
 	env.Degraded = degraded
+	if gaps := discoveryGapsFromInvestigate(results, facts); len(gaps) > 0 {
+		env.Warnings = append(setupGapWarnings(gaps), env.Warnings...)
+		env.NextActions = append(env.NextActions, setupGapNext(gaps)...)
+		env.Actions = append(env.Actions, setupGapActions(gaps)...)
+	}
+	env.Facts = orientationFactsLast(env.Facts)
 	// Surface the current hypotheses (if any) so status is coherent.
 	if hs, _ := k.store.Hypotheses(c.ID); len(hs) > 0 {
 		for _, h := range hs {
@@ -528,13 +543,164 @@ func semanticDiscoveryUnavailable(steps []step, results []adapters.Result) bool 
 	for i, s := range steps {
 		if s.tool == "vecgrep" && s.op == "search" && i < len(results) {
 			switch results[i].Status {
-			case adapters.StatusUnavailable, adapters.StatusError:
+			case adapters.StatusUnavailable, adapters.StatusError, adapters.StatusPartial:
 				return true
 			}
 			return false
 		}
 	}
 	return false
+}
+
+func discoveryTimedOut(results []adapters.Result) bool {
+	for _, res := range results {
+		if res.Tool == "vecgrep" && adapters.IsTimeoutResult(res) {
+			return true
+		}
+	}
+	return false
+}
+
+const discoveryFloorNote = "discovery:floor=git-grep"
+
+func (k *Kernel) discoveryFloorGitGrep(c *domain.CaseFile) bool {
+	if c == nil {
+		return false
+	}
+	for _, note := range c.Notes {
+		if strings.TrimSpace(note) == discoveryFloorNote {
+			return true
+		}
+	}
+	return false
+}
+
+func setDiscoveryFloorNote(notes []string) []string {
+	return dedupeStr(append(notes, discoveryFloorNote))
+}
+
+func clearDiscoveryFloorNote(notes []string) []string {
+	var out []string
+	for _, note := range notes {
+		if strings.TrimSpace(note) == discoveryFloorNote {
+			continue
+		}
+		out = append(out, note)
+	}
+	return out
+}
+
+func (k *Kernel) discoveryIndexesReady(ctx context.Context) bool {
+	rep := k.Setup(ctx)
+	if len(rep.Tools) == 0 {
+		return false
+	}
+	for _, ts := range rep.Tools {
+		if ts.Status != SetupReady {
+			return false
+		}
+	}
+	return true
+}
+
+// investigateGitGrepFloor runs discovery without calling vecgrep/codemap —
+// used when specialists are known-unusable for this case.
+func (k *Kernel) investigateGitGrepFloor(ctx context.Context, c *domain.CaseFile, in InvestigateInput, route domain.Route, candLimit, budget int, facts []domain.Evidence, warnings []string, sticky bool) (domain.Envelope, error) {
+	warnings = append(warnings, "using git-grep discovery floor (vecgrep/codemap skipped until indexes are ready)")
+	if patterns := grepPatterns(in.Question); len(patterns) > 0 {
+		var greps []adapters.Result
+		for _, pattern := range patterns {
+			greps = append(greps, k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
+				Input: map[string]any{"pattern": pattern, "limit": candLimit}}))
+		}
+		var err error
+		facts, warnings, _, err = k.stampResults(c, greps, budget, "git-grep floor", facts, warnings, nil)
+		if err != nil {
+			return errEnvelope(c.ID, err.Error()), err
+		}
+	}
+	if sticky {
+		c.Notes = setDiscoveryFloorNote(c.Notes)
+	}
+	recallLimit := 3
+	if candLimit < recallLimit {
+		recallLimit = candLimit
+	}
+	if leftover := budget - len(facts); leftover > 0 {
+		osteps := orientationRecallSteps(c, in.Question, recallLimit)
+		if len(osteps) > 0 {
+			ores := k.runStepsParallel(ctx, c.ID, osteps)
+			var sErr error
+			facts, warnings, _, sErr = k.stampResults(c, ores, budget, "orientation recall", facts, warnings, nil)
+			if sErr != nil {
+				return errEnvelope(c.ID, sErr.Error()), sErr
+			}
+		}
+	}
+	if err := k.store.Save(c); err != nil {
+		return errEnvelope(c.ID, err.Error()), err
+	}
+	summary := fmt.Sprintf("investigated %q via git-grep floor: %s recorded (specialist indexes not ready; route would have been %s→%s)",
+		clipStr(in.Question, 60), pluralizeEv(len(facts)), route.First, route.FollowUp)
+	next := []string{
+		"read raw evidence with cortex read-evidence <taskId> <evidenceId> when you need detail",
+		"cortex plan — state a hypothesis with a disproof path, a change boundary, and a verification plan",
+	}
+	env := k.envelope(c, summary, facts, dedupeStr(warnings), next)
+	env.Degraded = true
+	if gaps := setupGaps(k.Setup(ctx)); len(gaps) > 0 {
+		env.Warnings = append(setupGapWarnings(gaps), env.Warnings...)
+		env.NextActions = append(env.NextActions, setupGapNext(gaps)...)
+		env.Actions = append(env.Actions, setupGapActions(gaps)...)
+	}
+	env.Facts = orientationFactsLast(env.Facts)
+	if hs, _ := k.store.Hypotheses(c.ID); len(hs) > 0 {
+		for _, h := range hs {
+			env.Hypotheses = append(env.Hypotheses, domain.ToHypView(h))
+		}
+	}
+	return env, nil
+}
+
+// orientationRecallSteps are repo-local memory and case recall. They must not
+// run as discovery: they are model_inference orientation and, if prepended,
+// consume the evidence budget before search or git grep can land.
+func orientationRecallSteps(c *domain.CaseFile, question string, recallLimit int) []step {
+	if recallLimit < 1 {
+		recallLimit = 1
+	}
+	steps := []step{{
+		tool: "vecgrep", op: "memory_recall", input: map[string]any{
+			"query": question, "tags": memoryTags(c), "limit": recallLimit,
+		},
+	}}
+	if repo := strings.TrimSpace(c.Workspace.Repository); repo != "" {
+		steps = append(steps, step{tool: "veclite", op: "case_recall", input: map[string]any{
+			"query": question, "repo": repo, "limit": recallLimit,
+		}})
+	}
+	return steps
+}
+
+// orientationFactsLast keeps discovery/structure claims ahead of prior-case
+// and memory inference so a degraded round cannot bury git-grep hits under
+// unrelated recall.
+func orientationFactsLast(facts []domain.FactView) []domain.FactView {
+	if len(facts) < 2 {
+		return facts
+	}
+	var primary, orientation []domain.FactView
+	for _, f := range facts {
+		if f.Kind == domain.KindModelInference {
+			orientation = append(orientation, f)
+			continue
+		}
+		primary = append(primary, f)
+	}
+	if len(orientation) == 0 {
+		return facts
+	}
+	return append(primary, orientation...)
 }
 
 // discoveryStageLabel names the cap stampResults reports when stage-1

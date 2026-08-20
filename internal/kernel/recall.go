@@ -351,45 +351,46 @@ func disproofNote(d domain.Disproof) string {
 
 // --- recall (orient + investigate + MCP) ---
 
-// recallPriorCases recalls prior related cases for a query, scoped to the
-// repo first then unscoped (the cross-repo tier), stamp each hit as
-// model_inference/low orientation evidence, and dedupe by task id. Returns the
-// stamped evidence, a single warning (empty on success / when veclite is
-// simply absent — absent is warn-once, not per-call), and the count for a
+// recallPriorCases recalls prior related cases for a query, scoped to this
+// case's repository, and stamps each hit as model_inference/low orientation
+// evidence, deduped by task id. Cross-repo (unscoped) recall is opt-in via
+// RecallCasesEnvelope / cortex_recall_cases so orientation cannot spend the
+// evidence budget on another project's disproofs. Returns the stamped
+// evidence, a single warning (empty on success / when veclite is simply
+// absent — absent is warn-once, not per-call), and the count for a
 // NextActions nudge.
 func (k *Kernel) recallPriorCases(ctx context.Context, c *domain.CaseFile, query string, limit int) ([]domain.Evidence, string, int) {
 	if k.recaller == nil || strings.TrimSpace(query) == "" {
 		return nil, "", 0
 	}
-	seen := map[string]bool{}
-	var facts []domain.Evidence
-	add := func(hits []adapters.RecallHit) {
-		for _, h := range hits {
-			tid := payloadStr(h.Payload, "task_id")
-			if tid != "" && seen[tid] {
-				continue
-			}
-			if tid != "" {
-				seen[tid] = true
-			}
-			claim := adapters.RecallClaim(h.Payload)
-			stableID := "ev_orientation_recall_" + strings.TrimPrefix(claimID(domain.SurfaceCode, tid+"\x00"+claim), "claim_")
-			if ev, err := k.stampEvidenceOnce(c.ID, stableID, "veclite", adapters.Fact{
-				Kind: "model_inference", Confidence: "low", Claim: claim,
-			}, c.CreatedAt); err == nil {
-				facts = append(facts, ev)
-			}
-		}
+	repo := strings.TrimSpace(c.Workspace.Repository)
+	if repo == "" {
+		return nil, "", 0
 	}
-	// Tier 1: repo-scoped (this project's prior disproofs are the strongest signal).
-	if hits, err := k.recaller.RecallCases(ctx, query, c.Workspace.Repository, limit); err == nil {
-		add(hits)
-	} else if !isMissingAdapter(err) {
+	hits, err := k.recaller.RecallCases(ctx, query, repo, limit)
+	if err != nil {
+		if isMissingAdapter(err) {
+			return nil, "", 0
+		}
 		return nil, fmt.Sprintf("cross-case recall failed: %s", err), 0
 	}
-	// Tier 2: cross-repo (unscoped) — prior disproofs from other projects.
-	if hits, err := k.recaller.RecallCases(ctx, query, "", limit); err == nil {
-		add(hits)
+	seen := map[string]bool{}
+	var facts []domain.Evidence
+	for _, h := range hits {
+		tid := payloadStr(h.Payload, "task_id")
+		if tid != "" && seen[tid] {
+			continue
+		}
+		if tid != "" {
+			seen[tid] = true
+		}
+		claim := adapters.RecallClaim(h.Payload)
+		stableID := "ev_orientation_recall_" + strings.TrimPrefix(claimID(domain.SurfaceCode, tid+"\x00"+claim), "claim_")
+		if ev, err := k.stampEvidenceOnce(c.ID, stableID, "veclite", adapters.Fact{
+			Kind: "model_inference", Confidence: "low", Claim: claim,
+		}, c.CreatedAt); err == nil {
+			facts = append(facts, ev)
+		}
 	}
 	return facts, "", len(facts)
 }

@@ -131,7 +131,7 @@ var readArtifactCmd = &cobra.Command{
 }
 
 func init() {
-	statusCmd.Flags().String("detail", "standard", "standard | full (full adds tool health)")
+	statusCmd.Flags().String("detail", "standard", "standard | full (full adds tool health and discovery index readiness)")
 	readArtifactCmd.Flags().String("path", "", "safe relative path inside an fcheap stash (empty uses bounded discovery)")
 	readArtifactCmd.Flags().Int("max-bytes", kernel.DefaultArtifactPreviewBytes,
 		"maximum source bytes to return (hard-capped at 131072)")

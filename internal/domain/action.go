@@ -65,14 +65,14 @@ func ClassifyOp(tool, op string) ActionClass {
 		if op == "remember" {
 			return ActionLocalMutation
 		}
-		if oneOf(op, "search", "similar", "memory_recall") {
+		if oneOf(op, "search", "similar", "memory_recall", "status") {
 			return ActionReadOnly
 		}
 	case "codemap":
 		if op == "annotate" {
 			return ActionLocalMutation
 		}
-		if oneOf(op, "impact", "callers", "callees", "find", "semantic", "review") {
+		if oneOf(op, "impact", "callers", "callees", "find", "semantic", "review", "status") {
 			return ActionReadOnly
 		}
 	case "cairntrace", "glyphrun":

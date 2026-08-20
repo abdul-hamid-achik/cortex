@@ -233,6 +233,7 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 	if len(bob.actions) > 0 {
 		env.Actions = append(k.redactStructuredActions(bob.actions), env.Actions...)
 	}
+	env.Facts = orientationFactsLast(env.Facts)
 	env.Degraded = bob.degraded
 	return env, nil
 }

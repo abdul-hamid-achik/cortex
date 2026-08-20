@@ -134,6 +134,157 @@ func TestSemanticDiscoveryUnavailable(t *testing.T) {
 	if semanticDiscoveryUnavailable(noSearch, []adapters.Result{{Tool: "codemap", Status: adapters.StatusUnavailable}}) {
 		t.Error("a route with no vecgrep search step must not trigger the fallback")
 	}
+	results[1].Status = adapters.StatusPartial
+	if !semanticDiscoveryUnavailable(steps, results) {
+		t.Error("a partial vecgrep search should trigger the git-grep fallback")
+	}
+}
+
+func TestInvestigateGitGrepWarnsWhenFallbackFindsNothing(t *testing.T) {
+	ws := testRepo(t)
+	vg := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusUnavailable, Summary: "not_indexed"},
+		}}
+	k := newTestKernel(t, ws, vg)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Surfaces: []domain.Surface{domain.SurfaceCode}})
+	res, err := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is quicksilver used"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, " "), "found no tracked-file hits") {
+		t.Errorf("expected an empty git-grep fallback warning, got: %v", res.Warnings)
+	}
+	foundFix := false
+	for _, a := range res.Actions {
+		if strings.Contains(a.Command, "vecgrep") {
+			foundFix = true
+		}
+	}
+	if !foundFix {
+		t.Errorf("investigate should offer the vecgrep index command, actions=%+v", res.Actions)
+	}
+}
+
+func TestInvestigateOrdersDiscoveryBeforeRecall(t *testing.T) {
+	ws := testRepo(t)
+	commitFile(t, ws, filepath.Join("src", "refund.go"), "package src\n\nvar quicksilver = 1\n")
+	vg := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusUnavailable, Summary: "not_indexed"},
+			"memory_recall": {Status: adapters.StatusAuthoritative, Facts: []adapters.Fact{
+				{Kind: "model_inference", Confidence: "low", Claim: "prior memory: unrelated teak panel"},
+			}},
+		}}
+	k := newTestKernel(t, ws, vg)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Surfaces: []domain.Surface{domain.SurfaceCode}})
+	res, err := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is quicksilver used"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Facts) < 2 {
+		t.Fatalf("want discovery + recall facts, got %+v", res.Facts)
+	}
+	if res.Facts[0].Kind == domain.KindModelInference {
+		t.Errorf("discovery facts should precede recall, got first=%+v", res.Facts[0])
+	}
+	if res.Facts[len(res.Facts)-1].Kind != domain.KindModelInference {
+		t.Errorf("recall should be last, got last=%+v", res.Facts[len(res.Facts)-1])
+	}
+}
+
+func TestInvestigateStickyGitGrepFloorSkipsSpecialists(t *testing.T) {
+	ws := testRepo(t)
+	commitFile(t, ws, filepath.Join("src", "refund.go"), "package src\n\nvar quicksilver = 1\n")
+
+	vg := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusUnavailable, Summary: "not_indexed: run vecgrep index"},
+			"status": {Status: adapters.StatusUnavailable, Summary: "not_indexed"},
+		}}
+	cm := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"status": {Status: adapters.StatusUnavailable, Summary: "not registered"},
+		}}
+	k := newTestKernel(t, ws, vg, cm)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Surfaces: []domain.Surface{domain.SurfaceCode}})
+
+	if _, err := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is quicksilver used"}); err != nil {
+		t.Fatal(err)
+	}
+	searchAfterFirst := 0
+	for _, req := range vg.requests() {
+		if req.Operation == "search" {
+			searchAfterFirst++
+		}
+	}
+	if searchAfterFirst == 0 {
+		t.Fatal("first round should attempt vecgrep search")
+	}
+
+	res, err := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is quicksilver defined"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchAfterSecond := 0
+	for _, req := range vg.requests() {
+		if req.Operation == "search" {
+			searchAfterSecond++
+		}
+	}
+	if searchAfterSecond != searchAfterFirst {
+		t.Fatalf("sticky floor must not re-call vecgrep search; before=%d after=%d", searchAfterFirst, searchAfterSecond)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, " "), "git-grep discovery floor") {
+		t.Errorf("want sticky floor warning, got %v", res.Warnings)
+	}
+}
+
+func TestInvestigateClearsStickyFloorWhenIndexesReady(t *testing.T) {
+	ws := testRepo(t)
+	vg := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"search": {Status: adapters.StatusUnavailable, Summary: "not_indexed"},
+			"status": {Status: adapters.StatusUnavailable, Summary: "not_indexed"},
+		}}
+	cm := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusAuthoritative},
+		byOp: map[string]adapters.Result{
+			"status": {Status: adapters.StatusUnavailable, Summary: "not registered"},
+		}}
+	k := newTestKernel(t, ws, vg, cm)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "g", Surfaces: []domain.Surface{domain.SurfaceCode}})
+	if _, err := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is HandleCallback"}); err != nil {
+		t.Fatal(err)
+	}
+
+	vg.byOp["status"] = adapters.Result{Status: adapters.StatusAuthoritative, Summary: "vecgrep ready"}
+	cm.byOp["status"] = adapters.Result{Status: adapters.StatusAuthoritative, Summary: "codemap ready"}
+	vg.byOp["search"] = adapters.Result{Status: adapters.StatusAuthoritative, Summary: "ok", Facts: []adapters.Fact{
+		{Kind: "code_location", Confidence: "medium", Claim: "HandleCallback in auth.go"},
+	}}
+
+	res, err := k.Investigate(context.Background(), InvestigateInput{TaskID: env.TaskID, Question: "where is HandleCallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, " "), "resumed vecgrep") {
+		t.Errorf("want resume warning, got %v", res.Warnings)
+	}
+	searches := 0
+	for _, req := range vg.requests() {
+		if req.Operation == "search" {
+			searches++
+		}
+	}
+	if searches < 2 {
+		t.Fatalf("cleared sticky floor should search again, searches=%d", searches)
+	}
 }
 
 func TestGrepPatternPrefersIdentifierThenLongest(t *testing.T) {

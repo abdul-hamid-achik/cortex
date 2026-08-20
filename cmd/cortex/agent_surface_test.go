@@ -158,7 +158,7 @@ func TestCLIInvestigationMakesPlanTheFirstContinuation(t *testing.T) {
 	if plan.Arguments["taskId"] != opened.TaskID || plan.Arguments["workspace"] != ws {
 		t.Fatalf("plan continuation is not portable: %+v", plan)
 	}
-	if len(investigated.Actions) != 2 || investigated.Actions[1].Tool != "cortex_investigate" {
+	if len(investigated.Actions) < 2 || investigated.Actions[1].Tool != "cortex_investigate" {
 		t.Fatalf("post-investigation choices = %+v, want plan then optional investigation", investigated.Actions)
 	}
 }

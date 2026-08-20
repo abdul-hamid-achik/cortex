@@ -2,10 +2,13 @@ package kernel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
+	"github.com/abdul-hamid-achik/cortex/internal/domain"
 )
 
 // SetupStatus is the readiness state of one discovery/structure dependency for
@@ -54,13 +57,9 @@ type setupProbe struct {
 }
 
 var setupProbes = []setupProbe{
-	{tool: "codemap", op: "find", fix: "codemap index"},
-	{tool: "vecgrep", op: "search", fix: "vecgrep init && vecgrep index"},
+	{tool: "codemap", op: "status", fix: "codemap index"},
+	{tool: "vecgrep", op: "status", fix: "vecgrep init && vecgrep index"},
 }
-
-// setupProbeQuery is a neutral, non-empty token used only to elicit each tool's
-// index-status signal; the query content is irrelevant to readiness.
-const setupProbeQuery = "setup"
 
 // Setup probes the workspace's setup prerequisites. It is read-only: it checks
 // git identity, config presence, and each discovery tool's install+index state,
@@ -84,10 +83,10 @@ func (k *Kernel) Setup(ctx context.Context) SetupReport {
 	return rep
 }
 
-// probeSetupTool checks one tool's install + index readiness. A search probe's
-// authoritative result means a usable index; any non-authoritative result
-// (unavailable/partial/error) from an installed tool means the index is absent
-// or broken — the same signal investigate's discovery surfaces mid-task.
+// probeSetupTool checks one tool's install + index readiness via its native
+// status operation (cheap). A search probe is deliberately avoided: vecgrep
+// search can hit a slow embedder path, and a dummy query is a poor readiness
+// signal while specialists are being optimized for latency.
 func (k *Kernel) probeSetupTool(ctx context.Context, p setupProbe) ToolSetup {
 	ts := ToolSetup{Tool: p.tool, FixCommand: p.fix}
 	a := k.reg.Get(p.tool)
@@ -98,20 +97,48 @@ func (k *Kernel) probeSetupTool(ctx context.Context, p setupProbe) ToolSetup {
 	}
 	ts.Installed = true
 	res, err := a.Execute(ctx, adapters.Request{Operation: p.op, Input: map[string]any{
-		"dir": k.cfg.Workspace, "query": setupProbeQuery, "top": 1, "limit": 1,
+		"dir": k.cfg.Workspace,
 	}})
 	if err != nil {
 		ts.Status = SetupError
 		ts.Detail = err.Error()
 		return ts
 	}
+	if fix := resultFixCommand(res); fix != "" {
+		ts.FixCommand = fix
+	}
 	if res.Status == adapters.StatusAuthoritative {
 		ts.Status = SetupReady
+		return ts
+	}
+	if adapters.IsTimeoutResult(res) {
+		ts.Status = SetupError
+		ts.Detail = res.Summary
+		ts.FixCommand = "" // timeout is not fixed by indexing
+		return ts
+	}
+	if res.Status == adapters.StatusPartial {
+		// Indexed but stale is still usable with caution — keep FixCommand and
+		// report needs_index so agents refresh before trusting structure.
+		ts.Status = SetupNeedsIndex
+		ts.Detail = res.Summary
 		return ts
 	}
 	ts.Status = SetupNeedsIndex
 	ts.Detail = res.Summary
 	return ts
+}
+
+func resultFixCommand(res adapters.Result) string {
+	if adapters.IsTimeoutResult(res) {
+		return ""
+	}
+	for _, f := range res.Facts {
+		if fix := strings.TrimSpace(f.Attributes["fix"]); fix != "" {
+			return fix
+		}
+	}
+	return ""
 }
 
 // hasProjectConfig reports whether a project-level cortex.yaml/yml exists in
@@ -128,4 +155,134 @@ func hasProjectConfig(workspace string) bool {
 		}
 	}
 	return false
+}
+
+// setupGaps lists discovery/structure tools that are installed-but-unusable or
+// missing, with the exact command that fixes each gap.
+func setupGaps(rep SetupReport) []ToolSetup {
+	var out []ToolSetup
+	for _, ts := range rep.Tools {
+		if ts.Status != SetupNeedsIndex && ts.Status != SetupError {
+			continue
+		}
+		out = append(out, ts)
+	}
+	return out
+}
+
+func discoveryGapsFromInvestigate(results []adapters.Result, facts []domain.Evidence) []ToolSetup {
+	seen := map[string]bool{}
+	var gaps []ToolSetup
+	add := func(tool, detail, fix string, status SetupStatus) {
+		if tool != "vecgrep" && tool != "codemap" {
+			return
+		}
+		if seen[tool] {
+			return
+		}
+		seen[tool] = true
+		if strings.TrimSpace(fix) == "" && status == SetupNeedsIndex {
+			fix = setupFixCommand(tool)
+		}
+		gaps = append(gaps, ToolSetup{
+			Tool: tool, Installed: true, Status: status, Detail: detail,
+			FixCommand: fix,
+		})
+	}
+	for _, res := range results {
+		switch res.Status {
+		case adapters.StatusUnavailable, adapters.StatusError, adapters.StatusPartial:
+			if adapters.IsTimeoutResult(res) {
+				// Slow specialist ≠ missing index — surface as error, no index fix.
+				add(res.Tool, res.Summary, "", SetupError)
+				continue
+			}
+			st := SetupNeedsIndex
+			if res.Status == adapters.StatusError {
+				st = SetupError
+			}
+			add(res.Tool, res.Summary, resultFixCommand(res), st)
+		}
+	}
+	for _, ev := range facts {
+		if ev.Kind != domain.KindToolUnavailable {
+			continue
+		}
+		claim := strings.ToLower(ev.Claim)
+		if !strings.Contains(claim, "not_indexed") && !strings.Contains(claim, "index") &&
+			!strings.Contains(claim, "not registered") && !strings.Contains(claim, "collection not found") {
+			continue
+		}
+		add(ev.Source.Tool, ev.Claim, "", SetupNeedsIndex)
+	}
+	return gaps
+}
+
+func setupFixCommand(tool string) string {
+	for _, p := range setupProbes {
+		if p.tool == tool {
+			return p.fix
+		}
+	}
+	return ""
+}
+
+func setupGapWarnings(gaps []ToolSetup) []string {
+	var out []string
+	for _, ts := range gaps {
+		detail := strings.TrimSpace(ts.Detail)
+		if detail == "" && ts.FixCommand != "" {
+			detail = "run: " + ts.FixCommand
+		}
+		out = append(out, fmt.Sprintf("%s discovery is %s — %s", ts.Tool, ts.Status, detail))
+	}
+	return out
+}
+
+func setupGapNext(gaps []ToolSetup) []string {
+	var out []string
+	for _, ts := range gaps {
+		if strings.TrimSpace(ts.FixCommand) == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("run `%s` — %s is %s", ts.FixCommand, ts.Tool, ts.Status))
+	}
+	return out
+}
+
+func setupGapActions(gaps []ToolSetup) []domain.NextAction {
+	var out []domain.NextAction
+	for _, ts := range gaps {
+		if strings.TrimSpace(ts.FixCommand) == "" {
+			continue
+		}
+		out = append(out, domain.NextAction{
+			Command:   ts.FixCommand,
+			Reason:    fmt.Sprintf("make %s searchable in this workspace before treating investigate as discovery", ts.Tool),
+			BlockedBy: []string{string(ts.Status)},
+		})
+	}
+	return out
+}
+
+func annotateHealthWithSetup(health []adapters.HealthReport, setup SetupReport) {
+	byTool := map[string]ToolSetup{}
+	for _, ts := range setup.Tools {
+		byTool[ts.Tool] = ts
+	}
+	for i := range health {
+		ts, ok := byTool[health[i].Tool]
+		if !ok {
+			continue
+		}
+		health[i].Index = string(ts.Status)
+		health[i].FixCommand = ts.FixCommand
+		if ts.Detail != "" && health[i].Detail == "" {
+			health[i].Detail = ts.Detail
+		} else if ts.Status == SetupNeedsIndex || ts.Status == SetupError {
+			if health[i].Detail == "" {
+				health[i].Detail = string(ts.Status)
+			}
+		}
+	}
 }

@@ -5,6 +5,34 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Honest specialist timeouts** — deadline exceeded is `partial` with `index=timeout`, not
+  `needs_index`. Setup/investigate no longer recommend `init`/`index` for a slow tool; sticky
+  git-grep only sticks after not-indexed/corrupt rounds. Vecgrep search budget is 30s; status
+  probes stay on a 5s deadline. Hybrid timeouts still retry once as keyword.
+- **Codemap status stale object** — current `codemap status --json` emits
+  `stale:{changed,new,deleted}`; Cortex accepts that shape (and the legacy int) so setup no
+  longer mis-reports a healthy graph as unparseable.
+- **Cheap specialist readiness probes** — `cortex setup` and `status --detail full` ask
+  `codemap status` / `vecgrep status` instead of dummy find/search, so readiness does not wait
+  on a slow embedder path while those tools are being optimized.
+- **Vecgrep hybrid → keyword retry** — when hybrid fails for an existing index (embedder /
+  profile / provider), Cortex retries once as keyword rather than waiting on a dead Ollama path.
+- **Sticky git-grep discovery floor** — after a not-indexed/corrupt semantic round, follow-up
+  investigate rounds stay on git-grep until setup reports both indexes ready again (avoids
+  re-paying broken/slow vecgrep+codemap every question).
+- **Discovery index readiness on `status --detail full`** — tool health still reports
+  whether the binary answered, and now also records `index` (`ready` / `needs_index` /
+  `error`) plus `fixCommand` for vecgrep and codemap. Investigate degraded rounds offer
+  the same fix commands instead of implying search succeeded.
+- **Repo-scoped recall during orient/investigate** — automatic prior-case recall no
+  longer runs the unscoped cross-repo tier. Use `cortex recall-cases` / `cortex_recall_cases`
+  (empty `--repo`) when you want other projects. Investigate stamps memory/case recall
+  *after* discovery so git-grep and search hits keep the evidence budget.
+- **Git-grep fallback is always named** — when semantic search is unavailable, partial,
+  or errored, Cortex warns whether the literal fallback matched tracked files or found
+  nothing.
+
 ## [0.16.4] — 2026-08-17
 
 ### Added

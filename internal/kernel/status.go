@@ -136,8 +136,16 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 		}
 	}
 
+	var discoveryGaps []ToolSetup
 	if detail == "full" {
 		rep.ToolHealth = k.reg.Health(ctx)
+		setup := k.Setup(ctx)
+		annotateHealthWithSetup(rep.ToolHealth, setup)
+		discoveryGaps = setupGaps(setup)
+		if len(discoveryGaps) > 0 {
+			rep.Warnings = append(rep.Warnings, setupGapWarnings(discoveryGaps)...)
+			rep.Actions = append(setupGapActions(discoveryGaps), rep.Actions...)
+		}
 	}
 
 	if len(rep.MissingVerification) > 0 && c.Status != domain.PhaseComplete {
@@ -168,13 +176,13 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	}
 	if len(rep.StaleVerification) > 0 && assessment.Outcome != VerificationVerified {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d verification receipt(s) are stale because HEAD or the dirty diff changed", len(rep.StaleVerification)))
-		rep.NextActions = append([]string{"cortex verify — rerun verifiers for the current revision/diff"}, nextForPhase(c.Status)...)
+		rep.NextActions = append(setupGapNext(discoveryGaps), append([]string{"cortex verify — rerun verifiers for the current revision/diff"}, nextForPhase(c.Status)...)...)
 		k.redactStatusReport(&rep)
 		return rep, nil
 	}
-	rep.NextActions = nextForPhase(c.Status)
+	rep.NextActions = append(setupGapNext(discoveryGaps), nextForPhase(c.Status)...)
 	if c.Status == domain.PhaseVerifying && assessment.Outcome == VerificationVerified {
-		rep.NextActions = []string{"cortex remember — preserve the verified outcome"}
+		rep.NextActions = append(setupGapNext(discoveryGaps), "cortex remember — preserve the verified outcome")
 	}
 	k.redactStatusReport(&rep)
 	return rep, nil
@@ -211,6 +219,8 @@ func (k *Kernel) redactStatusReport(rep *StatusReport) {
 	rep.Actions = k.redactStructuredActions(rep.Actions)
 	for i := range rep.ToolHealth {
 		rep.ToolHealth[i].Detail = k.red.String(rep.ToolHealth[i].Detail)
+		rep.ToolHealth[i].FixCommand = k.red.String(rep.ToolHealth[i].FixCommand)
+		rep.ToolHealth[i].Index = k.red.String(rep.ToolHealth[i].Index)
 	}
 }
 

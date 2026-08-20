@@ -252,7 +252,7 @@ type unarchiveInput struct {
 
 type statusInput struct {
 	TaskID    string `json:"taskId" jsonschema:"the task to report on"`
-	Detail    string `json:"detail,omitempty" jsonschema:"standard | full (full adds tool health)"`
+	Detail    string `json:"detail,omitempty" jsonschema:"standard | full (full adds tool health and discovery index readiness)"`
 	Workspace string `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -385,7 +385,7 @@ func (s *Server) register() {
 		"Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome.",
 		toolBehavior{idempotent: true, openWorld: true, sharedEnvelope: true}), s.handleRemember)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_status", "Read task status",
-		"Report a task's canonical verification outcome, bounded claimProofs for stable claim ids, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health.",
+		"Report a task's canonical verification outcome, bounded claimProofs for stable claim ids, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health plus discovery index readiness (index/fixCommand).",
 		toolBehavior{readOnly: true, additive: true}), s.handleStatus)
 	if s.profile == ProfileAll {
 		sdkmcp.AddTool(s.srv, s.tool("cortex_list_tasks", "List workspace tasks",

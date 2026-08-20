@@ -2,10 +2,13 @@ package adapters
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // pluralize renders "N thing" / "N things" with the count.
@@ -53,6 +56,124 @@ func firstLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// withFix attaches a suggested repair command onto the first fact's Attributes
+// so setup/status/investigate can surface the specialist's own hint instead of
+// a generic "run index".
+func withFix(res Result, fix string) Result {
+	fix = strings.TrimSpace(fix)
+	if fix == "" {
+		return res
+	}
+	if len(res.Facts) == 0 {
+		res.Facts = []Fact{{Kind: "tool_unavailable", Confidence: "unknown", Claim: res.Summary}}
+	}
+	if res.Facts[0].Attributes == nil {
+		res.Facts[0].Attributes = map[string]string{}
+	}
+	res.Facts[0].Attributes["fix"] = fix
+	if res.Facts[0].Attributes["index"] == "" {
+		res.Facts[0].Attributes["index"] = "needs_index"
+	}
+	return res
+}
+
+// failExec maps a runner error to timedOut (honest slow/hung) or unavailable.
+func failExec(tool, op string, err error, budget time.Duration) Result {
+	if isTimeout(err) {
+		return timedOut(tool, op, budget)
+	}
+	return unavailable(tool, op, err.Error())
+}
+
+// isTimeout reports whether err is (or wraps) a deadline exceeded.
+func isTimeout(err error) bool {
+	return err != nil && errors.Is(err, context.DeadlineExceeded)
+}
+
+// timedOut is an honest partial result: the specialist may be slow or hung,
+// not necessarily unindexed. Setup must not recommend `init`/`index` for this.
+func timedOut(tool, op string, budget time.Duration) Result {
+	msg := fmt.Sprintf("%s %s timed out after %s — specialist may be slow, not necessarily unindexed",
+		tool, op, budget.Round(time.Millisecond))
+	return Result{
+		Tool: tool, Operation: op, Status: StatusPartial, Summary: msg,
+		Warnings: []string{msg},
+		Facts: []Fact{{
+			Kind: "tool_unavailable", Confidence: "unknown", Claim: msg,
+			Attributes: map[string]string{"index": "timeout"},
+		}},
+	}
+}
+
+// IsTimeoutResult reports whether a Result was classified as an adapter timeout.
+func IsTimeoutResult(res Result) bool {
+	if strings.Contains(strings.ToLower(res.Summary), "timed out") {
+		return true
+	}
+	for _, f := range res.Facts {
+		if f.Attributes["index"] == "timeout" {
+			return true
+		}
+	}
+	return false
+}
+
+// fixFromText pulls a backticked command from specialist error text, falling
+// back to a safe default. Prefer the tool's own hint when present.
+func fixFromText(text, fallback string) string {
+	lower := strings.ToLower(text)
+	// Prefer the longest backtick command that looks like a tool invocation.
+	best := ""
+	for {
+		start := strings.Index(text, "`")
+		if start < 0 {
+			break
+		}
+		rest := text[start+1:]
+		end := strings.Index(rest, "`")
+		if end < 0 {
+			break
+		}
+		cmd := strings.TrimSpace(rest[:end])
+		text = rest[end+1:]
+		if cmd == "" {
+			continue
+		}
+		if strings.Contains(cmd, "codemap") || strings.Contains(cmd, "vecgrep") {
+			if len(cmd) > len(best) {
+				best = cmd
+			}
+		}
+	}
+	if best != "" {
+		return best
+	}
+	switch {
+	case strings.Contains(lower, "reset --force"):
+		return "vecgrep reset --force && vecgrep index"
+	case strings.Contains(lower, "index --reindex"):
+		return "codemap index --reindex"
+	case strings.Contains(lower, "vecgrep init"):
+		return "vecgrep init && vecgrep index"
+	case strings.Contains(lower, "codemap index"):
+		return "codemap index"
+	}
+	return fallback
+}
+
+// containsFold is a case-insensitive substring test.
+func containsFold(haystack, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if strings.EqualFold(haystack[i:i+len(needle)], needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // requireFields verifies that each named key is present and non-null in a JSON

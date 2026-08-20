@@ -1991,11 +1991,12 @@ func (d *deadlineAdapter) Execute(ctx context.Context, _ adapters.Request) (adap
 // fakeRecaller is a test stand-in for the veclite adapter's cross-case recall
 // surface. It records every IndexCase call and serves canned RecallCases hits.
 type fakeRecaller struct {
-	indexed   []adapters.IndexRecord
-	indexErr  error
-	indexCtx  error
-	hits      []adapters.RecallHit
-	recallErr error
+	indexed    []adapters.IndexRecord
+	indexErr   error
+	indexCtx   error
+	hits       []adapters.RecallHit
+	recallErr  error
+	recallRepo []string
 }
 
 func (f *fakeRecaller) IndexCase(ctx context.Context, rec adapters.IndexRecord) error {
@@ -2005,6 +2006,7 @@ func (f *fakeRecaller) IndexCase(ctx context.Context, rec adapters.IndexRecord) 
 }
 
 func (f *fakeRecaller) RecallCases(_ context.Context, query, repo string, limit int) ([]adapters.RecallHit, error) {
+	f.recallRepo = append(f.recallRepo, repo)
 	if f.recallErr != nil {
 		return nil, f.recallErr
 	}
@@ -2430,6 +2432,9 @@ func TestOrientRecallsPriorCases(t *testing.T) {
 	if !strings.Contains(strings.Join(env.NextActions, " "), "prior related case") {
 		t.Errorf("orient should nudge to read prior cases, nextActions=%v", env.NextActions)
 	}
+	if len(fr.recallRepo) != 1 || fr.recallRepo[0] == "" {
+		t.Errorf("orient recall must be repo-scoped only, got repos=%v", fr.recallRepo)
+	}
 }
 
 func TestRecallBestEffortWhenAbsent(t *testing.T) {
@@ -2486,5 +2491,14 @@ func TestInvestigateRunsCaseRecallStep(t *testing.T) {
 	reqs := codemap.requests()
 	if len(reqs) == 0 || reqs[0].Operation != "find" || reqs[0].Str("query") != "where is the login callback wired up" {
 		t.Errorf("expected the no-candidate codemap fallback (find on the raw question); got %d reqs %+v", len(reqs), reqs)
+	}
+	var unscoped bool
+	for _, req := range vl.requests() {
+		if req.Operation == "case_recall" && req.Str("repo") == "" {
+			unscoped = true
+		}
+	}
+	if unscoped {
+		t.Error("investigate must not run unscoped cross-repo case_recall")
 	}
 }

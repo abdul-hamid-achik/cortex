@@ -257,8 +257,18 @@ func renderStatus(rep kernel.StatusReport) {
 			mark := paint(styOK, "●")
 			if !h.Available {
 				mark = paint(styErr, "○")
+			} else if h.Index == "needs_index" || h.Index == "error" {
+				mark = paint(styWarn, "●")
 			}
-			pf(w, "  %s %s %s\n", mark, h.Tool, paint(styMuted, h.Detail))
+			detail := h.Detail
+			if h.FixCommand != "" && h.Index != "" && h.Index != "ready" {
+				if detail != "" {
+					detail += " — " + h.FixCommand
+				} else {
+					detail = h.FixCommand
+				}
+			}
+			pf(w, "  %s %s %s\n", mark, h.Tool, paint(styMuted, detail))
 		}
 	}
 }

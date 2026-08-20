@@ -9,20 +9,20 @@
     "ok": true,
     "taskId": "$TASK_ID_1",
     "phase": "investigating",
-    "summary": "investigated \"HandleCallback\" via codemap→codemap: 4 evidence items recorded (a known symbol resolves directly with the code graph)",
+    "summary": "investigated \"HandleCallback\" via codemap→codemap: 3 evidence items recorded (a known symbol resolves directly with the code graph)",
     "facts": [
       {
         "id": "$EVIDENCE_ID_1",
-        "claim": "vecgrep is unavailable; dependent results are blocked",
+        "claim": "codemap is unavailable; dependent results are blocked",
         "confidence": "unknown",
-        "source": "vecgrep",
+        "source": "codemap",
         "kind": "tool_unavailable"
       },
       {
         "id": "$EVIDENCE_ID_2",
-        "claim": "veclite is unavailable; dependent results are blocked",
+        "claim": "vecgrep is unavailable; dependent results are blocked",
         "confidence": "unknown",
-        "source": "veclite",
+        "source": "vecgrep",
         "kind": "tool_unavailable"
       },
       {
@@ -31,24 +31,19 @@
         "confidence": "unknown",
         "source": "veclite",
         "kind": "tool_unavailable"
-      },
-      {
-        "id": "$EVIDENCE_ID_4",
-        "claim": "codemap is unavailable; dependent results are blocked",
-        "confidence": "unknown",
-        "source": "codemap",
-        "kind": "tool_unavailable"
       }
     ],
     "warnings": [
+      "codemap discovery is needs_index — codemap unavailable in fixture",
       "degraded: one or more discovery tools did not return an authoritative result this round — treat facts below with extra caution, not as a clean search",
+      "codemap unavailable in fixture",
       "vecgrep unavailable in fixture",
-      "veclite unavailable in fixture",
-      "codemap unavailable in fixture"
+      "veclite unavailable in fixture"
     ],
     "nextActions": [
       "read raw evidence with cortex read-evidence <taskId> <evidenceId> when you need detail",
-      "cortex plan — state a hypothesis with a disproof path, a change boundary, and a verification plan"
+      "cortex plan — state a hypothesis with a disproof path, a change boundary, and a verification plan",
+      "run `codemap index` — codemap is needs_index"
     ],
     "actions": [
       {
@@ -75,6 +70,13 @@
         },
         "inputs": [
           "question"
+        ]
+      },
+      {
+        "command": "codemap index",
+        "reason": "make codemap searchable in this workspace before treating investigate as discovery",
+        "blockedBy": [
+          "needs_index"
         ]
       }
     ],

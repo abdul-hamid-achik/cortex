@@ -76,10 +76,15 @@ func (r *Registry) WithCapability(c Capability) []Adapter {
 }
 
 // HealthReport is the per-tool health snapshot used during orientation.
+// Available means the binary answered a cheap probe (typically --version).
+// Index is workspace readiness for discovery/structure tools and is omitted
+// when the caller did not run an index probe.
 type HealthReport struct {
-	Tool      string `json:"tool"`
-	Available bool   `json:"available"`
-	Detail    string `json:"detail,omitempty"`
+	Tool       string `json:"tool"`
+	Available  bool   `json:"available"`
+	Index      string `json:"index,omitempty"` // ready | needs_index | missing | error
+	Detail     string `json:"detail,omitempty"`
+	FixCommand string `json:"fixCommand,omitempty"`
 }
 
 // Health probes every adapter concurrently with a short per-tool budget and

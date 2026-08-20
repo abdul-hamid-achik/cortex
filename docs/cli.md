@@ -105,8 +105,12 @@ When semantic discovery (vecgrep) **cannot run** — no index in the workspace, 
 missing — Cortex falls back to a literal `git grep` over tracked files so discovery still has a
 zero-dependency floor (git is the only hard requirement). The matches are recorded as
 low-confidence `code_location` candidates (one per file, with a snippet) and can still be expanded
-by the structural stage. This fallback fires only when semantic search is *unavailable*; a clean
-search that legitimately finds nothing is reported as such, never papered over with literal noise.
+by the structural stage on that round. Follow-up investigate rounds then **stick to the git-grep
+floor** until `cortex setup` reports both specialist indexes ready again — so a slow or broken
+vecgrep/codemap path is not re-paid on every question. This fallback fires only when semantic
+search is *unavailable*; a clean search that legitimately finds nothing is reported as such, never
+papered over with literal noise. When hybrid search fails on an existing index (embedder/profile),
+Cortex retries once as keyword before degrading.
 
 ### `cortex route [question]`
 
@@ -282,7 +286,7 @@ acceptance contract. Every registered criterion needs current bound proof before
 ### `cortex status <taskId>`
 
 Phase, unresolved hypotheses, scope drift, missing verification, and (with `--detail full`) tool
-health. JSON includes case `revision`, actor/parent/children, lease, pending decision, structured
+health plus discovery index readiness (`index` / `fixCommand` for vecgrep and codemap). JSON includes case `revision`, actor/parent/children, lease, pending decision, structured
 `actions`, and one canonical `verificationOutcome`: `verified`, `partial`, `failed`, or
 `unverified`. For registered criteria (and legacy stable named claims), JSON also includes a
 bounded `claimProofs` manifest with exact total/truncation metadata, receipt/batch identity,
@@ -498,7 +502,7 @@ Keys: `↑/↓` navigate · `g/G` jump · `Page Up/Page Down` (or `Ctrl-U/Ctrl-D
 | `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
 | `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
 | `cortex init` | write a starter `cortex.yaml`, detecting your test runner (Go/Rust/Node/Python) as a command verifier; refuses to clobber an existing config unless `--force` |
-| `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** — with the exact command to fix each gap; `--trust-commands` grants configured verifier argv outside the repo |
+| `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** (via cheap native `status` probes, not dummy search) — with the exact command to fix each gap; `--trust-commands` grants configured verifier argv outside the repo |
 | `cortex config` | resolved workspace/storage paths, budget, recall policy, safe verifier metadata (argv omitted), redaction count, and applied `cortex.yaml` sources |
 | `cortex abort <taskId> <reason>` | stop a task without deleting evidence |
 | `cortex read-evidence <taskId> <evidenceId>` | print a full evidence record (with its `rawRef`) |

@@ -237,9 +237,9 @@ definitively passes/fails, the case is redaction-gated (sensitive records are **
 masked) and indexed into a veclite collection. At orient and investigate time, prior related
 cases surface as low-confidence `model_inference` evidence — "PRIOR CASE task_x (repo Y):
 hypothesis '…' was REJECTED — …" — so the model reads prior disproofs before re-deriving a theory.
-Recall is two-tier: repo-scoped first (this project's prior disproofs are the strongest signal),
-then cross-repo. Best-effort: a missing veclite or unreachable ollama degrades to a warning, never
-a hard failure.
+Automatic recall is **repo-scoped** (this project's prior disproofs). Cross-repo recall is
+opt-in via `cortex recall-cases` / `cortex_recall_cases` with an empty `--repo`. Best-effort: a
+missing veclite or unreachable ollama degrades to a warning, never a hard failure.
 
 ## Tool routing
 
@@ -264,7 +264,10 @@ Routing is **causal, not parallel**: bounded discovery (vecgrep/vidtrace) runs f
 codemap as a second structural stage. Each structural fact records `derivedFrom` links back to the
 discovery evidence whose candidate produced it, preserving symptom → candidate → structural
 expansion provenance. When discovery yields no locatable candidates, the question itself falls
-through to codemap (the previous behavior).
+through to codemap (the previous behavior). When semantic discovery is unavailable, Cortex falls
+back to git-grep for that round and keeps subsequent rounds on that floor until `cortex setup`
+reports both specialist indexes ready — so slow or broken vecgrep/codemap work is not re-paid
+every question.
 
 The summary is honest about that second stage. When the structural stage ran but resolved nothing,
 the summary says so ("structural stage (codemap) returned no results") and warns that the evidence

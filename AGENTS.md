@@ -109,7 +109,7 @@ The recommended change path is retry-safe and makes change ownership explicit:
 | `begin-change` | planned → changing | an actor acquires the bounded, expiring lease; competing actors lose the CAS race |
 | `verify` | changing → verifying | typed claim→surface→verifier/contract receipts; registered IDs require their exact stored statement; leased tasks require the owner actor; no-diff changes require an explicit no-op acknowledgment |
 | `remember` | verifying → persisting → complete | normal completion requires `verified`; registered criteria always require current bound proof; legacy tasks may preserve non-green outcomes explicitly |
-| `status` / `show` | — | canonical `verified / partial / failed / unverified` assessment, bounded claim-proof manifest, decisions, lease, scope, and structured actions |
+| `status` / `show` | — | canonical `verified / partial / failed / unverified` assessment, bounded claim-proof manifest, decisions, lease, scope, and structured actions; `status --detail full` also reports discovery index readiness (`index` / `fixCommand`) |
 
 These are structural invariants (see `internal/domain/case.go` `transitions`, and the `Validate`
 methods). They are enforced by state, not by prompting — the model can't skip the disproof path
@@ -184,10 +184,15 @@ task install         # go install ./cmd/cortex
   **vecgrep uses `-f json` and `-n N`** (not `--json`/`--top`); **glyph uses `--format json`**
   and that flag must **precede** subcommand flags. `cairn`/`glyph` MCP subcommand is bare
   (`cairn mcp`, `glyph mcp`); `fcheap`/`mcphub` use `mcp serve`. See each adapter's doc comment.
-- **vecgrep has no `doctor`** — health is `vecgrep --version`. Search first requests
-  `-f json-envelope`: Cortex accepts schema v1 and the transitional schema-version-zero shape,
-  rejects unknown explicit majors, and falls back to the legacy bare-array `-f json` output.
-  Similar and memory outputs remain bare JSON arrays.
+- **vecgrep has no `doctor`** — binary health is `vecgrep --version`. Index readiness uses
+  `vecgrep status -f json` (cheap; setup/status must not probe with a dummy hybrid search that can
+  hit a slow embedder). Search first requests `-f json-envelope`: Cortex accepts schema v1 and the
+  transitional schema-version-zero shape, rejects unknown explicit majors, and falls back to the
+  legacy bare-array `-f json` output. Hybrid failures on an existing index retry once as keyword.
+  Deadline exceeded is classified as timeout (not `needs_index`); sticky git-grep only follows
+  not-indexed/corrupt rounds. Similar and memory outputs remain bare JSON arrays. Codemap readiness
+  uses `codemap status --json`. After a not-indexed/corrupt semantic round, investigate sticks to
+  git-grep until both indexes are ready again.
 - **Bob v0.4.0/BOB-5 is optional and manifest-gated.** Health uses `bob --json version`. Cortex
   calls `bob --json context <absolute-workspace> --profile compact` only when `bob.yaml` exists,
   and planning classifies deduplicated, bounded paths with
@@ -294,9 +299,11 @@ task install         # go install ./cmd/cortex
 ### Documentation and release delivery
 
 - Documentation and tagged releases are independent pipelines. Vercel Git Integration is the only
-  documentation deployment authority: pushes to `main` build the `docs/` Root Directory using
-  `docs/vercel.json` (`bun install --frozen-lockfile`, `bun run build`, output
-  `.vitepress/dist`). CI may test and build docs, but it does not deploy them.
+  documentation deployment authority: **only pushes to `main` auto-build**, and only when
+  `docs/`, lockfiles, or `docs/vercel.json` change (`git.deploymentEnabled` + `ignoreCommand` in
+  `docs/vercel.json`). Feature branches do not create Preview deployments. CI may test and build
+  docs, but it does not deploy them. Do not `vercel promote` the docs site; `main` *is* the
+  release. Do not add GitHub Pages.
 - `.github/workflows/release.yml` is tag-only. It runs repository checks and GoReleaser to publish
   GitHub binaries/checksums and Homebrew metadata. It must never build or deploy the docs site, call
   the Vercel CLI/API, or depend on a documentation-provider deployment succeeding.
@@ -306,7 +313,8 @@ task install         # go install ./cmd/cortex
   other tag-to-docs version channel.
 - Do not add `vercel link`, `vercel pull`, `vercel build`, or `vercel deploy` to GitHub Actions. Do
   not commit Vercel tokens or org/project IDs, configure them as GitHub Actions secrets/environment,
-  or set `git.deploymentEnabled: false`. Vercel's local ignored state may retain its normal project
+  or set `git.deploymentEnabled` so anything other than `main` deploys. Keep `*: false` / `main: true`.
+  Vercel's local ignored state may retain its normal project
   mapping. The project Root Directory remains `docs`; linking from inside `docs/` can incorrectly
   produce `docs/docs`.
 - The release workflow's only manually configured credential is `HOMEBREW_TAP_TOKEN`; GitHub
