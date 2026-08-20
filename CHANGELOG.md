@@ -5,6 +5,8 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-08-20
+
 ### Changed
 - **Honest specialist timeouts** — deadline exceeded is `partial` with `index=timeout`, not
   `needs_index`. Setup/investigate no longer recommend `init`/`index` for a slow tool; sticky
