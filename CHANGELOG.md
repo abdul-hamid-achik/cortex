@@ -5,6 +5,12 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-08-21
+
+### Fixed
+- **Release lint** — drop unused `junkDiscoveryPath` wrapper so `task check:verify` passes
+  (`v0.18.0` tag burned; do not reuse).
+
 ## [0.18.0] — 2026-08-21
 
 ### Added

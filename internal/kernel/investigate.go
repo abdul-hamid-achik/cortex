@@ -512,10 +512,6 @@ func junkDiscoveryFact(f adapters.Fact) bool {
 	return adapters.JunkDiscoveryFact(f)
 }
 
-func junkDiscoveryPath(path string) bool {
-	return adapters.JunkDiscoveryPath(path)
-}
-
 // normalizeDepth validates and canonicalizes quick | standard | deep. Unknown
 // values are rejected rather than silently becoming standard, since that can
 // launch more adapter work than the caller intended.
