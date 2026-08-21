@@ -5,6 +5,8 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-08-21
+
 ### Added
 - **Review-mode discovery bias** — `mode=review` investigate prefers `git changed_files` +
   `codemap review` over open-ended vecgrep; deep depth may still run a capped keyword search.

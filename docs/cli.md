@@ -53,6 +53,11 @@ success rule; the same id and exact statement must later appear in a typed verif
 | `--parent` | — | parent task ID for same-workspace delegated work |
 | `--idempotency-key` | — | stable, non-secret retry identity |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
+| `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
+
+`mode=review` biases later `investigate` rounds toward git changed-files + `codemap review`
+instead of open-ended semantic search (vecgrep only at `--depth deep`). Use `--seed` for vault
+notes or handoff packets that should orient the case without becoming verification proof.
 
 ### `cortex start <goal>`
 
@@ -69,6 +74,7 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 | `--risk` | `medium` | `low` \| `medium` \| `high` |
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
+| `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 ### `cortex investigate <taskId> <question>`
 
@@ -87,6 +93,11 @@ cortex investigate task_06FK… "where is the OAuth return URL handled"
 Depth and surface overrides are validated before Cortex invokes an adapter. Unknown values fail
 explicitly instead of silently falling back to a different route or investigation cost.
 
+Each round also has a wall-clock budget — `quick` 20s / `standard` 45s / `deep` 90s (or the
+caller's tighter deadline). When the budget is exhausted, Cortex returns the evidence gathered so
+far instead of hanging until an MCP gateway timeout; stage-2 structure is skipped if the budget is
+already gone.
+
 `--depth deep` widens the per-tool candidate budget and decomposes a compound question ("where is
 X created, how is Y validated, and where is Z enforced") into up to **five** targeted sub-queries,
 each searched separately. The split is a whitespace-gated heuristic — code tokens such as
@@ -95,19 +106,21 @@ runs unchanged. `quick` and `standard` never decompose.
 
 Discovery hits are quality-gated before they become evidence: heading-only, bare-import, and
 punctuation-fragment chunks are filtered (import lines are kept when the question itself asks about
-imports), and when every remaining hit scores below 0.10 the round records **zero facts** and
-reports **"no strong candidates"**. Treat that as nothing found — rephrase the question or ask
-about a specific symbol — not as weak evidence. The summary also states when the structural
-(codemap) stage ran but returned no results, so discovery-only evidence is never dressed up as
-resolved structure.
+imports), junk paths (`.agent/`, `dist/`, `node_modules/`, case stores, …) are dropped, keyword
+fallback is capped at 8 hits, and when every remaining hit scores below 0.10 the round records
+**zero facts** and reports **"no strong candidates"**. Treat that as nothing found — rephrase the
+question or ask about a specific symbol — not as weak evidence. The summary also states when the
+structural (codemap) stage ran but returned no results, so discovery-only evidence is never dressed
+up as resolved structure.
 
 When semantic discovery (vecgrep) **cannot run** — no index in the workspace, or the binary is
 missing — Cortex falls back to a literal `git grep` over tracked files so discovery still has a
 zero-dependency floor (git is the only hard requirement). The matches are recorded as
 low-confidence `code_location` candidates (one per file, with a snippet) and can still be expanded
 by the structural stage on that round. Follow-up investigate rounds then **stick to the git-grep
-floor** until `cortex setup` reports both specialist indexes ready again — so a slow or broken
-vecgrep/codemap path is not re-paid on every question. This fallback fires only when semantic
+floor** until `cortex setup` reports both specialist indexes **ready or stale** again — so a slow
+or broken vecgrep/codemap path is not re-paid on every question. Indexed-but-drifted (`stale`) is
+still queryable and does **not** collapse to `needs_index`. This fallback fires only when semantic
 search is *unavailable*; a clean search that legitimately finds nothing is reported as such, never
 papered over with literal noise. When hybrid search fails on an existing index (embedder/profile),
 Cortex retries once as keyword before degrading.
@@ -330,7 +343,12 @@ Export a bounded transfer packet as Markdown or JSON:
 cortex handoff task_06FK…                 # Markdown to stdout
 cortex handoff task_06FK… -o handoff.md   # Markdown file
 cortex --json handoff task_06FK…          # structured packet
+cortex handoff task_06FK… --compact       # short LLM-readable tip + top claims + next
 ```
+
+`--compact` prints a tip-sized Markdown packet (goal, state, top claims, open items, next
+command, warnings) instead of the full transfer projection — useful when another model only needs
+continuation context.
 
 General handoff JSON is hard-capped at 128 KiB and excludes sensitive evidence/receipt content.
 For a complete verified task, Cortex instead budgets the primary JSON at 90 KiB so local-agent's
@@ -502,7 +520,7 @@ Keys: `↑/↓` navigate · `g/G` jump · `Page Up/Page Down` (or `Ctrl-U/Ctrl-D
 | `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
 | `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
 | `cortex init` | write a starter `cortex.yaml`, detecting your test runner (Go/Rust/Node/Python) as a command verifier; refuses to clobber an existing config unless `--force` |
-| `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** (via cheap native `status` probes, not dummy search) — with the exact command to fix each gap; `--trust-commands` grants configured verifier argv outside the repo |
+| `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** (via cheap native `status` probes: vecgrep `--lightweight`, codemap `--skip-stale`, not dummy search). Reports `ready` / `stale` / `needs_index` / `error` honestly — drift is `stale` (still queryable), not `needs_index`; `--trust-commands` grants configured verifier argv outside the repo |
 | `cortex config` | resolved workspace/storage paths, budget, recall policy, safe verifier metadata (argv omitted), redaction count, and applied `cortex.yaml` sources |
 | `cortex abort <taskId> <reason>` | stop a task without deleting evidence |
 | `cortex read-evidence <taskId> <evidenceId>` | print a full evidence record (with its `rawRef`) |
