@@ -146,6 +146,7 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 			rep.Warnings = append(rep.Warnings, setupGapWarnings(discoveryGaps)...)
 			rep.Actions = append(setupGapActions(discoveryGaps), rep.Actions...)
 		}
+		rep.Warnings = append(rep.Warnings, setupStaleWarnings(setup)...)
 	}
 
 	if len(rep.MissingVerification) > 0 && c.Status != domain.PhaseComplete {

@@ -136,16 +136,46 @@ func TestSetupDetectsProjectConfig(t *testing.T) {
 	}
 }
 
+func TestSetupStaleIsNotNeedsIndex(t *testing.T) {
+	ws := testRepo(t)
+	cm := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		byOp: map[string]adapters.Result{
+			"status": {
+				Status:  adapters.StatusPartial,
+				Summary: "codemap indexed but stale: 12 changed files",
+				Facts:   []adapters.Fact{{Attributes: map[string]string{"fix": "codemap index"}}},
+			},
+		}}
+	vg := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		byOp: map[string]adapters.Result{
+			"status": {Status: adapters.StatusAuthoritative},
+		}}
+	k := newTestKernel(t, ws, cm, vg)
+	rep := k.Setup(context.Background())
+	ts := setupByTool(rep)["codemap"]
+	if ts.Status != SetupStale {
+		t.Fatalf("stale should be SetupStale, got %+v", ts)
+	}
+	if !discoveryIndexUsable(ts.Status) {
+		t.Fatal("stale indexes must remain usable for discovery")
+	}
+	if gaps := setupGaps(rep); len(gaps) != 0 {
+		t.Fatalf("stale must not be a blocking setup gap, got %+v", gaps)
+	}
+	warns := setupStaleWarnings(rep)
+	if len(warns) != 1 || !strings.Contains(warns[0], "stale") {
+		t.Fatalf("want stale warning, got %v", warns)
+	}
+}
+
 func TestSetupProbeErrorIsReported(t *testing.T) {
 	ws := testRepo(t)
 	cm := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
 		result: adapters.Result{Status: adapters.StatusError, Summary: "codemap crashed"}}
 	k := newTestKernel(t, ws, cm)
 	rep := k.Setup(context.Background())
-	if ts := setupByTool(rep)["codemap"]; ts.Status != SetupNeedsIndex {
-		// A non-authoritative probe from an installed tool maps to needs_index
-		// (the actionable state); the detail carries the specific reason.
-		t.Errorf("codemap = %+v, want needs_index with detail", ts)
+	if ts := setupByTool(rep)["codemap"]; ts.Status != SetupError {
+		t.Errorf("codemap = %+v, want error with detail", ts)
 	}
 }
 

@@ -5,6 +5,28 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Review-mode discovery bias** — `mode=review` investigate prefers `git changed_files` +
+  `codemap review` over open-ended vecgrep; deep depth may still run a capped keyword search.
+- **`--seed` / `seedPaths` on open** — bounded note/packet files (vault or workspace) stamp into
+  orientation evidence (max 8 × 16 KiB).
+- **`cortex handoff --compact`** — short LLM-readable packet (tip, top claims, open items, next).
+- **`SetupStale` readiness** — indexed-but-drifted specialists report `stale` (still queryable),
+  not `needs_index`.
+
+### Changed
+- **Investigate wall-clock budget** — quick 20s / standard 45s / deep 90s (or the
+  caller's tighter deadline). Exhausted budgets return partial evidence instead of
+  hanging until an MCP gateway timeout; stage-2 structure is skipped when the
+  budget is already gone.
+- **Junk-path evidence filter** — `.agent/`, `dist/`, `node_modules/`, cases, etc. are dropped at
+  stamp time and in the vecgrep adapter; keyword fallback is capped at 8 hits.
+- **Vecgrep status uses `--lightweight`** — readiness probes avoid opening large VecLite DBs
+  (falls back for older binaries). Timeout/degraded messaging prefers git/path-scoped reads.
+- **Codemap status uses `--skip-stale`** — readiness probes skip the dirty-tree hash walk
+  (falls back for older binaries).
+- **Sticky floor treats stale as usable** — ready *or* stale indexes resume specialist routing.
+
 ## [0.17.0] — 2026-08-20
 
 ### Changed

@@ -28,10 +28,11 @@ var openCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		seeds, _ := cmd.Flags().GetStringArray("seed")
 		env, err := k.OpenTask(cmd.Context(), kernel.OpenInput{StartInput: kernel.StartInput{
 			Goal: joinArgs(args), Mode: domain.Mode(mode), Risk: risk, Surfaces: toSurfaces(surfaces),
 			Actor: actor, ParentTaskID: parent, IdempotencyKey: key,
-			AcceptanceCriteria: criteria,
+			AcceptanceCriteria: criteria, SeedPaths: seeds,
 		}})
 		if err != nil {
 			return err
@@ -48,5 +49,6 @@ func init() {
 	openCmd.Flags().String("parent", "", "parent task ID for delegated work")
 	openCmd.Flags().String("idempotency-key", "", "stable retry key; an exact match returns the existing task, even after completion")
 	openCmd.Flags().StringArray("criterion", nil, "immutable acceptance criterion as id=statement (repeatable)")
+	openCmd.Flags().StringArray("seed", nil, "note/packet file to stamp into orientation evidence (repeatable, max 8)")
 	rootCmd.AddCommand(openCmd)
 }

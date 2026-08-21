@@ -55,8 +55,8 @@ func TestReviewBranchApproves(t *testing.T) {
 	if !strings.Contains(env.Summary, "APPROVE") {
 		t.Errorf("a change with a passing review should APPROVE, got: %s", env.Summary)
 	}
-	if !env.Degraded || !hasWarning(env.Warnings, "degraded") {
-		t.Fatalf("review hid degraded discovery state: degraded=%t warnings=%v", env.Degraded, env.Warnings)
+	if !hasWarning(env.Warnings, "review mode") {
+		t.Fatalf("review should announce diff-scoped discovery, warnings=%v", env.Warnings)
 	}
 	// The review is a real, inspectable case with a base ref and evidence.
 	c, _ := k.Store().Load(env.TaskID)
@@ -66,6 +66,23 @@ func TestReviewBranchApproves(t *testing.T) {
 	m, _ := k.TaskMetrics(env.TaskID)
 	if m.EvidenceItems == 0 {
 		t.Error("a review should leave an evidence trail")
+	}
+}
+
+func TestReviewSurfacesDegradedCodemapReview(t *testing.T) {
+	ws := reviewRepo(t)
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		byOp: map[string]adapters.Result{
+			"review": {Status: adapters.StatusPartial, Summary: "codemap review incomplete",
+				Facts: []adapters.Fact{{Kind: "code_graph", Claim: "partial review", Confidence: "low"}}},
+		}}
+	k := newTestKernel(t, ws, codemap)
+	env, err := k.Review(context.Background(), ReviewInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !env.Degraded || !hasWarning(env.Warnings, "degraded") {
+		t.Fatalf("partial codemap review must surface degraded: degraded=%t warnings=%v", env.Degraded, env.Warnings)
 	}
 }
 

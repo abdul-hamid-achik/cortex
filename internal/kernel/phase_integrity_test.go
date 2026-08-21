@@ -28,7 +28,7 @@ func TestOrientationConflictDoesNotAppendPhantomPhaseTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, err := k.finishOrientation(context.Background(), stale, true); err == nil || got.OK {
+	if got, err := k.finishOrientation(context.Background(), stale, true, nil); err == nil || got.OK {
 		t.Fatalf("stale orientation unexpectedly committed: %+v (%v)", got, err)
 	}
 	events, err := k.Store().PhaseEvents(c.ID)
@@ -40,7 +40,7 @@ func TestOrientationConflictDoesNotAppendPhantomPhaseTransitions(t *testing.T) {
 	}
 
 	latest, _ := k.Store().Load(c.ID)
-	if got, err := k.finishOrientation(context.Background(), latest, true); err != nil || !got.OK {
+	if got, err := k.finishOrientation(context.Background(), latest, true, nil); err != nil || !got.OK {
 		t.Fatalf("orientation retry failed: %+v (%v)", got, err)
 	}
 	events, _ = k.Store().PhaseEvents(c.ID)

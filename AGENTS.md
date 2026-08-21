@@ -190,9 +190,13 @@ task install         # go install ./cmd/cortex
   transitional schema-version-zero shape, rejects unknown explicit majors, and falls back to the
   legacy bare-array `-f json` output. Hybrid failures on an existing index retry once as keyword.
   Deadline exceeded is classified as timeout (not `needs_index`); sticky git-grep only follows
-  not-indexed/corrupt rounds. Similar and memory outputs remain bare JSON arrays. Codemap readiness
-  uses `codemap status --json`. After a not-indexed/corrupt semantic round, investigate sticks to
-  git-grep until both indexes are ready again.
+  not-indexed/corrupt rounds (stale indexes remain usable). Indexed-but-drifted readiness is
+  `stale`, not `needs_index`. Vecgrep status probes use `--lightweight` when available.
+  `mode=review` investigate prefers git changed-files + codemap review over open-ended semantic
+  search; junk paths (`.agent/`, `dist/`, …) are never stamped as evidence. Hybrid failures on
+  an existing index retry once as keyword. Similar and memory outputs remain bare JSON arrays.
+  Codemap readiness uses `codemap status --json`. After a not-indexed/corrupt semantic round,
+  investigate sticks to git-grep until both indexes are ready (or stale) again.
 - **Bob v0.4.0/BOB-5 is optional and manifest-gated.** Health uses `bob --json version`. Cortex
   calls `bob --json context <absolute-workspace> --profile compact` only when `bob.yaml` exists,
   and planning classifies deduplicated, bounded paths with

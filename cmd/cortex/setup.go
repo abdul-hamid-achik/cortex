@@ -66,11 +66,22 @@ func renderSetup(rep kernel.SetupReport) {
 		switch ts.Status {
 		case kernel.SetupReady:
 			pf(w, "  %s %-9s %s\n", paint(styOK, "●"), ts.Tool, paint(styMuted, "ready (indexed)"))
+		case kernel.SetupStale:
+			detail := ts.Detail
+			if detail == "" {
+				detail = "indexed but drifted"
+			}
+			pf(w, "  %s %-9s %s\n", paint(styWarn, "●"), ts.Tool, "stale — still queryable; optional: "+paint(styLabel, ts.FixCommand)+" ("+detail+")")
+			if ts.FixCommand != "" {
+				fixes = append(fixes, ts.Tool+" (optional refresh): "+ts.FixCommand)
+			}
 		case kernel.SetupNeedsIndex:
 			pf(w, "  %s %-9s %s\n", paint(styWarn, "○"), ts.Tool, "needs index — run: "+paint(styLabel, ts.FixCommand))
 			fixes = append(fixes, ts.Tool+": "+ts.FixCommand)
 		case kernel.SetupMissing:
 			pf(w, "  %s %-9s %s\n", paint(styErr, "○"), ts.Tool, paint(styMuted, "not on PATH — discovery degrades, but the git-grep fallback still works"))
+		case kernel.SetupError:
+			pf(w, "  %s %-9s %s\n", paint(styErr, "○"), ts.Tool, "degraded/slow: "+ts.Detail)
 		default:
 			pf(w, "  %s %-9s %s\n", paint(styErr, "○"), ts.Tool, "probe error: "+ts.Detail)
 		}

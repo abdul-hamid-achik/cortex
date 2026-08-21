@@ -27,6 +27,7 @@ type fakeAdapter struct {
 	byOp   map[string]adapters.Result // optional per-operation results
 	err    error
 	down   bool
+	delay  time.Duration // optional sleep before returning (honors ctx)
 	mu     sync.Mutex
 	reqs   []adapters.Request
 }
@@ -39,10 +40,20 @@ func (f *fakeAdapter) Health(context.Context) error {
 	}
 	return nil
 }
-func (f *fakeAdapter) Execute(_ context.Context, req adapters.Request) (adapters.Result, error) {
+func (f *fakeAdapter) Execute(ctx context.Context, req adapters.Request) (adapters.Result, error) {
 	f.mu.Lock()
 	f.reqs = append(f.reqs, req)
+	delay := f.delay
 	f.mu.Unlock()
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return adapters.TimedOut(f.name, req.Operation, delay), nil
+		case <-timer.C:
+		}
+	}
 	if f.err != nil {
 		return adapters.Result{}, f.err
 	}

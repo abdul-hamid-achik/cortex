@@ -18,13 +18,17 @@ type SetupStatus string
 const (
 	// SetupReady means the tool is installed and has a usable index.
 	SetupReady SetupStatus = "ready"
+	// SetupStale means the tool is indexed and queryable, but the index has
+	// drifted from the working tree. Structural/semantic queries may still run;
+	// agents should refresh before treating results as authoritative.
+	SetupStale SetupStatus = "stale"
 	// SetupNeedsIndex means the tool is installed but has no usable index (absent
 	// or broken, e.g. vecgrep's "embedding profile is missing").
 	SetupNeedsIndex SetupStatus = "needs_index"
 	// SetupMissing means the binary is not on PATH.
 	SetupMissing SetupStatus = "missing"
 	// SetupError means the tool is installed but the readiness probe failed
-	// unexpectedly.
+	// unexpectedly (including timeouts — slow ≠ unindexed).
 	SetupError SetupStatus = "error"
 )
 
@@ -118,9 +122,15 @@ func (k *Kernel) probeSetupTool(ctx context.Context, p setupProbe) ToolSetup {
 		return ts
 	}
 	if res.Status == adapters.StatusPartial {
-		// Indexed but stale is still usable with caution — keep FixCommand and
-		// report needs_index so agents refresh before trusting structure.
-		ts.Status = SetupNeedsIndex
+		// Indexed but stale remains queryable. Do not collapse this into
+		// needs_index — that pushed agents to reindex before any structural
+		// review on large repos that are merely drifted (graphite dogfood).
+		ts.Status = SetupStale
+		ts.Detail = res.Summary
+		return ts
+	}
+	if res.Status == adapters.StatusError {
+		ts.Status = SetupError
 		ts.Detail = res.Summary
 		return ts
 	}
@@ -158,7 +168,8 @@ func hasProjectConfig(workspace string) bool {
 }
 
 // setupGaps lists discovery/structure tools that are installed-but-unusable or
-// missing, with the exact command that fixes each gap.
+// missing, with the exact command that fixes each gap. Stale indexes are
+// queryable — they warn via setupStaleWarnings, not as blocking gaps.
 func setupGaps(rep SetupReport) []ToolSetup {
 	var out []ToolSetup
 	for _, ts := range rep.Tools {
@@ -166,6 +177,25 @@ func setupGaps(rep SetupReport) []ToolSetup {
 			continue
 		}
 		out = append(out, ts)
+	}
+	return out
+}
+
+func setupStaleWarnings(rep SetupReport) []string {
+	var out []string
+	for _, ts := range rep.Tools {
+		if ts.Status != SetupStale {
+			continue
+		}
+		detail := strings.TrimSpace(ts.Detail)
+		if detail == "" {
+			detail = "index has drifted from the working tree"
+		}
+		msg := fmt.Sprintf("%s discovery is stale — %s (still queryable; refresh before treating structure as authoritative)", ts.Tool, detail)
+		if ts.FixCommand != "" {
+			msg += "; optional: " + ts.FixCommand
+		}
+		out = append(out, msg)
 	}
 	return out
 }
@@ -194,6 +224,14 @@ func discoveryGapsFromInvestigate(results []adapters.Result, facts []domain.Evid
 		case adapters.StatusUnavailable, adapters.StatusError, adapters.StatusPartial:
 			if adapters.IsTimeoutResult(res) {
 				// Slow specialist ≠ missing index — surface as error, no index fix.
+				add(res.Tool, res.Summary+"; prefer git grep / path-scoped reads this turn", "", SetupError)
+				continue
+			}
+			if res.Status == adapters.StatusPartial && looksLikeStaleIndex(res.Summary) {
+				// Usable with caution — not a needs_index gap.
+				continue
+			}
+			if looksLikeSchemaOrProbeFailure(res.Summary, res.Warnings) {
 				add(res.Tool, res.Summary, "", SetupError)
 				continue
 			}
@@ -225,6 +263,31 @@ func setupFixCommand(tool string) string {
 		}
 	}
 	return ""
+}
+
+func looksLikeStaleIndex(summary string) bool {
+	s := strings.ToLower(summary)
+	return strings.Contains(s, "stale") || strings.Contains(s, "changed file")
+}
+
+func looksLikeSchemaOrProbeFailure(summary string, warnings []string) bool {
+	blob := strings.ToLower(summary + " " + strings.Join(warnings, " "))
+	for _, needle := range []string{
+		"incompatible schema", "schema_version", "invalid level", "invalid score",
+		"parse", "decode", "unmarshal",
+	} {
+		if strings.Contains(blob, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// discoveryIndexUsable reports whether a specialist can still answer queries.
+// Ready and stale both count — only missing/needs_index/error force the
+// git-grep floor.
+func discoveryIndexUsable(status SetupStatus) bool {
+	return status == SetupReady || status == SetupStale
 }
 
 func setupGapWarnings(gaps []ToolSetup) []string {
@@ -279,7 +342,7 @@ func annotateHealthWithSetup(health []adapters.HealthReport, setup SetupReport) 
 		health[i].FixCommand = ts.FixCommand
 		if ts.Detail != "" && health[i].Detail == "" {
 			health[i].Detail = ts.Detail
-		} else if ts.Status == SetupNeedsIndex || ts.Status == SetupError {
+		} else if ts.Status == SetupNeedsIndex || ts.Status == SetupError || ts.Status == SetupStale {
 			if health[i].Detail == "" {
 				health[i].Detail = string(ts.Status)
 			}

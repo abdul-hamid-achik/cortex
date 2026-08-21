@@ -92,6 +92,12 @@ func isTimeout(err error) bool {
 	return err != nil && errors.Is(err, context.DeadlineExceeded)
 }
 
+// TimedOut is an honest partial result: the specialist may be slow or hung,
+// not necessarily unindexed. Setup must not recommend `init`/`index` for this.
+func TimedOut(tool, op string, budget time.Duration) Result {
+	return timedOut(tool, op, budget)
+}
+
 // timedOut is an honest partial result: the specialist may be slow or hung,
 // not necessarily unindexed. Setup must not recommend `init`/`index` for this.
 func timedOut(tool, op string, budget time.Duration) Result {

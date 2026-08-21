@@ -510,6 +510,86 @@ func RenderHandoffMarkdown(h Handoff) string {
 	return b.String()
 }
 
+// RenderHandoffCompact produces a short LLM-readable packet: tip identity,
+// top claims, open items, and the next command — without the full evidence dump.
+func RenderHandoffCompact(h Handoff) string {
+	h = boundHandoff(h)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Cortex compact handoff: %s\n\n", h.TaskID)
+	fmt.Fprintf(&b, "- **Goal:** %s\n", singleLine(h.Goal))
+	fmt.Fprintf(&b, "- **State:** %s · mode %s · risk %s · verification %s\n", h.Phase, h.Mode, h.Risk, h.Verification.Outcome)
+	fmt.Fprintf(&b, "- **Workspace:** %s", h.Workspace.Repository)
+	if h.Workspace.Branch != "" {
+		fmt.Fprintf(&b, " `%s`", h.Workspace.Branch)
+	}
+	if h.Workspace.CommitBefore != "" {
+		fmt.Fprintf(&b, " @ `%s`", clipStr(h.Workspace.CommitBefore, 12))
+	}
+	b.WriteString("\n")
+	if h.Actor != "" {
+		fmt.Fprintf(&b, "- **Actor:** `%s` · revision %d\n", singleLine(h.Actor), h.Revision)
+	} else {
+		fmt.Fprintf(&b, "- **Revision:** %d\n", h.Revision)
+	}
+	b.WriteString("\n## Top claims\n\n")
+	claims := 0
+	for _, evidence := range h.Evidence {
+		if claims >= 5 {
+			break
+		}
+		fmt.Fprintf(&b, "- [%s] %s\n", evidence.Confidence, singleLine(clipStr(evidence.Claim, 160)))
+		claims++
+	}
+	if claims == 0 {
+		b.WriteString("- _(none in this packet)_\n")
+	}
+	b.WriteString("\n## Open items\n\n")
+	open := 0
+	for _, hypothesis := range h.Hypotheses {
+		if hypothesis.Status == domain.HypConfirmed || hypothesis.Status == domain.HypRejected {
+			continue
+		}
+		fmt.Fprintf(&b, "- hypothesis `%s`: %s\n", hypothesis.ID, singleLine(clipStr(hypothesis.Statement, 120)))
+		open++
+	}
+	for _, decision := range h.Decisions {
+		if decision.Status != domain.DecisionPending {
+			continue
+		}
+		fmt.Fprintf(&b, "- pending decision `%s`: %s\n", decision.ID, singleLine(clipStr(decision.Question, 120)))
+		open++
+	}
+	if len(h.Verification.MissingRequired) > 0 {
+		fmt.Fprintf(&b, "- missing verification: %s\n", strings.Join(h.Verification.MissingRequired, ", "))
+		open++
+	}
+	if open == 0 {
+		b.WriteString("- _(none flagged)_\n")
+	}
+	b.WriteString("\n## Next\n\n")
+	if len(h.Actions) > 0 {
+		a := h.Actions[0]
+		if a.Command != "" {
+			fmt.Fprintf(&b, "`%s` — %s\n", a.Command, singleLine(a.Reason))
+		} else {
+			fmt.Fprintf(&b, "%s — %s\n", a.Tool, singleLine(a.Reason))
+		}
+	} else {
+		fmt.Fprintf(&b, "cortex status %s --detail full\n", h.TaskID)
+	}
+	if len(h.Warnings) > 0 {
+		b.WriteString("\n## Warnings\n\n")
+		for i, warning := range h.Warnings {
+			if i >= 3 {
+				fmt.Fprintf(&b, "- … %d more\n", len(h.Warnings)-3)
+				break
+			}
+			fmt.Fprintf(&b, "- %s\n", singleLine(warning))
+		}
+	}
+	return b.String()
+}
+
 func singleLine(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }

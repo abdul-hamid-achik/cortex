@@ -24,6 +24,9 @@ type StartInput struct {
 	Actor              string
 	ParentTaskID       string
 	IdempotencyKey     string
+	// SeedPaths are optional note/packet files (vault or workspace) whose
+	// bounded contents are stamped as orientation evidence on create.
+	SeedPaths []string
 }
 
 // StartTask creates a case file and performs lightweight orientation: it reads
@@ -102,13 +105,17 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	if err := k.store.Create(c); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
-	return k.finishOrientation(ctx, c, false)
+	seeds, seedErr := normalizeSeedPaths(in.SeedPaths)
+	if seedErr != nil {
+		return errEnvelope(c.ID, seedErr.Error()), nil
+	}
+	return k.finishOrientation(ctx, c, false, seeds)
 }
 
 // finishOrientation completes a persisted new/orienting skeleton. OpenTask
 // calls it after a crash, so response loss during start cannot strand a case in
 // a phase with no continuation.
-func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resumed bool) (domain.Envelope, error) {
+func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resumed bool, seedPaths []string) (domain.Envelope, error) {
 	type phaseMove struct{ from, to domain.Phase }
 	var moves []phaseMove
 	// new → orienting: a goal and workspace exist.
@@ -142,6 +149,12 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 		} else {
 			warnings = append(warnings, "workspace is not a git repository — scope-drift detection and diff review are limited")
 		}
+	}
+
+	if !resumed && len(seedPaths) > 0 {
+		seedFacts, seedWarns := k.seedFromNotes(c, seedPaths)
+		facts = append(facts, seedFacts...)
+		warnings = append(warnings, seedWarns...)
 	}
 
 	// Tool health snapshot is an orientation precondition.

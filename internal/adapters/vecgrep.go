@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -167,13 +168,36 @@ func (v *Vecgrep) searchOnce(ctx context.Context, dir, query, mode string, limit
 	return v.hitsResult("search", query, mode, hits, so), nil
 }
 
-// status is the cheap readiness probe (`vecgrep status -f json`). Prefer this
-// over a dummy search — search can hit a slow embedder path.
+// status is the cheap readiness probe (`vecgrep status -f json --lightweight`).
+// Prefer this over a dummy search — search can hit a slow embedder path — and
+// prefer lightweight so large VecLite DBs are not opened just for readiness.
 func (v *Vecgrep) status(ctx context.Context, dir string) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	stdout, stderr, code, err := v.exec(ctx, dir, "status", "-f", "json")
+	stdout, stderr, code, err := v.exec(ctx, dir, "status", "-f", "json", "--lightweight")
 	combined := firstNonEmpty(stdout, stderr)
+	if err != nil {
+		if isTimeout(err) {
+			return timedOut("vecgrep", "status", 5*time.Second), nil
+		}
+		// Older binaries may not know --lightweight; retry once without it.
+		if containsFold(err.Error(), "unknown flag") || containsFold(combined, "unknown flag") ||
+			containsFold(stderr, "unknown flag") {
+			return v.statusLegacy(ctx, dir)
+		}
+		return withFix(unavailable("vecgrep", "status", err.Error()),
+			fixFromText(err.Error(), "vecgrep init && vecgrep index")), nil
+	}
+	if containsFold(combined, "unknown flag") || containsFold(stderr, "unknown flag") {
+		return v.statusLegacy(ctx, dir)
+	}
+	return v.decodeStatus(stdout, stderr, code)
+}
+
+func (v *Vecgrep) statusLegacy(ctx context.Context, dir string) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	stdout, stderr, code, err := v.exec(ctx, dir, "status", "-f", "json")
 	if err != nil {
 		if isTimeout(err) {
 			return timedOut("vecgrep", "status", 5*time.Second), nil
@@ -181,6 +205,11 @@ func (v *Vecgrep) status(ctx context.Context, dir string) (Result, error) {
 		return withFix(unavailable("vecgrep", "status", err.Error()),
 			fixFromText(err.Error(), "vecgrep init && vecgrep index")), nil
 	}
+	return v.decodeStatus(stdout, stderr, code)
+}
+
+func (v *Vecgrep) decodeStatus(stdout, stderr string, code int) (Result, error) {
+	combined := firstNonEmpty(stdout, stderr)
 	if containsFold(combined, "not in a vecgrep project") {
 		return withFix(unavailable("vecgrep", "status", "not in a vecgrep project"),
 			"vecgrep init && vecgrep index"), nil
@@ -214,6 +243,11 @@ func (v *Vecgrep) status(ctx context.Context, dir string) (Result, error) {
 		}
 	} else if v, ok := st["indexed"].(bool); ok {
 		indexed = v
+	} else if v, ok := st["index_fresh"].(bool); ok {
+		// Lightweight status reports freshness; false still means an index
+		// exists and is searchable — treat as ready with a stale-ish summary.
+		indexed = true
+		_ = v
 	}
 	if !indexed {
 		return withFix(unavailable("vecgrep", "status", "vecgrep index is not searchable"),
@@ -222,6 +256,11 @@ func (v *Vecgrep) status(ctx context.Context, dir string) (Result, error) {
 	summary := "vecgrep ready"
 	if project, ok := st["project"].(string); ok && project != "" {
 		summary = "vecgrep ready: " + project
+	} else if root, ok := st["project_root"].(string); ok && root != "" {
+		summary = "vecgrep ready: " + filepath.Base(root)
+	}
+	if fresh, ok := st["index_fresh"].(bool); ok && !fresh {
+		summary += " (index may be stale)"
 	}
 	return Result{
 		Tool: "vecgrep", Operation: "status", Status: StatusAuthoritative,
@@ -308,7 +347,13 @@ func (v *Vecgrep) hitsResult(op, q, mode string, hits []vgHit, raw string) Resul
 	keepImports := queryWantsImports(q)
 	kept := make([]vgHit, 0, len(hits))
 	dropped := 0
+	droppedJunk := 0
 	for _, h := range hits {
+		path := firstNonEmpty(h.RelPath, h.FilePath)
+		if JunkDiscoveryPath(path) {
+			droppedJunk++
+			continue
+		}
 		if lowValueChunk(h.Content, markdownDoc(h), keepImports) {
 			dropped++
 			continue
@@ -320,6 +365,17 @@ func (v *Vecgrep) hitsResult(op, q, mode string, hits []vgHit, raw string) Resul
 		warnings = append(warnings, fmt.Sprintf(
 			"vecgrep %s: filtered %s (heading-only, import-only, or trivial chunks are not recorded as evidence)",
 			op, pluralize(dropped, "low-value hit")))
+	}
+	if droppedJunk > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"vecgrep %s: filtered %s from junk paths (.agent/, dist/, node_modules/, …)",
+			op, pluralize(droppedJunk, "hit")))
+	}
+	// Keyword / unscored hits used to bypass the usefulness floor and flood the
+	// ledger with path noise. Cap them and drop empty-path junk aggressively.
+	if mode == "keyword" && len(kept) > 8 {
+		kept = kept[:8]
+		warnings = append(warnings, "vecgrep keyword: capped to 8 candidates (keyword fallback is noisier than hybrid)")
 	}
 	// Quality gate 2: when EVERY remaining scored hit is below the usefulness
 	// floor, say so honestly instead of recording a pile of weak candidates.

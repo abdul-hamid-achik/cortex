@@ -89,7 +89,7 @@ func (k *Kernel) OpenTask(ctx context.Context, in OpenInput) (domain.Envelope, e
 			}
 			if c.Status == domain.PhaseNew || c.Status == domain.PhaseOrienting {
 				var finishErr error
-				result, finishErr = k.finishOrientation(ctx, c, true)
+				result, finishErr = k.finishOrientation(ctx, c, true, nil)
 				return finishErr
 			}
 			warnings := []string(nil)

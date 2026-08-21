@@ -34,15 +34,37 @@ func (c *Codemap) Health(ctx context.Context) error {
 	return err
 }
 
-// status is the cheap readiness probe: `codemap status --json`. Prefer this
-// over a dummy find/search — status is bounded and does not walk the graph.
+// status is the cheap readiness probe: `codemap status --json --skip-stale`.
+// Prefer this over a dummy find/search. --skip-stale avoids hashing the whole
+// dirty tree on large repos (graphite); drift is still visible when humans run
+// plain `codemap status`.
 func (c *Codemap) status(ctx context.Context, dir string) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	stdout, stderr, code, err := c.exec(ctx, dir, "status", "--json", "--skip-stale")
+	if err != nil {
+		if containsFold(err.Error(), "unknown flag") || containsFold(stderr, "unknown flag") {
+			return c.statusLegacy(ctx, dir)
+		}
+		return failExec("codemap", "status", err, 5*time.Second), nil
+	}
+	if containsFold(stderr, "unknown flag") || containsFold(stdout, "unknown flag") {
+		return c.statusLegacy(ctx, dir)
+	}
+	return c.decodeStatus(stdout, stderr, code)
+}
+
+func (c *Codemap) statusLegacy(ctx context.Context, dir string) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	stdout, stderr, code, err := c.exec(ctx, dir, "status", "--json")
 	if err != nil {
 		return failExec("codemap", "status", err, 5*time.Second), nil
 	}
+	return c.decodeStatus(stdout, stderr, code)
+}
+
+func (c *Codemap) decodeStatus(stdout, stderr string, code int) (Result, error) {
 	if res, ok := codemapError("status", stdout); ok {
 		return withFix(res, fixFromText(res.Summary+" "+strings.Join(res.Warnings, " "), "codemap index")), nil
 	}
@@ -52,7 +74,7 @@ func (c *Codemap) status(ctx context.Context, dir string) (Result, error) {
 		Nodes      int    `json:"nodes"`
 		Files      int    `json:"files"`
 		// Older codemap emitted stale as a bare count; current builds emit an
-		// object {changed,new,deleted}. Accept either.
+		// object {changed,new,deleted}. Accept either. Absent with --skip-stale.
 		Stale json.RawMessage `json:"stale"`
 	}
 	if derr := decodeJSON(stdout, &st); derr != nil {

@@ -23,7 +23,11 @@ var handoffCmd = &cobra.Command{
 		if jsonMode(cmd) {
 			return emitJSON(handoff)
 		}
+		compact, _ := cmd.Flags().GetBool("compact")
 		content := kernel.RenderHandoffMarkdown(handoff)
+		if compact {
+			content = kernel.RenderHandoffCompact(handoff)
+		}
 		output, _ := cmd.Flags().GetString("output")
 		if output == "" || output == "-" {
 			_, err = fmt.Fprint(os.Stdout, content)
@@ -39,5 +43,6 @@ var handoffCmd = &cobra.Command{
 
 func init() {
 	handoffCmd.Flags().StringP("output", "o", "", "write Markdown to a file instead of stdout (- for stdout)")
+	handoffCmd.Flags().Bool("compact", false, "short LLM-readable packet (tip, top claims, open items, next command)")
 	rootCmd.AddCommand(handoffCmd)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
@@ -45,6 +46,11 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	if err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
+	// Bound the whole investigate so MCP/CLI clients get a partial packet instead
+	// of hanging until a gateway timeout (graphite dogfood: MCP investigate
+	// burned ~60s with no usable facts). Caller deadlines still win.
+	ctx, cancelInvestigate := withInvestigateDeadline(ctx, depth)
+	defer cancelInvestigate()
 	if len(in.Surfaces) > 0 {
 		in.Surfaces, err = normalizeSurfaces(in.Surfaces)
 		if err != nil {
@@ -101,6 +107,13 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		} else {
 			return k.investigateGitGrepFloor(ctx, c, in, route, candLimit, budget, facts, warnings, true)
 		}
+	}
+
+	// Review cases are diff-scoped: prefer git changed-files + codemap review
+	// over an open-ended semantic search of the whole repo (graphite dogfood:
+	// hybrid→keyword noise burned the investigation budget).
+	if c.Mode == domain.ModeReview {
+		return k.investigateForReview(ctx, c, in, route, candLimit, budget, facts, warnings)
 	}
 
 	// Causal routing runs discovery (vecgrep/vidtrace) first; the
@@ -225,12 +238,13 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 		}
 	}
 
-	// Stage 2: structural expansion. Sticky floor is checked at the top of
-	// Investigate (prior round); this round still expands when structure works.
+	// Stage 2: structural expansion. Skip when the investigate budget is already
+	// exhausted so we return the discovery partial rather than starting more
+	// specialist work that will only time out.
 	expanded := 0
 	structuralAttempted := false
 	structuralFacts := 0
-	if route.FollowUp == "codemap" && route.First != "codemap" {
+	if route.FollowUp == "codemap" && route.First != "codemap" && ctx.Err() == nil {
 		if lim := expansionLimit(depth, candLimit); lim > 0 && len(facts) < budget {
 			structuralAttempted = true
 			before := len(facts)
@@ -291,7 +305,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	if candLimit < recallLimit {
 		recallLimit = candLimit
 	}
-	if leftover := budget - len(facts); leftover > 0 {
+	if leftover := budget - len(facts); leftover > 0 && ctx.Err() == nil {
 		osteps := orientationRecallSteps(c, in.Question, recallLimit)
 		if len(osteps) > 0 {
 			ores := k.runStepsParallel(ctx, c.ID, osteps)
@@ -300,6 +314,11 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 				return errEnvelope(c.ID, sErr.Error()), sErr
 			}
 		}
+	}
+
+	if ctx.Err() != nil {
+		warnings = append(warnings, "investigate budget exhausted — returning partial evidence; prefer path-scoped questions or depth=quick")
+		degraded = true
 	}
 
 	if stickyNext {
@@ -360,11 +379,22 @@ type step struct {
 // max_parallel_calls. Steps are independent adapter calls, so they
 // can fan out; results are returned in the original step order so evidence and
 // warnings stay deterministic. A non-positive budget runs sequentially.
+//
+// When ctx is already canceled, unfinished steps are filled with honest timeout
+// Results so Investigate can stamp a partial packet instead of blocking on hung
+// specialists. In-flight calls inherit ctx and should abort via adapter deadlines.
 func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []step) []adapters.Result {
 	results := make([]adapters.Result, len(steps))
+	if len(steps) == 0 {
+		return results
+	}
 	maxParallel := k.cfg.Budget.MaxParallelCalls
 	if maxParallel < 1 || len(steps) <= 1 {
 		for i, s := range steps {
+			if ctx.Err() != nil {
+				results[i] = adapters.TimedOut(s.tool, s.op, investigateRemaining(ctx))
+				continue
+			}
 			results[i] = k.run(ctx, s.tool, adapters.Request{TaskID: taskID, Operation: s.op, Input: s.input})
 		}
 		return results
@@ -375,13 +405,54 @@ func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []st
 		wg.Add(1)
 		go func(i int, s step) {
 			defer wg.Done()
+			if ctx.Err() != nil {
+				results[i] = adapters.TimedOut(s.tool, s.op, investigateRemaining(ctx))
+				return
+			}
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				results[i] = adapters.TimedOut(s.tool, s.op, investigateRemaining(ctx))
+				return
+			}
 			results[i] = k.run(ctx, s.tool, adapters.Request{TaskID: taskID, Operation: s.op, Input: s.input})
 		}(i, s)
 	}
 	wg.Wait()
 	return results
+}
+
+// withInvestigateDeadline applies a depth-based wall clock, taking the tighter
+// of that budget and any caller deadline. Keeps MCP/CLI from hanging on
+// large-repo specialists even when the parent context is unbounded or very long.
+func withInvestigateDeadline(ctx context.Context, depth string) (context.Context, context.CancelFunc) {
+	budget := investigateBudget(depth)
+	if dl, ok := ctx.Deadline(); ok {
+		if rem := time.Until(dl); rem > 0 && rem <= budget {
+			return context.WithCancel(ctx)
+		}
+	}
+	return context.WithTimeout(ctx, budget)
+}
+
+func investigateBudget(depth string) time.Duration {
+	switch depth {
+	case "quick":
+		return 20 * time.Second
+	case "deep":
+		return 90 * time.Second
+	default:
+		return 45 * time.Second
+	}
+}
+
+func investigateRemaining(ctx context.Context) time.Duration {
+	if dl, ok := ctx.Deadline(); ok {
+		if rem := time.Until(dl); rem > 0 {
+			return rem
+		}
+	}
+	return time.Second
 }
 
 // stampResults stamps every fact of every result into durable evidence,
@@ -395,6 +466,7 @@ func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []st
 // stages so evidence ordering and budget handling stay identical.
 func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, budget int, stage string, facts []domain.Evidence, warnings []string, derivedFor func(i int) []string) ([]domain.Evidence, []string, bool, error) {
 	degraded := false
+	droppedJunk := 0
 	for ri, res := range results {
 		// A non-authoritative result (partial/unavailable/error) means this
 		// step's facts (if any) are stale, incomplete, or a fallback — never
@@ -410,6 +482,10 @@ func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, bud
 			links = derivedFor(ri)
 		}
 		for _, f := range res.Facts {
+			if junkDiscoveryFact(f) {
+				droppedJunk++
+				continue
+			}
 			if len(facts) >= budget {
 				warnings = append(warnings, fmt.Sprintf("evidence truncated to %d items (%s)", budget, stage))
 				break
@@ -421,7 +497,23 @@ func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, bud
 			facts = append(facts, ev)
 		}
 	}
+	if droppedJunk > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"skipped %s from junk paths (.agent/, dist/, node_modules/, cases/, …) — not recorded as evidence",
+			pluralizeEv(droppedJunk)))
+	}
 	return facts, warnings, degraded, nil
+}
+
+// junkDiscoveryFact reports whether a discovery fact points at tooling noise
+// that should never enter the case ledger (keyword fallback on large repos
+// otherwise stamps .agent/cases and dist/ as "evidence").
+func junkDiscoveryFact(f adapters.Fact) bool {
+	return adapters.JunkDiscoveryFact(f)
+}
+
+func junkDiscoveryPath(path string) bool {
+	return adapters.JunkDiscoveryPath(path)
 }
 
 // normalizeDepth validates and canonicalizes quick | standard | deep. Unknown
@@ -596,11 +688,107 @@ func (k *Kernel) discoveryIndexesReady(ctx context.Context) bool {
 		return false
 	}
 	for _, ts := range rep.Tools {
-		if ts.Status != SetupReady {
+		if !discoveryIndexUsable(ts.Status) {
 			return false
 		}
 	}
 	return true
+}
+
+// investigateForReview biases discovery toward the diff: git changed-files and
+// codemap review first. Open-ended vecgrep runs only at depth=deep.
+func (k *Kernel) investigateForReview(ctx context.Context, c *domain.CaseFile, in InvestigateInput, route domain.Route, candLimit, budget int, facts []domain.Evidence, warnings []string) (domain.Envelope, error) {
+	warnings = append(warnings, "review mode: preferring git diff + codemap review over open-ended semantic search")
+	degraded := false
+	depth, _ := normalizeDepth(in.Depth)
+
+	var steps []step
+	changedIn := map[string]any{"limit": candLimit}
+	if strings.TrimSpace(c.Workspace.BaseRef) != "" {
+		changedIn["since"] = c.Workspace.BaseRef
+	}
+	steps = append(steps, step{tool: "git", op: "changed_files", input: changedIn})
+	reviewIn := map[string]any{}
+	if strings.TrimSpace(c.Workspace.BaseRef) != "" {
+		reviewIn["since"] = c.Workspace.BaseRef
+	}
+	steps = append(steps, step{tool: "codemap", op: "review", input: reviewIn})
+	if depth == "deep" {
+		// Deep review may still ask specialists, but keep the candidate cap tight.
+		lim := candLimit
+		if lim > 6 {
+			lim = 6
+		}
+		steps = append(steps, step{tool: "vecgrep", op: "search", input: map[string]any{
+			"query": in.Question, "limit": lim, "mode": "keyword",
+		}})
+	}
+
+	results := k.runStepsParallel(ctx, c.ID, steps)
+	var sErr error
+	facts, warnings, degraded, sErr = k.stampResults(c, results, budget, "review discovery", facts, warnings, nil)
+	if sErr != nil {
+		return errEnvelope(c.ID, sErr.Error()), sErr
+	}
+
+	// Literal grep over the question tokens when the diff stage was empty —
+	// still path-filtered by stampResults.
+	if len(facts) == 0 {
+		if patterns := grepPatterns(in.Question); len(patterns) > 0 {
+			var greps []adapters.Result
+			for _, pattern := range patterns {
+				greps = append(greps, k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
+					Input: map[string]any{"pattern": pattern, "limit": candLimit}}))
+			}
+			facts, warnings, _, sErr = k.stampResults(c, greps, budget, "review git-grep", facts, warnings, nil)
+			if sErr != nil {
+				return errEnvelope(c.ID, sErr.Error()), sErr
+			}
+		}
+	}
+
+	recallLimit := 3
+	if candLimit < recallLimit {
+		recallLimit = candLimit
+	}
+	if leftover := budget - len(facts); leftover > 0 {
+		osteps := orientationRecallSteps(c, in.Question, recallLimit)
+		if len(osteps) > 0 {
+			ores := k.runStepsParallel(ctx, c.ID, osteps)
+			facts, warnings, _, sErr = k.stampResults(c, ores, budget, "orientation recall", facts, warnings, nil)
+			if sErr != nil {
+				return errEnvelope(c.ID, sErr.Error()), sErr
+			}
+		}
+	}
+
+	if err := k.store.Save(c); err != nil {
+		return errEnvelope(c.ID, err.Error()), err
+	}
+
+	summary := fmt.Sprintf("investigated %q in review mode via git→codemap: %s recorded (%s)",
+		clipStr(in.Question, 60), pluralizeEv(len(facts)), route.Why)
+	if degraded {
+		warnings = append([]string{"degraded: one or more review discovery tools did not return an authoritative result this round"}, warnings...)
+	}
+	next := []string{
+		"read raw evidence with cortex read-evidence <taskId> <evidenceId> when you need detail",
+		"cortex plan — state a hypothesis with a disproof path, a change boundary, and a verification plan",
+	}
+	env := k.envelope(c, summary, facts, dedupeStr(warnings), next)
+	env.Degraded = degraded
+	if gaps := discoveryGapsFromInvestigate(results, facts); len(gaps) > 0 {
+		env.Warnings = append(setupGapWarnings(gaps), env.Warnings...)
+		env.NextActions = append(env.NextActions, setupGapNext(gaps)...)
+		env.Actions = append(env.Actions, setupGapActions(gaps)...)
+	}
+	env.Facts = orientationFactsLast(env.Facts)
+	if hs, _ := k.store.Hypotheses(c.ID); len(hs) > 0 {
+		for _, h := range hs {
+			env.Hypotheses = append(env.Hypotheses, domain.ToHypView(h))
+		}
+	}
+	return env, nil
 }
 
 // investigateGitGrepFloor runs discovery without calling vecgrep/codemap —

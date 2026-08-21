@@ -140,6 +140,7 @@ type openTaskInput struct {
 	ParentTaskID       string                   `json:"parentTaskId,omitempty" jsonschema:"parent case when this task was delegated"`
 	IdempotencyKey     string                   `json:"idempotencyKey,omitempty" jsonschema:"stable retry key; exact matches return the existing task even after completion"`
 	AcceptanceCriteria []acceptanceCriterionArg `json:"acceptanceCriteria,omitempty" jsonschema:"optional immutable success contract; retries and automatic resume must supply the same criteria"`
+	SeedPaths          []string                 `json:"seedPaths,omitempty" jsonschema:"optional note/packet file paths (vault or workspace) stamped into orientation evidence; max 8"`
 }
 
 type acceptanceCriterionArg struct {
@@ -463,6 +464,7 @@ func (s *Server) handleOpen(ctx context.Context, _ *sdkmcp.CallToolRequest, in o
 		Goal: in.Goal, Mode: domain.Mode(in.Mode), Surfaces: toSurfaces(in.Surfaces), Risk: in.Risk,
 		Actor: in.Actor, ParentTaskID: in.ParentTaskID, IdempotencyKey: in.IdempotencyKey,
 		AcceptanceCriteria: toAcceptanceCriteria(in.AcceptanceCriteria),
+		SeedPaths:          in.SeedPaths,
 	}})
 	return result(env, err)
 }
