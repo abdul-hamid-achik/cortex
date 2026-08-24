@@ -1,9 +1,7 @@
 # CLI
 
-The `cortex` binary is one of three surfaces over the kernel: CLI, MCP, and the human-facing
-[Studio](/studio). Every non-interactive read command supports `--json` for machine consumption;
-output is styled at a TTY and plain when piped. Studio is an interactive TUI and rejects `--json`;
-use `sessions --json` or `show --json` instead.
+The `cortex` binary exposes two surfaces over the kernel: **CLI** and **MCP**. Every non-interactive read command supports `--json` for machine consumption;
+output is styled at a TTY and plain when piped. For cross-session views use `cortex sessions --json` or `cortex show <taskId> --json`.
 
 ## Global flags
 
@@ -487,29 +485,6 @@ time to complete, and a per-repo breakdown. The "how am I using cortex overall" 
 A session's chronological activity — phase transitions, evidence, audited tool calls, and
 verification receipts — merged and time-sorted. Central sessions work from any directory; pass
 `-C <workspace>` for a repo-local or custom case store. This is the reader for a case's audit log.
-
-### `cortex studio` (`board`, `tui`)
-
-A live, read-only Charm v2 board of every session across every repo. Wide terminals show the
-session list and selected case side by side; narrow terminals stack them at full width. Session
-rows include textual phase labels. The selected case shows the **loop stepper**
-(`orient→…→preserve`, with a "you are here" marker), canonical verification assessment and gaps,
-pending decision, first structured next action, hypotheses, exact evidence/receipt totals, and
-bounded recent records. Auto-refreshes and keeps the matching last good projection visible when a
-refresh fails.
-
-```bash
-cortex studio               # all sessions, live
-cortex studio --active      # only in-flight
-cortex studio --repo api    # scope to a repo
-cortex studio --query "billing partial" # start with the shared session search
-```
-
-Studio is interactive and rejects `--json`. Use `cortex sessions --json` for the board index or
-`cortex show <taskId> --json` for one canonical session projection.
-
-Keys: `↑/↓` navigate · `g/G` jump · `Page Up/Page Down` (or `Ctrl-U/Ctrl-D`) scroll detail ·
-`/` edit search · `c` clear search · `a` active-only · `r` refresh · `q` quit.
 
 ### Other
 

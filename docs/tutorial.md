@@ -324,5 +324,5 @@ scope drift remains visible. The result is **auditable by construction** through
 - **[FAQ](/faq)** — quick answers to the questions this tutorial probably raised.
 - **[CLI reference](/cli)** — every command and flag.
 - **[MCP server](/mcp)** — drive this exact loop from an agent harness instead of the shell.
-- **[Studio](/studio)** — supervise sessions across repositories from the human operator surface.
+- **[CLI](/cli)** and **[MCP](/mcp)** — operate and supervise sessions with `--json` or MCP tools.
 - **[Configuration](/configuration)** — budgets, redaction literals, and case-file location.

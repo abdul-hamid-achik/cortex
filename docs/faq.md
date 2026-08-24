@@ -212,16 +212,14 @@ hypotheses, current assessment, recent evidence, decisions, and structured next 
 
 ### Is there a UI?
 
-Yes — a read-only terminal UI over the case store:
+The Studio terminal board is not shipped in the CLI for now. Inspect sessions with the CLI:
 
 ```bash
-cortex studio     # aliases: cortex board, cortex tui
+cortex sessions --json
+cortex show <taskId> --json
 ```
 
-It lists sessions from the central store across repositories and shows the selected case's loop,
-canonical verification assessment and gaps, pending decision, first structured action,
-hypotheses, and bounded recent receipts/evidence. Navigate with arrow/`j`-`k` keys, toggle
-active-only with `a`, and quit with `q`. See [Studio](/studio).
+See [Surfaces](/studio) for the current CLI + MCP split.
 
 ## State, privacy, and secrets
 

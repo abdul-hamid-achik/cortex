@@ -135,16 +135,14 @@ cortex show task_06FK…      # full one-screen view of a session — from ANY d
 cortex overview             # cross-repo rollup: completion, verification, where work sits
 cortex timeline task_06FK…  # a session's phases + evidence + tool calls + verification, time-sorted
 cortex metrics task_06FK…   # outcome & evidence metrics, incl. time-in-phase
-cortex studio               # live board; press / to search every repo/session
 cortex doctor               # environment + session snapshot + specialist tool health
 ```
 
 Every non-interactive read command supports `--json` for machine consumption. Output is styled at a
-TTY and plain when piped. Studio is interactive and directs machines to `sessions --json` or
-`show --json`.
+TTY and plain when piped.
 
-Cortex has three surfaces over the same kernel: the CLI for direct operation and scripting, the MCP
-server for agents, and **Studio** (`cortex studio`) for a live, read-only human view across sessions.
+Cortex has two surfaces over the same kernel: the **CLI** for direct operation and scripting, and
+the **MCP server** for agents.
 Humans and agents can also attach provenance-bearing notes, pause on bounded decisions with explicit
 consequences, and export a compact handoff without copying raw transcripts. General handoffs are
 capped at 128 KiB; complete verified handoffs use a 90 KiB primary-result budget and preserve their
@@ -217,7 +215,7 @@ Case snapshots carry optimistic revisions, optional actor/parent/child metadata,
 released change lease. Verification publishes its case revision, facts, bounded raw blobs, and
 receipts as one recoverable transaction; losing plan/lease races leave no stray proof, and only a
 bound behavioral batch can annotate code. Status and handoff stream bounded evidence projections,
-while auto-refreshing Show/Studio views retain bounded recent ledgers and exact totals from one
+while auto-refreshing Show views retain bounded recent ledgers and exact totals from one
 task-locked snapshot. New state files and directories are owner-only. Artifact reads are task-scoped: a case raw reference must belong to the
 requested task, and an fcheap reference must already appear in that task's artifact evidence or
 verification receipts. Previews default to 32 KiB and stop at 128 KiB; fcheap paths must be safe
@@ -251,7 +249,7 @@ are a separate pipeline for GitHub binaries and Homebrew metadata. See the
 
 ## Status
 
-The kernel, all three surfaces (CLI + MCP + Studio), the adapter suite, case-file coordination,
+The kernel, both surfaces (CLI + MCP), the adapter suite, case-file coordination,
 redaction, scope-drift detection, and revision-bound verification policy are implemented and
 tested. `task eval` also prints a paired
 Cortex-versus-unassisted calibration scorecard; its deterministic fixtures validate the
