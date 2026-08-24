@@ -21,15 +21,14 @@ at preserving across long tool-using tasks: a durable **case file**, explicit **
 uncertainty, disciplined **tool routing**, **bounded** changes, and **verification** tied to
 user-visible behavior.
 
-Three surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
+Two surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
 
 - **CLI** — human commands *and* `--json` machine output for agents (Cobra + Charm v2 lipgloss).
 - **MCP server** — `cortex serve` (stdio), a 17-tool `agent` profile by default;
   `--profile all` exposes the full 24-tool operator surface.
-- **studio TUI** — `cortex studio` (Charm v2 bubbletea), a live, read-only board of **all** sessions
-  across every repo: the session list plus the selected case's canonical verification assessment,
-  pending decision, first structured action, loop stepper, hypotheses, and bounded recent
-  evidence/receipts. Auto-refreshes; `--repo`/`--active` filters; `a` toggles active-only.
+
+Product docs: `docs/quick-start.md` (humans), `docs/mcp.md` (agents). Monitor sessions with
+`cortex sessions` / `cortex show --json` instead of the removed Studio TUI (`docs/studio.md`).
 
 ## Directory Structure
 
@@ -41,7 +40,7 @@ cortex/
 │                             #   header `/* Copyright © 2026 abdul hamid <abdulachik@icloud.com> */`.
 │   ├── main.go               #   root command, persistent --workspace/-C and --json flags
 │   ├── open / start / investigate / plan / change / verify / remember / status .go
-│   ├── note / decision / handoff / doctor / serve / studio .go
+│   ├── note / decision / handoff / doctor / serve .go
 │   └── render.go             #   lipgloss v2 styled view + --json emit (TTY-gated color)
 ├── internal/
 │   ├── domain/               # core types — NO deps on adapters/store/transport
@@ -77,7 +76,7 @@ cortex/
 │   │   ├── casefs/           #   JSON/JSONL case-file persistence ($XDG_STATE_HOME/cortex/sessions/<repo>/<id>/)
 │   │   └── redact/           #   secret-shape redaction (last-line filter before model output)
 │   ├── mcp/server.go         # stdio MCP server — THIN pass-through (17 agent / 24 all)
-│   ├── tui/board.go          # Charm v2 bubbletea studio — live cross-workspace board + loop stepper
+│   ├── tui/board.go          # Legacy Charm v2 board (not wired to the CLI)
 │   ├── config/               # XDG paths + cortex.yaml (budget/redact/cases_dir/recall/verifiers) + env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_/dec_/raw_)
 │   ├── eval/                 # deterministic scorecard + separate opt-in trajectory runner contract
@@ -126,7 +125,7 @@ the writer. Cross-process task locks heartbeat while held and use owner tokens d
 recovery. Plan and hypothesis/evidence companion writes use revision-guarded transactions; verify
 stages facts/raw/receipts until one revision-guarded bundle publishes them with the verifying case
 snapshot, and marks it bound only if case/owner/HEAD/diff stay stable. Status and handoff stream
-bounded evidence projections; Show/Studio retain bounded recent ledgers plus exact totals from one
+bounded evidence projections; Show retains bounded recent ledgers plus exact totals from one
 task-locked composite snapshot. Transaction recovery runs before public evidence/receipt/raw reads,
 and behavioral annotations occur only after a bound bundle wins. A
 released or expired lease may be replaced. `cortex note`, `decision
@@ -349,8 +348,8 @@ task install         # go install ./cmd/cortex
 - Cobra for commands; **Charm v2 lipgloss** (`charm.land/lipgloss/v2`, **not**
   `github.com/charmbracelet/...`) for the styled view. Color is **TTY-gated** (`detectColor`):
   piped/`--json` output is plain, so agents never see ANSI escapes. Every non-interactive read
-  command supports `--json` for machine output; Studio rejects it and points callers to
-  `sessions --json` / `show --json`.
+  command supports `--json` for machine output; use `cortex sessions --json` or
+  `cortex show <taskId> --json` for cross-session views.
 
 ## mcphub registration
 

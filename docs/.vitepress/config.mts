@@ -38,7 +38,6 @@ export default defineConfig({
       { text: 'Quick Start', link: '/quick-start' },
       { text: 'Tutorial', link: '/tutorial' },
       { text: 'Concepts', link: '/concepts' },
-      { text: 'Studio', link: '/studio' },
       {
         text: 'Reference',
         items: [
@@ -70,7 +69,6 @@ export default defineConfig({
         items: [
           { text: 'CLI', link: '/cli' },
           { text: 'MCP server', link: '/mcp' },
-          { text: 'Studio for operators', link: '/studio' },
         ],
       },
       {

@@ -126,8 +126,8 @@ cortex list                              # all tasks, newest first
 cortex read-evidence task_06FK… ev_06FK… # a full evidence record
 cortex handoff task_06FK…                # bounded transfer packet for another person or agent
 cortex sessions --query "billing partial" # shared AND-search across repo/state/outcome
-cortex studio                            # live board; press / to search across repos
+cortex sessions --json                     # board index across repos (machine-readable)
 ```
 
 Add `--json` to any non-interactive read command for machine output. Output is styled at a terminal
-and plain when piped. Studio is interactive; use `sessions --json` or `show --json` instead.
+and plain when piped.

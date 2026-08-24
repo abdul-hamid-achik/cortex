@@ -19,7 +19,7 @@ var pruneCmd = &cobra.Command{
 	Long: `List in-flight sessions that have not advanced within --older-than (default
 7d). By default this is a dry run: it reports what would be pruned and changes
 nothing. With --apply, each stale session is aborted (recording the reason) and
-archived out of the active tree, so cortex sessions / overview / studio stay
+archived out of the active tree, so cortex sessions / overview stay
 focused on live work.
 
 Pruning is recoverable: cortex unarchive <taskId> restores an archived session.

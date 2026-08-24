@@ -245,16 +245,6 @@ import { withBase } from 'vitepress'
           <code>cortex status --json</code>
           <span class="surface-arrow" aria-hidden="true">→</span>
         </a>
-        <a class="surface-row" :href="withBase('/studio')">
-          <span class="surface-index">03</span>
-          <div>
-            <span class="surface-audience">Human operators</span>
-            <h3>Studio</h3>
-            <p>A live, read-only board of sessions across repositories.</p>
-          </div>
-          <code>cortex studio</code>
-          <span class="surface-arrow" aria-hidden="true">→</span>
-        </a>
       </div>
     </section>
 

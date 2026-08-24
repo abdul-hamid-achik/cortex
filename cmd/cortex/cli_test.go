@@ -589,13 +589,6 @@ func TestDecisionAnswerCompletionSuggestsPendingDecision(t *testing.T) {
 	}
 }
 
-func TestStudioRejectsJSONInsteadOfLaunchingInteractiveUI(t *testing.T) {
-	_, err := runCLI(t, "--json", "studio")
-	if err == nil || !strings.Contains(err.Error(), "does not support --json") {
-		t.Fatalf("studio --json should fail with a non-interactive alternative, got %v", err)
-	}
-}
-
 func TestCLIShow(t *testing.T) {
 	ws := cliRepo(t)
 	id := startTask(t, ws)
@@ -706,7 +699,7 @@ func TestCLISessions(t *testing.T) {
 		t.Errorf("sessions --json should include %s, got:\n%s", id, out)
 	}
 	// Query uses the same cross-field, case-insensitive AND-token contract as
-	// Studio and the operator MCP surface.
+	// the operator MCP surface.
 	qout, err := runCLI(t, "--json", "sessions", "--query", strings.ToUpper(id)+" REDIRECT")
 	if err != nil {
 		t.Fatalf("sessions --query --json: %v (%s)", err, qout)

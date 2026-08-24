@@ -118,7 +118,7 @@ func renderSessions(sessions []kernel.SessionSummary, now time.Time, staleAfter 
 }
 
 // phaseStyle colors a phase by outcome class: green complete, red terminal-bad,
-// cyan in-flight (mirrors the studio board's phaseColor).
+// cyan in-flight (phase color for the sessions list).
 func phaseStyle(p domain.Phase) lipgloss.Style {
 	switch p {
 	case domain.PhaseComplete:

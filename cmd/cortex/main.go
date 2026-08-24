@@ -4,9 +4,8 @@
 // engineering agents. It sits between an LLM and a set of specialist tools
 // (codemap, vecgrep, cairntrace, glyphrun, fcheap, vidtrace, tvault, veclite) and enforces a
 // stateful reasoning loop: orient → investigate → plan → change → verify →
-// preserve evidence. Three surfaces share one kernel: a CLI (with --json for
-// agents), an MCP server (cortex serve), and Studio (cortex studio).
-// See AGENTS.md for architecture.
+// preserve evidence. Two surfaces share one kernel: a CLI (with --json for
+// agents) and an MCP server (cortex serve). See AGENTS.md for architecture.
 package main
 
 import (
@@ -46,8 +45,8 @@ Core loop actions drive a task:
 Use start only when a deliberately fresh case is required. Agent-facing JSON
 results include structured actions describing the next safe continuation.
 
-Three surfaces share one kernel: this CLI (--json for agents), the MCP server
-(cortex serve), and the cross-workspace Studio board (cortex studio).`,
+Two surfaces share one kernel: this CLI (--json for agents) and the MCP server
+(cortex serve).`,
 	Version:       version.Full(),
 	SilenceUsage:  true,
 	SilenceErrors: false,

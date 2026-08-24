@@ -13,7 +13,7 @@ var archiveCmd = &cobra.Command{
 	Use:   "archive <taskId>",
 	Short: "Retire a finished session — move it out of the active view (reversible, no data loss)",
 	Long: `Move a terminal (complete / abandoned / blocked) session out of the active
-sessions tree into the archive, so cortex sessions / overview / studio stay
+sessions tree into the archive, so cortex sessions / overview stay
 focused on live work. The data is preserved and fully reversible with
 cortex unarchive — nothing is deleted. In-flight sessions are refused.`,
 	Args: cobra.ExactArgs(1),
