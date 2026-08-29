@@ -1190,6 +1190,50 @@ func TestHighRiskReviewIsNotACleanPass(t *testing.T) {
 	}
 }
 
+// TestUnknownRiskReviewIsInconclusiveWithRemedy mirrors the high-risk downgrade
+// for codemap's "unknown" aggregate risk band, which the adapter reports as a
+// partial result (analysis incomplete: stale, capped, or partially errored —
+// dogfooding 2026-08-29). The structural receipt must be inconclusive — never a
+// schema-blocked error, never a clean pass — and its note must name the
+// incomplete analysis instead of claiming codemap was "not indexed".
+func TestUnknownRiskReviewIsInconclusiveWithRemedy(t *testing.T) {
+	ws := testRepo(t)
+	codemap := &fakeAdapter{name: "codemap", caps: []adapters.Capability{adapters.CapabilityStructure},
+		result: adapters.Result{Status: adapters.StatusPartial, Summary: "reviewed",
+			Warnings: []string{"diff risk: unknown (0.42) — codemap's analysis of this diff is incomplete (stale, capped, or partially errored)"},
+			Facts:    []adapters.Fact{{Kind: "code_graph", Claim: "diff reviewed", Confidence: "medium"}}}}
+	k := newTestKernel(t, ws, codemap)
+	env, _ := k.StartTask(context.Background(), StartInput{Goal: "partially analyzable change", Surfaces: []domain.Surface{domain.SurfaceCode}})
+	id := env.TaskID
+	_, _ = k.Plan(PlanInput{TaskID: id,
+		Hypotheses:     []HypothesisInput{{Statement: "h", DisproveBy: "d"}},
+		ChangeBoundary: domain.ChangeBoundary{Files: []string{"src/callback.go"}}, Uncertainty: "u"})
+	if err := os.WriteFile(filepath.Join(ws, "src", "callback.go"), []byte("package src\nfunc HandleCallback(){ _ = 4 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = k.Verify(context.Background(), VerifyInput{TaskID: id})
+	recs, _ := k.Store().Verifications(id)
+	var codeReview *domain.VerificationRecord
+	for i := range recs {
+		if recs[i].Surface == domain.SurfaceCode {
+			codeReview = &recs[i]
+		}
+	}
+	if codeReview == nil {
+		t.Fatal("expected a code-surface review receipt")
+	}
+	if codeReview.Status != domain.VerifyInconclusive {
+		t.Errorf("an unknown-risk (incomplete) review should be inconclusive, not %s", codeReview.Status)
+	}
+	if !strings.Contains(codeReview.Notes, "unknown") || !strings.Contains(codeReview.Notes, "codemap index") || strings.Contains(codeReview.Notes, "not indexed") {
+		t.Errorf("the receipt note should name the incomplete analysis and its remedy, got %q", codeReview.Notes)
+	}
+	res, _ := k.Remember(context.Background(), RememberInput{TaskID: id, Outcome: "shipped it"})
+	if res.OK {
+		t.Error("a task with only an inconclusive review must not complete without acknowledgment")
+	}
+}
+
 func TestCompletionRejectsInconclusiveOnly(t *testing.T) {
 	// Review 2026-07-07: an inconclusive receipt (e.g. an unindexed codemap
 	// review) proves nothing about the outcome, so it must NOT satisfy the

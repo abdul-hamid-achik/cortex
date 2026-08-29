@@ -559,8 +559,15 @@ func validateReviewV1Risk(raw json.RawMessage) error {
 	}
 	var level string
 	var score float64
+	// "unknown" is a documented part of codemap's v1 enum, not drift: codemap
+	// forces the aggregate band to unknown whenever its analysis of the diff
+	// could not complete (stale index, capped symbols, partial errors). Rejecting
+	// it here misreported every honest incomplete analysis as a schema mismatch
+	// and left the codemap_review verifier permanently "not possible"
+	// (dogfooding 2026-08-29). The kernel treats an unknown band as an
+	// inconclusive review instead.
 	if !decodeRequiredString(fields, "level", &level) ||
-		(level != "low" && level != "medium" && level != "high") ||
+		(level != "low" && level != "medium" && level != "high" && level != "unknown") ||
 		!decodeRequiredFloat(fields, "score", &score) || score < 0 || score > 1 {
 		return fmt.Errorf("schema_version 1 field %q has invalid level or score", "risk")
 	}
@@ -626,7 +633,7 @@ type cmReview struct {
 // cmReviewRisk is codemap's diff-scoped aggregate risk band (worst across
 // changed symbols). Absent (nil) when the diff maps to no indexed symbols.
 type cmReviewRisk struct {
-	Level   string         `json:"level"` // low|medium|high
+	Level   string         `json:"level"` // low|medium|high|unknown — unknown = analysis incomplete
 	Score   float64        `json:"score"`
 	Factors []cmRiskFactor `json:"factors"`
 }
@@ -710,20 +717,38 @@ func (c *Codemap) review(ctx context.Context, dir, since string, staged bool) (R
 	} else if r.Stale {
 		status, conf = StatusPartial, "medium"
 		warns = append(warns, "codemap review is stale — run `codemap index` before trusting its blast radius")
+	} else if r.Risk != nil && r.Risk.Level == "unknown" {
+		// An unknown band means codemap could not complete its analysis of the
+		// diff (stale, capped, or partially errored) — the review ran but is not
+		// authoritative for the whole diff. Partial keeps the honest shape the
+		// kernel already maps to an inconclusive structural verdict.
+		status, conf = StatusPartial, "medium"
 	}
 	facts := []Fact{{Kind: "code_graph", Claim: claim, Confidence: conf}}
 	// Diff-scoped aggregate risk band (codemap ≥0.36). A medium/high band warns
 	// with its own factors so the public-contract gate is grounded in the actual diff, not
 	// just the case file's orient-time risk label. The warning carries a stable
-	// "diff risk: <level>" prefix the kernel can key on.
-	if r.Risk != nil && (r.Risk.Level == "medium" || r.Risk.Level == "high") {
+	// "diff risk: <level>" prefix the kernel can key on; an unknown band gets the
+	// same marker with its incomplete-analysis remedy.
+	if r.Risk != nil {
 		names := make([]string, 0, len(r.Risk.Factors))
 		for _, f := range r.Risk.Factors {
 			names = append(names, f.Factor)
 		}
-		riskClaim := fmt.Sprintf("diff risk: %s (%.2f) — %s", r.Risk.Level, r.Risk.Score, joinComma(names))
-		facts = append(facts, Fact{Kind: "code_graph", Claim: riskClaim, Confidence: conf})
-		warns = append(warns, riskClaim)
+		switch r.Risk.Level {
+		case "medium", "high":
+			riskClaim := fmt.Sprintf("diff risk: %s (%.2f) — %s", r.Risk.Level, r.Risk.Score, joinComma(names))
+			facts = append(facts, Fact{Kind: "code_graph", Claim: riskClaim, Confidence: conf})
+			warns = append(warns, riskClaim)
+		case "unknown":
+			detail := "no changed symbol could be mapped safely"
+			if len(names) > 0 {
+				detail = "factors from the analyzed subset: " + joinComma(names)
+			}
+			warns = append(warns, fmt.Sprintf(
+				"diff risk: unknown (%.2f) — codemap's analysis of this diff is incomplete (stale, capped, or partially errored); %s; run `codemap index` and re-review",
+				r.Risk.Score, detail))
+		}
 	}
 	return Result{
 		Tool: "codemap", Operation: "review", Status: status,

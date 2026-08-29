@@ -619,6 +619,46 @@ func TestCodemapReviewRiskBand(t *testing.T) {
 	}
 }
 
+// TestCodemapReviewUnknownRiskBandIsIncompleteNotSchemaError guards the
+// contract with current codemap: a review whose analysis could not complete
+// carries risk.level "unknown" (a documented part of the v1 schema — codemap's
+// docs state "Incomplete analysis forces risk.level:'unknown'"). Cortex must
+// accept the band as schema-valid and mark the review partial (analysis
+// incomplete), never reject the whole report as an incompatible schema — the
+// 2026-08-29 dogfooding sweep had the codemap_review verifier stuck
+// "not possible" purely because "unknown" was missing from the level enum.
+func TestCodemapReviewUnknownRiskBandIsIncompleteNotSchemaError(t *testing.T) {
+	// Finalized incomplete report with no safely mapped symbol: empty factors,
+	// zero score, fresh index — exactly what codemap emits for this state.
+	noneMapped := `{"schema_version":1,"project":"x","mode":"working","depth":3,"is_repo":true,"indexed":true,
+	  "changed_files":[{"path":"a.go","status":"M","symbols":0}],"changed_symbols":[],"blast_radius":[],
+	  "covering_tests":[],"untested_symbols":[],"stale":false,
+	  "risk":{"level":"unknown","score":0,"factors":[]}}`
+	res, _ := (&Codemap{tool: fakeTool(noneMapped, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	joined := res.Summary + " " + strings.Join(res.Warnings, " ")
+	if strings.Contains(joined, "incompatible schema") {
+		t.Fatalf("an unknown risk band is schema-valid; got the schema-error path: %s %v", res.Status, res.Warnings)
+	}
+	if res.Status != StatusPartial {
+		t.Errorf("an incomplete (risk unknown) review must be partial, got %s", res.Status)
+	}
+	if !strings.Contains(joined, "diff risk: unknown") {
+		t.Errorf("review should carry the stable unknown marker with its remedy, got: %s", joined)
+	}
+	if len(res.Facts) == 0 {
+		t.Errorf("the changed-file fact must still be parsed from an incomplete review, got none")
+	}
+	// Retained score/factors from the successfully analyzed subset stay visible.
+	retained := strings.Replace(noneMapped,
+		`"risk":{"level":"unknown","score":0,"factors":[]}`,
+		`"risk":{"level":"unknown","score":0.42,"factors":[{"factor":"untested_changes","severity":0.4,"detail":"subset untested"}]}`, 1)
+	res2, _ := (&Codemap{tool: fakeTool(retained, "", 0)}).Execute(context.Background(), Request{Operation: "review"})
+	warns2 := strings.Join(res2.Warnings, " ")
+	if res2.Status != StatusPartial || !strings.Contains(warns2, "diff risk: unknown") || !strings.Contains(warns2, "untested_changes") {
+		t.Errorf("retained-factor unknown band should stay partial with marker + factors, got %s %v", res2.Status, res2.Warnings)
+	}
+}
+
 // TestCodemapReviewExportedSymbolEscalation guards the public-
 // contract escalation: an indexed review with an exported changed symbol warns
 // that the diff touches a public-contract surface.

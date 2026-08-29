@@ -51,8 +51,9 @@ func (v *verification) writeReceipt(spec receiptSpec) error {
 func (v *verification) warn(msg string) { v.warnings = append(v.warnings, msg) }
 
 // runStructuralReview runs the codemap diff review for a change with a diff. A
-// review passes only when codemap is indexed and the diff is not rated high
-// risk; an unindexed or high-risk review is inconclusive, never a clean pass.
+// review passes only when codemap is indexed and its analysis of the diff
+// completed below the high-risk band; an unindexed, high-risk, or
+// incomplete-analysis (risk unknown) review is inconclusive, never a clean pass.
 func (v *verification) runStructuralReview() {
 	if len(v.changed) == 0 {
 		return
@@ -64,6 +65,13 @@ func (v *verification) runStructuralReview() {
 	reviewNote := ""
 	if st == domain.VerifyInconclusive {
 		reviewNote = "codemap not indexed — structural review has no blast radius or test selection"
+		// An unknown aggregate risk band is a different incompleteness: the review
+		// ran on an indexed repo but codemap could not finish analyzing the diff
+		// (stale, capped, or partially errored) — the note must name that, not
+		// claim codemap was missing (dogfooding 2026-08-29).
+		if containsMarker(res.Warnings, "diff risk: unknown") {
+			reviewNote = "codemap could not complete its analysis of this diff (risk band unknown) — structural review is inconclusive; run `codemap index` and re-verify"
+		}
 	}
 	// A review that RAN authoritatively but that codemap rated HIGH risk is not
 	// a clean structural pass — "the review ran on an indexed repo" must not be

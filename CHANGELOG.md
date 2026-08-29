@@ -5,6 +5,17 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-08-29
+
+### Fixed
+- **codemap review `unknown` risk band** — the adapter rejected codemap's documented
+  `unknown` level as a schema error, leaving the `codemap_review` verifier permanently
+  "not possible" whenever codemap honestly reported an incomplete analysis. An unknown
+  band is now accepted and downgraded to `StatusPartial` with a stable
+  `diff risk: unknown (…)` warning carrying the observed factors and the
+  `codemap index` remedy; the kernel receipt distinguishes "analysis incomplete" from
+  "not indexed".
+
 ## [0.18.1] — 2026-08-21
 
 ### Fixed
