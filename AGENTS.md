@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Instructions for AI agents (and humans) working on the **cortex** codebase. This is the
-canonical source-of-truth doc; `CLAUDE.md` defers to it. `README.md` is the public-facing
+canonical source-of-truth doc. `README.md` is the public-facing
 intro. Architecture, behavior, and contributor rules that must remain durable belong here.
 Design rationale and working notes belong in the Obsidian vault at `~/notes/projects/cortex/`,
 **not** the repo.
@@ -88,7 +88,7 @@ cortex/
 ├── specs/                    # glyphrun E2E specs (*.yml)
 ├── .github/workflows/        # ci.yml (test+race+build+lint+docs) · release.yml (goreleaser on tags)
 ├── Taskfile.yml .golangci.yml .goreleaser.yaml
-└── README.md AGENTS.md CLAUDE.md CHANGELOG.md LICENSE
+└── README.md AGENTS.md CHANGELOG.md LICENSE
 ```
 
 **Package boundaries are part of the contract.** Dependency direction is one-way:
@@ -368,6 +368,44 @@ In `gateway` mode the agent sees only `mcphub`, which proxies Cortex tools as `c
 Recommended lazy pins: `cortex__cortex_open_task`, `_investigate`, `_plan`, `_begin_change`,
 `_verify`, `_status`.
 
+## Gotchas (learned the hard way)
+
+Each of these cost a real debugging session. They extend the Architecture Notes above.
+
+- **Persist the case before any ledger append.** Appending to *any* JSONL ledger — `phases.jsonl`
+  (via `transition`), `evidence.jsonl` (via `stampEvidence`), `commands.jsonl` — creates the task
+  directory via `MkdirAll`; if `store.Create` runs *after* that, it sees the dir and refuses
+  ("case already exists"). `StartTask` calls `Create` first, *then* the `new→orienting` transition.
+- **Adapter flag dialects are NOT uniform.** vecgrep = `-f json` / `-n N`; glyph = `--format json`
+  (must precede sub-flags); everyone else = `--json`. `cairn mcp` / `glyph mcp` are bare;
+  `fcheap mcp serve` / `mcphub mcp serve` are not. codemap `changed_files` is an array of
+  **objects** (`{path,status,symbols}`), not strings — a naive `[]string` parse fails silently
+  into the degraded path.
+- **Redaction runs at the evidence-record boundary, not only at the adapter.** `stampEvidence`
+  redacts every fact's claim/URI before persisting, so human/model-supplied facts are masked too —
+  adapter output is *already* redacted, but the write boundary is the invariant. The redactor is
+  seeded from `config.RedactLiterals`.
+- **`fcheap save --json` emits the manifest FLAT** (`{"id":…, "tool":…, "files":…}`), not wrapped
+  in `{"manifest":{…}}` — parse `id` at the top level.
+- **Behavioral runs are three-way, not two.** cairn/glyph exit codes distinguish pass (0) / fail
+  (1) / errored (2+, incl. contract-hash mismatch). An errored run is `inconclusive` at medium
+  confidence — never a high-confidence FAILED verdict. See `behavioralStatus`.
+- **Acceptance criteria are immutable case identity.** `open`/`start` may register up to 64 stable
+  ID + exact-statement pairs. Store saves and transactions reject later mutation; verification
+  must reuse the exact ID/statement, and non-green completion acknowledgments cannot bypass
+  missing criterion proof. Status exposes only a bounded proof manifest; full statements stay in
+  `case.json`.
+- **Complete handoffs must fit local-agent honestly.** General packets retain the 128 KiB cap, but
+  a complete verified packet measures the actual pretty MCP JSON against 90 KiB and keeps every
+  non-sensitive named claim with its verifier-batch closure. If that atomic proof set cannot fit,
+  return no receipts plus the explicit overflow warning — never a partial proof set.
+
+## Two documentation surfaces — do not mix them
+
+- `docs/` → VitePress **product docs**, deployed to **Vercel** (no GitHub Pages).
+- `~/notes/projects/cortex/` → Obsidian vault for **working notes / handoffs**. **Never** write
+  scratch `.md` into the repo; repo root `.md` is limited to README, AGENTS, CHANGELOG.
+
 ## Common Tasks for Agents
 
 **Add a CLI command:** add a `*.go` in `cmd/cortex/` with a cobra command var + `init()`
@@ -426,7 +464,7 @@ boundary above; Bob's public BOB-5 fixtures are the consumer contract.
 `task check` (fmt + lint + test) → `task build` → `task flows` if specs changed →
 `task docsbuild` when documentation or site assets changed. Keep docs
 discipline: product docs in `docs/` (VitePress), design notes in `~/notes/projects/cortex/`; no
-stray `.md` in the repo root beyond README/AGENTS/CLAUDE/CHANGELOG. Commit/push only when asked.
+stray `.md` in the repo root beyond README/AGENTS/CHANGELOG. Commit/push only when asked.
 
 ## Related projects (ecosystem)
 
