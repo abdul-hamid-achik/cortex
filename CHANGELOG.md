@@ -5,6 +5,16 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-09-02
+
+### Changed
+- **MCP instructions and tool descriptions tuned for current models** — the recommended
+  system prompt names the disproof path (matching the plan gate), `cortex_start_task` states
+  its boundary against `cortex_open_task`, `cortex_abort_task` describes the resulting
+  `abandoned` phase and when `cortex_remember` + `acceptFailed` fits better, and caps emphasis
+  is dropped from contract text the kernel already enforces. No behavior change.
+- **Agents guide** — Claude-specific gotchas folded into `docs/agents.md`.
+
 ## [0.19.1] — 2026-08-29
 
 ### Fixed
