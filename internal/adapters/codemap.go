@@ -826,3 +826,43 @@ func degraded(tool, op, stdout, stderr string, code int) Result {
 		Raw:      firstNonEmpty(stdout, stderr),
 	}
 }
+
+// Subsystem is one row of codemap's architecture map (`codemap map --json`):
+// a source-path subsystem with its size and inbound edge count (fan-in).
+type Subsystem struct {
+	Name         string `json:"name"`
+	Files        int    `json:"files"`
+	Symbols      int    `json:"symbols"`
+	InboundEdges int    `json:"inbound_edges"`
+}
+
+// Map returns the indexed architecture map. ErrToolMissing when codemap is
+// absent; an explicit error when the project is not indexed, so a survey can
+// fall back to the git tree honestly instead of surveying an empty map.
+func (c *Codemap) Map(ctx context.Context, dir string) ([]Subsystem, error) {
+	if !binExists(c.bin) {
+		return nil, ErrToolMissing
+	}
+	stdout, stderr, code, err := c.exec(ctx, dir, "map", "--json")
+	if err != nil {
+		return nil, err
+	}
+	if res, ok := codemapError("map", stdout); ok {
+		return nil, fmt.Errorf("codemap map: %s", res.Summary)
+	}
+	var m struct {
+		SchemaVersion int         `json:"schema_version"`
+		Indexed       bool        `json:"indexed"`
+		Subsystems    []Subsystem `json:"subsystems"`
+	}
+	if derr := decodeJSON(stdout, &m); derr != nil {
+		return nil, fmt.Errorf("codemap map: undecodable output (exit %d): %s", code, firstNonEmpty(firstLine(stderr), firstLine(stdout)))
+	}
+	if m.SchemaVersion > 1 {
+		return nil, fmt.Errorf("codemap map: unsupported schema version %d", m.SchemaVersion)
+	}
+	if !m.Indexed || len(m.Subsystems) == 0 {
+		return nil, fmt.Errorf("codemap map: project is not indexed")
+	}
+	return m.Subsystems, nil
+}

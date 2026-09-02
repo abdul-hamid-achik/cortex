@@ -5,6 +5,33 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Long-running work** (`docs/long-running.md`): `survey` mode with a coverage ledger built from
+  `codemap map` (git-tree fallback), module-scoped rounds (`--module`: vecgrep `--dir`, git-grep
+  pathspec, a zero-dependency `git tree` fact set), per-module round budgets, and a completion
+  gate (`--accept-partial-coverage`); a per-repository **dossier**
+  (`repos/<slug>/dossier.{json,md}`) that orients later cases and goes `stale` when its files
+  change; a **findings** backlog (`finding add/list/triage/dismiss/convert`; dismissals need a
+  reason and are indexed for recall; `convert` opens a linked child case whose acceptance
+  criterion is the finding); campaign **work plans** (`workplan add/list/next`, dependency-aware,
+  retry-keyed child cases); **checkpoint.md** rewritten after every durable step plus
+  `cortex resume [--since]`; detached **background jobs** (`investigate --async` / `--fanout`,
+  `job list/cancel`, dead workers reported as failed, one job per case, `remember` blocked while
+  in flight); and **evidence freshness** (every record stamps `commit`; `status`/`resume` list
+  `staleEvidence`, `verify` warns when a hypothesis rests on stale support; a change case's
+  declared boundary is exempt).
+- **MCP**: six new agent-profile tools — `cortex_finding`, `cortex_dossier`, `cortex_coverage`,
+  `cortex_workplan`, `cortex_job`, `cortex_resume` (23 agent / 30 all); `cortex_investigate`
+  gained `module`, `async`, `fanout`, `max`; `cortex_remember` gained `acceptPartialCoverage`;
+  `mode` accepts `survey`. The stdio handshake fixture was regenerated for the new tool count.
+- **Adapters**: `git` gained `Head`, `ChangedSince`, `TrackedFiles`, and a read-only `tree`
+  operation; `codemap` gained a typed `Map`; `vecgrep` search accepts a `scope` directory prefix.
+
+### Fixed
+- **Bob adapter** accepts Bob v0.4.1's additive `repository` fields (`lock_exists`,
+  `conflict_class`, `conflict_family_counts`, `action_counts`) instead of rejecting every context
+  call with "unknown field" (dogfooding 2026-09-02).
+
 ## [0.19.2] — 2026-09-02
 
 ### Changed

@@ -53,6 +53,11 @@ Cortex exposes a small task workflow instead of dozens of overlapping raw tools:
 | **verify** | binds typed claims to an explicit surface, optional verifier, and required exact contract; detects scope drift and atomically writes one revision-bound receipt batch |
 | **remember** | persists the outcome and completes the task — normal completion requires the canonical assessment to be `verified`; explicit acknowledgments preserve partial/unverified/failed outcomes honestly |
 | **status / show** | phase, structured next actions, decisions, scope drift, bounded claim-proof manifest, and the canonical `verified / partial / failed / unverified` assessment |
+| **survey / coverage** | opens a case in `survey` mode with a coverage ledger built from codemap's architecture map (or the git tree); rounds are scoped per module and completion needs coverage |
+| **finding** | durable backlog of bugs / improvements / ideas backed by case evidence; dismissals need a reason; `convert` opens a linked child case whose acceptance criterion is the finding |
+| **dossier** | per-repository memory that outlives cases and goes `stale` when its files change; orients every later case |
+| **workplan** | dependency-aware campaign items handed to actors as linked, retry-keyed child cases |
+| **resume / job** | checkpoint packet + deltas after context loss; detached investigation jobs that outlive an MCP call |
 
 These are structural invariants enforced by a **phase machine**, not by prompting. A model can't
 skip the disproof path by restating a hypothesis, or call a change "done" without proof.
@@ -135,8 +140,14 @@ cortex show task_06FK…      # full one-screen view of a session — from ANY d
 cortex overview             # cross-repo rollup: completion, verification, where work sits
 cortex timeline task_06FK…  # a session's phases + evidence + tool calls + verification, time-sorted
 cortex metrics task_06FK…   # outcome & evidence metrics, incl. time-in-phase
+cortex resume task_06FK…    # checkpoint + deltas after context loss
 cortex doctor               # environment + session snapshot + specialist tool health
 ```
+
+For whole-repository comprehension, bug hunts, and multi-session campaigns — survey mode with a
+coverage ledger, a per-repository dossier, a findings backlog, dependency-aware work plans,
+detached background jobs, and evidence freshness — see
+[Long-running work](https://cortexai.tools/long-running) (`docs/long-running.md`).
 
 Every non-interactive read command supports `--json` for machine consumption. Output is styled at a
 TTY and plain when piped.
@@ -153,8 +164,8 @@ entire non-sensitive named-claim/verifier proof closure or omit it explicitly as
 Cortex speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC):
 
 ```bash
-cortex serve                 # compact agent profile (default, 17 tools)
-cortex serve --profile all   # full operator profile (24 tools)
+cortex serve                 # compact agent profile (default, 23 tools)
+cortex serve --profile all   # full operator profile (30 tools)
 ```
 
 The default `agent` profile includes the task loop, notes, bounded decisions, handoffs, evidence and
@@ -185,7 +196,7 @@ Cortex's compact profile is contract-tested with `local-agent`: its required
 acceptance criteria and proof manifests are optional. Use the normal MCPHub gateway process
 (`mcphub mcp serve --agent local-agent`) or register a direct server named `cortex` with command
 `cortex` and arguments `serve`. `cortex doctor --probe` performs a live gateway handshake; the
-default Cortex registration should report 17 tools. Completed handoffs stay within local-agent's
+default Cortex registration should report 23 tools. Completed handoffs stay within local-agent's
 96 KiB tool-result ceiling by budgeting the primary proof packet at 90 KiB.
 
 ## The case file

@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -98,6 +99,7 @@ func (k *Kernel) RecordObservation(in ObservationInput) (domain.Envelope, error)
 		Claim:  redactedClaim, Category: category, Location: location,
 		Confidence: confidence, Sensitivity: sensitivity(sensitive),
 		RawRef: fmt.Sprintf("case://%s/evidence/%s", c.ID, id),
+		Commit: k.headCommit(context.Background()),
 	}
 	if err := k.store.AppendEvidence(c.ID, ev); err != nil {
 		return errEnvelope(c.ID, err.Error()), err

@@ -263,7 +263,11 @@ func decomposeSearchSteps(steps []step, question string, candLimit int) ([]step,
 		}
 		expandedTools[s.tool] = true
 		for _, sub := range subs {
-			out = append(out, step{tool: s.tool, op: "search", input: map[string]any{"query": sub, "limit": candLimit}})
+			input := map[string]any{"query": sub, "limit": candLimit}
+			if scope, ok := s.input["scope"]; ok {
+				input["scope"] = scope
+			}
+			out = append(out, step{tool: s.tool, op: "search", input: input})
 		}
 	}
 	if len(expandedTools) == 0 {

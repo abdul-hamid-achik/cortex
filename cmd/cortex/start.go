@@ -43,7 +43,7 @@ var startCmd = &cobra.Command{
 }
 
 func init() {
-	startCmd.Flags().String("mode", "change", "change | investigate | review")
+	startCmd.Flags().String("mode", "change", "change | investigate | review | survey")
 	startCmd.Flags().String("risk", "medium", "low | medium | high")
 	startCmd.Flags().StringArray("surface", nil, "user-visible surface (repeatable): code, browser, terminal, artifact, secret")
 	startCmd.Flags().StringArray("criterion", nil, "immutable acceptance criterion as id=statement (repeatable)")

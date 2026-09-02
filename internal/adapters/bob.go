@@ -330,13 +330,19 @@ type bobProduct struct {
 }
 
 type bobRepository struct {
-	State             string `json:"state"`
-	Clean             bool   `json:"clean"`
-	LockChanged       bool   `json:"lock_changed"`
-	ConflictCount     int    `json:"conflict_count"`
-	ManagedFiles      int    `json:"managed_files"`
-	PlanDigestVersion int    `json:"plan_digest_version"`
-	PlanDigest        string `json:"plan_digest"`
+	State       string `json:"state"`
+	Clean       bool   `json:"clean"`
+	LockChanged bool   `json:"lock_changed"`
+	// Bob >= v0.4.1 additive schema-v1 fields. Unknown future fields still
+	// fail closed; these are the documented current shape.
+	LockExists          bool           `json:"lock_exists,omitempty"`
+	ConflictCount       int            `json:"conflict_count"`
+	ConflictClass       string         `json:"conflict_class,omitempty"`
+	ConflictFamilyCount map[string]int `json:"conflict_family_counts,omitempty"`
+	ActionCounts        map[string]int `json:"action_counts,omitempty"`
+	ManagedFiles        int            `json:"managed_files"`
+	PlanDigestVersion   int            `json:"plan_digest_version"`
+	PlanDigest          string         `json:"plan_digest"`
 }
 
 type bobCapability struct {

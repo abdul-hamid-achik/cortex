@@ -1,5 +1,4 @@
 # CLI
-
 The `cortex` binary exposes two surfaces over the kernel: **CLI** and **MCP**. Every non-interactive read command supports `--json` for machine consumption;
 output is styled at a TTY and plain when piped. For cross-session views use `cortex sessions --json` or `cortex show <taskId> --json`.
 
@@ -44,7 +43,7 @@ success rule; the same id and exact statement must later appear in a typed verif
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--mode` | `change` | `change` \| `investigate` \| `review` |
+| `--mode` | `change` | `change` \| `investigate` \| `review` \| `survey` — `survey` is coverage-driven whole-repository comprehension ([Long-running work](/long-running)) |
 | `--risk` | `medium` | `low` \| `medium` \| `high` |
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
 | `--actor` | — | stable, non-secret person/agent identifier |
@@ -68,7 +67,7 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--mode` | `change` | `change` \| `investigate` \| `review` |
+| `--mode` | `change` | `change` \| `investigate` \| `review` \| `survey` — `survey` is coverage-driven whole-repository comprehension ([Long-running work](/long-running)) |
 | `--risk` | `medium` | `low` \| `medium` \| `high` |
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
@@ -87,6 +86,9 @@ cortex investigate task_06FK… "where is the OAuth return URL handled"
 |---|---|
 | `--surface` (repeatable) | override the routing surfaces |
 | `--depth` | `quick` \| `standard` \| `deep` |
+| `--module` | scope discovery to one directory (vecgrep `--dir`, git-grep pathspec, module tree facts) and record survey coverage for it; survey rounds default to the next unseen module |
+| `--async` | run the round in a detached background job (`cortex job list` to poll) |
+| `--fanout` / `--max` | survey: queue one background round per unseen module (default 5, max 32); the question is optional |
 
 Depth and surface overrides are validated before Cortex invokes an adapter. Unknown values fail
 explicitly instead of silently falling back to a different route or investigation cost.
@@ -290,6 +292,7 @@ cortex remember task_06FK… "returnTo was dropped; fixed and browser-verified" 
 | `--unverified` | explicitly accept a `partial` or `unverified` completion when adequate proof could not be completed |
 | `--accept-failed` | explicitly accept a `failed` completion — records a failed outcome, not a green one |
 | `--accept-open-children` | complete a parent while child tasks are still in-flight |
+| `--accept-partial-coverage` | complete a survey while coverage-ledger modules remain unseen |
 
 These acknowledgments preserve legacy tasks honestly; they do not bypass an explicitly registered
 acceptance contract. Every registered criterion needs current bound proof before completion.
@@ -360,6 +363,24 @@ plan, hypotheses, at most 20 recent evidence facts, the latest verifier runs plu
 receipts still current for the same revision/diff, decisions, the verification assessment, and
 executable actions. Raw tool output is excluded. Use `-C <workspace>` when the case lives in a
 repo-local or custom `cases_dir`.
+
+### Long-running work
+
+Whole-repository comprehension, bug hunts, and multi-session campaigns use the pieces documented in
+[Long-running work](/long-running). Every command supports `--json` and returns the shared envelope
+plus a report body.
+
+| Command | Purpose |
+|---|---|
+| `cortex coverage <taskId> [--all]` | survey progress: unseen / explored / summarized modules with fan-in, rounds, and the next module |
+| `cortex finding add <taskId> <title> [--kind bug\|improvement\|feature\|question] [--severity] [--file] [--symbol] [--evidence ev_…]` | record a durable finding backed by evidence ids from the case |
+| `cortex finding list <taskId> [--status …]` · `triage` · `dismiss --reason` · `convert --actor` | triage the backlog; dismissals need a reason and are indexed for recall; `convert` opens a linked child case whose acceptance criterion is the finding |
+| `cortex dossier add <taskId> --module … --title … --summary … [--kind] [--file] [--evidence]` | write or update (`--entry`) an evidence-backed repository memory entry |
+| `cortex dossier list [--module] [--kind] [--stale]` · `cortex dossier refresh` | read repository memory with freshness evaluated against HEAD; persist the stale marks |
+| `cortex workplan add <taskId> <goal> [--id] [--mode] [--after id] [--criterion id=statement]` | add a dependency-aware item to a campaign |
+| `cortex workplan list <taskId>` · `cortex workplan next <taskId> --actor …` | derived item states; claim the next ready item as a linked child case |
+| `cortex resume <taskId> [--since RFC3339]` | the checkpoint packet plus everything that changed since a cursor |
+| `cortex job list <taskId>` · `cortex job cancel <taskId> <jobId>` | detached investigation jobs (dead workers are reported as failed) |
 
 ### `cortex review`
 
@@ -502,8 +523,8 @@ verification receipts — merged and time-sorted. Central sessions work from any
 | `cortex read-artifact <taskId> <ref> [--path file] [--max-bytes N] [--allow-binary]` | preview a task-owned raw ref or task-referenced fcheap ref; path must be safe/relative; discovery ≤512 entries/100 files; binary requires explicit opt-in; 32 KiB default/128 KiB cap |
 | `cortex serve` (`mcp`) | run the MCP server over stdio; compact `agent` profile by default |
 
-`cortex serve --profile agent` exposes 17 lifecycle, collaboration, evidence, and recall tools for
-a model's normal working context. `cortex serve --profile all` exposes 24 tools by adding seven
+`cortex serve --profile agent` exposes 23 lifecycle, collaboration, evidence, recall, and long-running-work tools for
+a model's normal working context. `cortex serve --profile all` exposes 30 tools by adding seven
 cross-repository monitoring/session-administration operations for an operator-oriented MCP client.
 See [MCP server](/mcp#exposure-profiles).
 

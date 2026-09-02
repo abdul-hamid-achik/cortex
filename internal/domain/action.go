@@ -41,7 +41,7 @@ func ClassifyOp(tool, op string) ActionClass {
 	}
 	switch tool {
 	case "git":
-		if oneOf(op, "", "status", "changed_files", "grep") {
+		if oneOf(op, "", "status", "changed_files", "grep", "tree") {
 			return ActionReadOnly
 		}
 	case "bob":

@@ -266,8 +266,8 @@ func TestMCPToolsList(t *testing.T) {
 			t.Errorf("missing MCP tool %q", want)
 		}
 	}
-	if len(res.Tools) != 24 {
-		t.Errorf("expected 24 tools, got %d", len(res.Tools))
+	if len(res.Tools) != 30 {
+		t.Errorf("expected 30 tools, got %d", len(res.Tools))
 	}
 }
 

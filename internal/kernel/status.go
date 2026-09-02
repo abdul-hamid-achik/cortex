@@ -40,6 +40,24 @@ type StatusReport struct {
 	EvidenceCount        int                     `json:"evidenceCount"`
 	InvestigationRounds  int                     `json:"investigationRounds"`
 	InvestigationBudget  int                     `json:"investigationBudget"`
+	// Long-running task state: survey coverage, the findings backlog, evidence
+	// freshness, detached jobs, and the campaign work plan.
+	Coverage      *domain.CoverageSummary `json:"coverage,omitempty"`
+	Findings      *FindingCounts          `json:"findings,omitempty"`
+	StaleEvidence []StaleEvidence         `json:"staleEvidence,omitempty"`
+	Jobs          []domain.Job            `json:"jobs,omitempty"`
+	Workplan      *WorkplanSummary        `json:"workplan,omitempty"`
+}
+
+// WorkplanSummary is the bounded campaign rollup status carries.
+type WorkplanSummary struct {
+	Items   int    `json:"items"`
+	Ready   int    `json:"ready"`
+	Active  int    `json:"active"`
+	Done    int    `json:"done"`
+	Failed  int    `json:"failed"`
+	Blocked int    `json:"blocked"`
+	Next    string `json:"next,omitempty"`
 }
 
 // Status returns the task phase, unresolved hypotheses, scope drift, required
@@ -89,6 +107,11 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 		InvestigationRounds:  c.InvestigationRounds,
 		InvestigationBudget:  k.cfg.Budget.MaxInvestigationRounds,
 	}
+	if c.Mode == domain.ModeSurvey {
+		// Survey rounds are budgeted per module (see the coverage ledger), so
+		// the case-level counter is informational only.
+		rep.InvestigationBudget = 0
+	}
 	for i := len(decisions) - 1; i >= 0; i-- {
 		if decisions[i].Status == domain.DecisionPending {
 			decision := decisions[i]
@@ -121,6 +144,7 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	rep.ClaimProofs, rep.ClaimProofTotal = claimProofsForCase(c.ID, c, freshReceipts)
 	rep.ClaimProofsTruncated = rep.ClaimProofTotal > len(rep.ClaimProofs)
 	rep.Actions = hydrateDecisionActions(c, structuredNextForCaseAt(c, k.now().UTC(), assessment), decisions)
+	k.attachLongRunningStatus(ctx, &rep, c, snapshot.Evidence)
 
 	// Scope drift for in-flight change tasks.
 	if c.Mode == domain.ModeChange && (c.Status == domain.PhaseChanging || c.Status == domain.PhaseVerifying) && k.git != nil {
@@ -382,4 +406,78 @@ type TaskSummary struct {
 	Phase      domain.Phase `json:"phase"`
 	Repository string       `json:"repository"`
 	CreatedAt  string       `json:"createdAt"`
+}
+
+// attachLongRunningStatus adds survey coverage, the findings backlog, stale
+// evidence, detached jobs, and the campaign rollup to a status report, with
+// the structured continuations each one implies.
+func (k *Kernel) attachLongRunningStatus(ctx context.Context, rep *StatusReport, c *domain.CaseFile, evidence []domain.Evidence) {
+	if ledger := k.coverageFor(c.ID); ledger != nil {
+		s := ledger.Summary()
+		rep.Coverage = &s
+		rep.Actions = append(k.surveyActions(c, ledger), rep.Actions...)
+		if c.Status == domain.PhaseInvestigating && s.Unseen > 0 {
+			rep.NextActions = append(rep.NextActions, fmt.Sprintf("survey coverage %.0f%% — next module: %s", s.Percent, s.Next))
+		}
+	}
+	if findings, err := k.store.Findings(c.ID); err == nil && len(findings) > 0 {
+		counts := countFindings(findings)
+		rep.Findings = &counts
+		if counts.Open > 0 && !c.Status.IsTerminal() {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d open finding(s) await triage (cortex finding list %s)", counts.Open, c.ID))
+		}
+	}
+	if !c.Status.IsTerminal() {
+		if len(evidence) == 0 {
+			// The status snapshot streams a bounded projection; freshness needs
+			// every located record.
+			evidence, _ = k.store.Evidence(c.ID)
+		}
+		stale, warnings := k.staleEvidence(ctx, evidence, expectedEdits(k, c))
+		rep.StaleEvidence = stale
+		rep.Warnings = append(rep.Warnings, warnings...)
+		if len(stale) > 0 {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d evidence record(s) describe files that changed since they were recorded — re-investigate before relying on them", len(stale)))
+		}
+	}
+	if jobs, err := k.repairedJobs(c.ID); err == nil {
+		for _, j := range jobs {
+			if !j.Status.Terminal() {
+				rep.Jobs = append(rep.Jobs, j)
+			}
+		}
+		if len(rep.Jobs) > 0 {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d background job(s) in flight; evidence is still arriving", len(rep.Jobs)))
+			rep.Actions = append(rep.Actions, jobActions(c, rep.Jobs[0])[0])
+		}
+	}
+	if plan, err := k.store.LoadWorkplan(c.ID); err == nil && len(plan.Items) > 0 {
+		views := k.deriveWorkItems(plan)
+		summary := WorkplanSummary{Items: len(views)}
+		for _, v := range views {
+			switch v.Derived {
+			case "done":
+				summary.Done++
+			case "failed":
+				summary.Failed++
+			case "active", "claimed":
+				summary.Active++
+			case "blocked":
+				summary.Blocked++
+			case "pending":
+				summary.Ready++
+				if summary.Next == "" {
+					summary.Next = v.ID
+				}
+			}
+		}
+		rep.Workplan = &summary
+		if summary.Next != "" && !c.Status.IsTerminal() {
+			rep.Actions = append(rep.Actions, domain.NextAction{
+				Tool: "cortex_workplan", Command: cortexCommand(c, "workplan", "next", c.ID, "--actor", "ACTOR"),
+				Reason:    "claim the next ready campaign item as a linked child case",
+				Arguments: cloneArgs(knownActionArgs(c), "operation", "next"), Inputs: []string{"actor"},
+			})
+		}
+	}
 }

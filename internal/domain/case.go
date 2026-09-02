@@ -40,6 +40,10 @@ const (
 	ModeChange      Mode = "change"      // will mutate the workspace
 	ModeInvestigate Mode = "investigate" // read-only understanding
 	ModeReview      Mode = "review"      // diff-scoped analysis
+	// ModeSurvey is a read-only, coverage-driven comprehension pass over a whole
+	// repository. Investigation rounds are budgeted per module instead of per
+	// case, and completion is measured against a coverage ledger.
+	ModeSurvey Mode = "survey"
 )
 
 // Valid reports whether m is one of the modes the lifecycle understands.
@@ -47,7 +51,7 @@ const (
 // case is created so an unknown mode cannot bypass change-task gates.
 func (m Mode) Valid() bool {
 	switch m {
-	case ModeChange, ModeInvestigate, ModeReview:
+	case ModeChange, ModeInvestigate, ModeReview, ModeSurvey:
 		return true
 	default:
 		return false

@@ -24,8 +24,8 @@ user-visible behavior.
 Two surfaces over one kernel (the ecosystem pattern — cf. codemap/vecgrep):
 
 - **CLI** — human commands *and* `--json` machine output for agents (Cobra + Charm v2 lipgloss).
-- **MCP server** — `cortex serve` (stdio), a 17-tool `agent` profile by default;
-  `--profile all` exposes the full 24-tool operator surface.
+- **MCP server** — `cortex serve` (stdio), a 23-tool `agent` profile by default;
+  `--profile all` exposes the full 30-tool operator surface.
 
 Product docs: `docs/quick-start.md` (humans), `docs/mcp.md` (agents). Monitor sessions with
 `cortex sessions` / `cortex show --json` instead of the removed Studio TUI (`docs/studio.md`).
@@ -41,6 +41,7 @@ cortex/
 │   ├── main.go               #   root command, persistent --workspace/-C and --json flags
 │   ├── open / start / investigate / plan / change / verify / remember / status .go
 │   ├── note / decision / handoff / doctor / serve .go
+│   ├── longrunning.go        #   finding / dossier / coverage / workplan / resume / job command groups
 │   └── render.go             #   lipgloss v2 styled view + --json emit (TTY-gated color)
 ├── internal/
 │   ├── domain/               # core types — NO deps on adapters/store/transport
@@ -52,7 +53,8 @@ cortex/
 │   │   ├── verification.go   #   typed claims + VerificationRecord + statuses
 │   │   ├── lease.go decision.go # change ownership + resumable human decisions
 │   │   ├── envelope.go       #   the shared MCP/CLI result envelope
-│   │   └── policy.go         #   routing matrix, budget, surface→verifier map
+│   │   ├── policy.go         #   routing matrix, budget, surface→verifier map
+│   │   └── finding.go dossier.go coverage.go workplan.go job.go # long-running work records
 │   ├── kernel/               # SHARED SERVICE LAYER — CLI + MCP both call this
 │   │   ├── kernel.go         #   Kernel struct, evidence stamping, phase transition helper
 │   │   ├── orient.go open.go #   new task + idempotent open/resume
@@ -65,7 +67,10 @@ cortex/
 │   │   ├── recall.go         #   Cross-case disproof recall: index hooks + recall
 │   │   ├── observe.go decision.go handoff.go actions.go artifact.go # human/agent collaboration + projections
 │   │   ├── status.go         #   Status / AbortTask / ReadEvidence / ListTasks
-│   │   └── scope.go          #   scope-drift detection vs the declared boundary
+│   │   ├── scope.go          #   scope-drift detection vs the declared boundary
+│   │   ├── freshness.go      #   evidence `commit` stamping + stale detection (git ChangedSince, bounded)
+│   │   ├── finding.go dossier.go survey.go workplan.go checkpoint.go jobs.go # long-running work (docs/long-running.md)
+│   │   └── jobs_unix.go jobs_other.go # detached worker spawn (Setsid) + terminate
 │   ├── adapters/             # one file per tool; flat package sharing exec/redact plumbing
 │   │   ├── adapter.go        #   Adapter interface, Request/Result/Fact, Capability/Status
 │   │   ├── exec.go           #   runner (fakeable), timeout, redaction, ErrToolMissing
@@ -74,8 +79,9 @@ cortex/
 │   │   └── util.go           #   pluralize / decodeJSON / clip helpers
 │   ├── store/
 │   │   ├── casefs/           #   JSON/JSONL case-file persistence ($XDG_STATE_HOME/cortex/sessions/<repo>/<id>/)
+│   │   │                     #   + findings/coverage/workplan/jobs/checkpoint files and RepoStore (repos/<slug>/dossier.json)
 │   │   └── redact/           #   secret-shape redaction (last-line filter before model output)
-│   ├── mcp/server.go         # stdio MCP server — THIN pass-through (17 agent / 24 all)
+│   ├── mcp/server.go         # stdio MCP server — THIN pass-through (23 agent / 30 all; longrunning.go holds the six long-running tools)
 │   ├── tui/board.go          # Legacy Charm v2 board (not wired to the CLI)
 │   ├── config/               # XDG paths + cortex.yaml (budget/redact/cases_dir/recall/verifiers) + env
 │   ├── ids/                  # time-sortable Crockford-base32 IDs (task_/ev_/hyp_/vr_/dec_/raw_)
@@ -340,9 +346,11 @@ task install         # go install ./cmd/cortex
 - **All logging goes to stderr** so stdout stays pure JSON-RPC (mcphub follows the same rule).
 - Kernels are built **per-call** (`kernelFor`) from the tool's optional `workspace` arg, so one
   server process serves tasks in any workspace.
-- The default `agent` profile exposes 17 lifecycle, collaboration, evidence, and recall tools.
-  `all` adds exactly seven operator tools (`list_tasks`, `sessions`, `timeline`, `metrics`,
-  `overview`, `archive`, `unarchive`) for 24 total. Update profile tests and docs with any change.
+- The default `agent` profile exposes 23 lifecycle, collaboration, evidence, recall, and
+  long-running-work tools (`cortex_finding`, `cortex_dossier`, `cortex_coverage`, `cortex_workplan`,
+  `cortex_job`, `cortex_resume` live in `internal/mcp/longrunning.go`). `all` adds exactly seven
+  operator tools (`list_tasks`, `sessions`, `timeline`, `metrics`, `overview`, `archive`,
+  `unarchive`) for 30 total. Update profile tests and docs with any change.
 
 ### CLI / Charm v2
 - Cobra for commands; **Charm v2 lipgloss** (`charm.land/lipgloss/v2`, **not**
@@ -475,3 +483,19 @@ Go CLI + config + MCP), **vecgrep** (semantic search + memory), **cairntrace** (
 evidence), **tinyvault**/`tvault` (secrets), **veclite** (cross-case recall), and **mcphub** (MCP
 gateway). Cortex consumes Bob as read-only orientation/planning guidance; it does not replace Bob
 or mcphub.
+- **Adapter `dir` is the exec working directory, never a filter.** Every adapter reads
+  `req.Str("dir")` as the directory to run in. Survey module scoping travels under the `scope`
+  key (vecgrep `--dir <prefix>`, git-grep pathspec, `git tree`); putting a relative module path
+  in `dir` makes `fork/exec` fail with "no such file or directory" on a binary that exists
+  (dogfooding 2026-09-02 on bob).
+- **New adapter verbs must be allowlisted in `domain/action.go`.** Operation classification fails
+  closed as `external_mutation`, so a new read-only verb (e.g. `git tree`) silently yields zero
+  facts until it is listed under its tool's read-only set.
+- **Survey rounds are budgeted per module.** `max_investigation_rounds` applies to the coverage
+  ledger row a survey round is scoped to; the case-level counter only grows and status reports
+  no case budget in survey mode. Freshness exempts a change case's declared boundary once it is
+  editing — its own edits are the change, not stale reads.
+- **Bob schema-v1 decoding is strict on purpose.** `decodeBobStrict` rejects unknown fields (a
+  test asserts it). When Bob adds an additive field (v0.4.1 added `lock_exists`,
+  `conflict_class`, `conflict_family_counts`, `action_counts` under `repository`), add it to the
+  typed struct rather than relaxing the decoder.

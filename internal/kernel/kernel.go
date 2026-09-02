@@ -30,6 +30,12 @@ type Kernel struct {
 	approver Approver
 	now      func() time.Time
 	recaller caseRecaller // cross-case disproof recall surface (veclite); nil when absent
+
+	// head caches the workspace HEAD briefly so a burst of evidence stamps costs
+	// one git call (see freshness.go).
+	headCache *headCache
+	// spawn starts a detached job worker; tests replace it (see jobs.go).
+	spawn jobSpawner
 }
 
 // New builds a kernel for a workspace with a default adapter registry (git,
@@ -67,7 +73,7 @@ func New(cfg config.Config) (*Kernel, error) {
 	reg := adapters.NewRegistry(registered...)
 	reg.SetMaxParallel(cfg.Budget.MaxParallelCalls)
 	reg.SetMaxAutoRetries(cfg.Budget.MaxAutoRetriesPerTool)
-	k := &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now}
+	k := &Kernel{cfg: cfg, store: store, reg: reg, git: git, red: redact.New(cfg.RedactLiterals...), now: time.Now, headCache: &headCache{}}
 	if vl, ok := reg.Get("veclite").(*adapters.Veclite); ok {
 		vl.Configure(adapters.VecliteConfig{
 			DBPath:     cfg.Recall.DBPath,
@@ -137,7 +143,7 @@ func approveCommands() bool {
 
 // NewWith builds a kernel with an explicit registry (used by tests).
 func NewWith(cfg config.Config, store *casefs.Store, reg *adapters.Registry) *Kernel {
-	k := &Kernel{cfg: cfg, store: store, reg: reg, red: redact.New(cfg.RedactLiterals...), now: time.Now}
+	k := &Kernel{cfg: cfg, store: store, reg: reg, red: redact.New(cfg.RedactLiterals...), now: time.Now, headCache: &headCache{}}
 	if g, ok := reg.Get("git").(*adapters.Git); ok {
 		k.git = g
 	}
@@ -293,6 +299,7 @@ func (k *Kernel) buildEvidenceDerived(taskID, tool string, f adapters.Fact, rawR
 		Sensitivity: sensitivity(sens),
 		RawRef:      ref,
 		DerivedFrom: derivedFrom,
+		Commit:      k.headCommit(context.Background()),
 	}
 	if f.Location != nil {
 		ev.Location = &domain.Location{

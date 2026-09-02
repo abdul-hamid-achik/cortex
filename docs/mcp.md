@@ -7,7 +7,7 @@ Cortex speaks the Model Context Protocol over stdio so agents can drive the kern
 
 ```bash
 cortex serve                 # alias: cortex mcp; agent profile by default
-cortex serve --profile all   # full 24-tool operator surface
+cortex serve --profile all   # full 30-tool operator surface
 ```
 
 The transport is **newline-delimited JSON-RPC** (the go-sdk `StdioTransport`). All diagnostic
@@ -18,11 +18,11 @@ fallback when a case uses a repo-local or custom `cases_dir`.
 
 ## Exposure profiles
 
-`--profile agent` is the default. It exposes 17 tools for the task lifecycle, bounded human
+`--profile agent` is the default. It exposes 23 tools for the task lifecycle, long-running work, bounded human
 collaboration, evidence/artifact access, and prior-case recall. Cross-repository monitoring and
 session administration stay outside the model's default tool context.
 
-`--profile all` exposes 24 tools by adding exactly seven operator operations: `list_tasks`,
+`--profile all` exposes 30 tools by adding exactly seven operator operations: `list_tasks`,
 `sessions`, `timeline`, `metrics`, `overview`, `archive`, and `unarchive`. Profiles change exposure
 only; both call the same kernel and use the same case files.
 
@@ -40,11 +40,11 @@ collaboration. See [Empirical trajectory runner: MCP profile decision gate](/eva
 |---|---|---|
 | `cortex_start_task` | `agent`, `all` | deliberately create a fresh case; orient on git identity + tool health; optionally register immutable `acceptanceCriteria` |
 | `cortex_open_task` | `agent`, `all` | preferred retry-safe entry: idempotency key returns the same case; otherwise resume newest active normalized goal/mode/workspace/branch/criteria match or start once; a new case accepts criteria, actor, parent linkage, and optional `seedPaths` (≤8 × 16 KiB note/packet files stamped into orientation evidence) |
-| `cortex_investigate` | `agent`, `all` | route a question causally — bounded discovery (vecgrep/vidtrace) first, top candidates fed into codemap; `mode=review` prefers git + `codemap review`; wall-clock budgets (`quick` 20s / `standard` 45s / `deep` 90s) return partial evidence instead of hanging; structural evidence carries `derivedFrom` provenance; low-value and junk-path hits are filtered and an all-weak round reports "no strong candidates" with zero facts; `deep` depth splits a compound question into up to five sub-queries |
+| `cortex_investigate` | `agent`, `all` | route a question causally; `module` scopes a round to one directory and records survey coverage (survey rounds default to the next unseen module); `async`/`fanout` queue detached jobs instead of waiting — bounded discovery (vecgrep/vidtrace) first, top candidates fed into codemap; `mode=review` prefers git + `codemap review`; wall-clock budgets (`quick` 20s / `standard` 45s / `deep` 90s) return partial evidence instead of hanging; structural evidence carries `derivedFrom` provenance; low-value and junk-path hits are filtered and an all-weak round reports "no strong candidates" with zero facts; `deep` depth splits a compound question into up to five sub-queries |
 | `cortex_plan` | `agent`, `all` | the planning gate — hypotheses (with disproof and optional per-hypothesis evidence IDs), boundary, verification plan; optionally adds bounded Bob path-ownership guidance when `bob.yaml` exists |
 | `cortex_begin_change` | `agent`, `all` | atomically acquire the actor's expiring change lease and enter `changing`; same-owner retries are safe |
 | `cortex_verify` | `agent`, `all` | run planned verifiers, detect scope drift, and bind typed `claimSpecs` (or `fromPlan`) to an exact surface/verifier/contract; high-risk drift requires `driftAcknowledged`; leased tasks require the owner actor; intentional no-diff changes require `noOpAcknowledged` |
-| `cortex_remember` | `agent`, `all` | persist the outcome and complete; normal completion requires the canonical assessment to be `verified`, while explicit `verificationNotPossible` / `acceptFailed` / `acceptOpenChildren` acknowledgments preserve non-green or still-open child work |
+| `cortex_remember` | `agent`, `all` | persist the outcome and complete; `acceptPartialCoverage` preserves a survey with unseen modules; normal completion requires the canonical assessment to be `verified`, while explicit `verificationNotPossible` / `acceptFailed` / `acceptOpenChildren` acknowledgments preserve non-green or still-open child work |
 | `cortex_status` | `agent`, `all` | phase, case revision/actor/linkage/lease, pending decision, scope, bounded named-claim proof manifest, structured actions, and canonical `verified / partial / failed / unverified` assessment. `detail=full` adds per-tool binary health **and** discovery index readiness (`index`, `fixCommand`) |
 | `cortex_resolve` | `agent`, `all` | mark a hypothesis confirmed/challenged/rejected as evidence accumulates (history retained) |
 | `cortex_note` | `agent`, `all` | append redacted human/agent/reviewer context as provenance-bearing `human_report`; never satisfies verification alone |
@@ -55,6 +55,12 @@ collaboration. See [Empirical trajectory runner: MCP profile decision gate](/eva
 | `cortex_read_evidence` | `agent`, `all` | full evidence record by ID |
 | `cortex_read_artifact` | `agent`, `all` | bounded preview of a task-owned raw ref or task-referenced fcheap ref; safe relative `path`; 32 KiB default/128 KiB cap; discovery ≤512 entries/100 files; binary refused unless `allowBinary` |
 | `cortex_recall_cases` | `agent`, `all` | recall prior resolved cases related to a query. Omit `repo` for a cross-repo search. Recall is explicit: orient and investigate never run it on your behalf |
+| `cortex_finding` | `agent`, `all` | durable backlog: `operation=add` records a bug/improvement/feature/question backed by case evidence ids; `list`, `triage`, `dismiss` (reason required, indexed for recall), `convert` (opens a linked child case whose acceptance criterion is the finding) |
+| `cortex_dossier` | `agent`, `all` | repository memory that outlives cases: `add` writes an evidence-backed entry per module from an active case; `list` evaluates freshness against HEAD (stale when its files changed); `refresh` persists stale marks |
+| `cortex_coverage` | `agent`, `all` | survey ledger: unseen / explored / summarized modules, fan-in, rounds, and the next module to visit |
+| `cortex_workplan` | `agent`, `all` | campaign work plan: `add` a dependency-aware item, `list` derived item states, `next` claims the first ready item for an actor as a linked, retry-keyed child case |
+| `cortex_job` | `agent`, `all` | detached investigation jobs: `start` (a question, explicit `modules`, or survey `fanout`), `list` (dead workers are reported failed), `cancel` |
+| `cortex_resume` | `agent`, `all` | the checkpoint packet plus deltas since an RFC3339 cursor — call it first after context loss |
 | `cortex_list_tasks` | `all` | list all tasks in the workspace (newest first) |
 | `cortex_sessions` | `all` | **cross-repo**: every session everywhere — id, goal, phase, repo, verified/required, active, timestamps (filter by `repo`/`active`/AND-token `query`) |
 | `cortex_timeline` | `all` | a session's time-sorted activity — phases, evidence, tool calls, receipts; optional workspace fallback finds repo-local/custom cases |
@@ -186,7 +192,7 @@ mcphub add cortex cortex serve
 mcphub sync --write
 ```
 
-That registration uses the default 17-tool `agent` profile. To expose the 24-tool operator surface:
+That registration uses the default 23-tool `agent` profile. To expose the 30-tool operator surface:
 
 ```bash
 mcphub add cortex cortex serve -- --profile all
@@ -227,7 +233,7 @@ The compact profile is contract-tested against local-agent's real MCP registry. 
 fields; the new criteria/proof fields are additive and optional. Run through the normal gateway
 with `mcphub mcp serve --agent local-agent`, or configure a direct MCP server named `cortex` with
 command `cortex` and arguments `serve`. `cortex doctor --probe` should report a successful
-17-tool handshake for the default registration.
+23-tool handshake for the default registration.
 
 local-agent caps a rendered tool result at 96 KiB. Complete verified handoffs therefore measure
 the same indented, HTML-unescaped primary JSON emitted by Cortex and stay at or below 90 KiB. The

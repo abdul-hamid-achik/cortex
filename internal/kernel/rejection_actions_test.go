@@ -173,7 +173,7 @@ func TestOpenTaskInvalidModeOffersEnumCandidatesAndKnownFields(t *testing.T) {
 	if !reflect.DeepEqual(action.Inputs, []string{"mode"}) {
 		t.Fatalf("continuation inputs = %v, want [mode]", action.Inputs)
 	}
-	want := []string{"change", "investigate", "review"}
+	want := []string{"change", "investigate", "review", "survey"}
 	if !reflect.DeepEqual(action.Candidates["mode"], want) {
 		t.Fatalf("mode candidates = %v, want %v", action.Candidates["mode"], want)
 	}

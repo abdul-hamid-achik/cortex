@@ -17,6 +17,12 @@ $XDG_STATE_HOME/cortex/sessions/<repo>/task_06FK…/
   commands.jsonl     # non-sensitive audit trail of tool invocations
   phases.jsonl       # phase-transition history (feeds `cortex timeline` + time-in-phase metrics)
   summary.md         # the readable outcome (written at completion)
+  checkpoint.md      # compact resume packet, rewritten after every durable step (cortex resume)
+  findings.json      # durable backlog: bugs / improvements / features / questions with evidence ids and dispositions
+  coverage.json      # survey-mode module ledger (unseen / explored / summarized, fan-in, rounds)
+  workplan.json      # campaign items with dependencies and the child case each one became
+  jobs.json          # detached investigation jobs (status, pid, rounds, evidence ids)
+  jobs/<jobId>.log   # worker log for a detached job (never returned to the model)
   raw/               # redacted raw tool output, one blob per tool call (evidence rawRef → here)
   refs/              # artifact references
 ```
@@ -229,3 +235,15 @@ bounded, sensitive base64. Results report `encoding`, `sensitive`, `truncated`, 
   receipts atomically with a warning.
 - `commands.jsonl` notes include retry attempt counts/final cause when a read-only tool call was
   retried and still failed (transient spawn/transport errors only; exits are data, never replayed).
+
+## Repository memory (outside the case)
+
+The dossier — evidence-backed statements about modules that outlive any single case — lives once
+per repository at `$XDG_STATE_HOME/cortex/repos/<repo-slug>/dossier.json` (plus a rendered
+`dossier.md`), independent of `cases_dir`. Each entry carries the HEAD it was written at and the
+files it depends on; `cortex dossier list` marks it `stale` when those files changed since. See
+[Long-running work](/long-running).
+
+Every evidence record also carries `commit` — the workspace HEAD at the moment it was written — so
+`status`, `resume`, and `verify` can report located records whose file changed since they were
+recorded (`staleEvidence`).

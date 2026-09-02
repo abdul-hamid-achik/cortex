@@ -26,6 +26,10 @@ type RememberInput struct {
 	// in-flight. The default refuses so a delegated change cannot vanish into a
 	// green parent.
 	AcceptOpenChildren bool
+	// AcceptPartialCoverage allows a survey to complete while ledger modules
+	// remain unseen. The default refuses so "understood the codebase" cannot be
+	// claimed over an unfinished walk.
+	AcceptPartialCoverage bool
 }
 
 // Remember persists a concise, provenance-rich conclusion to durable memory and
@@ -92,6 +96,17 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	}
 	if err := k.refuseOpenChildren(c, in.AcceptOpenChildren); err != nil {
 		return errEnvelope(c.ID, err.Error()), nil
+	}
+	if err := k.refuseRunningJobs(ctx, c); err != nil {
+		return errEnvelope(c.ID, "cannot complete: "+err.Error()), nil
+	}
+	if c.Mode == domain.ModeSurvey && !in.AcceptPartialCoverage {
+		if ledger := k.coverageFor(c.ID); ledger != nil && !surveyComplete(ledger) {
+			s := ledger.Summary()
+			return k.rememberAcknowledgmentEnvelope(c, fmt.Sprintf(
+				"cannot complete: survey coverage is %.0f%% (%d of %d modules unseen; next %s). keep investigating, or set accept_partial_coverage=true to preserve a partial survey explicitly",
+				s.Percent, s.Unseen, s.Total, s.Next), "acceptPartialCoverage"), nil
+		}
 	}
 	// One canonical assessment drives completion, status, metrics, overview, and
 	// review. A pass on one surface cannot launder a failed/unrun named claim or a

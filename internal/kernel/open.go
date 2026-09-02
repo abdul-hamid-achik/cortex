@@ -28,8 +28,8 @@ func (k *Kernel) OpenTask(ctx context.Context, in OpenInput) (domain.Envelope, e
 	in.Goal = k.red.String(strings.TrimSpace(in.Goal))
 	mode, ok := normalizeMode(in.Mode)
 	if !ok {
-		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review (got %q)", in.Mode)),
-			k.openContinuation("cortex_open_task", "open", in.StartInput, "mode", map[string][]string{"mode": {"change", "investigate", "review"}})), nil
+		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review, survey (got %q)", in.Mode)),
+			k.openContinuation("cortex_open_task", "open", in.StartInput, "mode", map[string][]string{"mode": {"change", "investigate", "review", "survey"}})), nil
 	}
 	risk, ok := normalizeRisk(in.Risk)
 	if !ok {

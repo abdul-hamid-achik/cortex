@@ -42,7 +42,7 @@ var openCmd = &cobra.Command{
 }
 
 func init() {
-	openCmd.Flags().String("mode", "change", "change | investigate | review")
+	openCmd.Flags().String("mode", "change", "change | investigate | review | survey")
 	openCmd.Flags().String("risk", "medium", "low | medium | high")
 	openCmd.Flags().StringArray("surface", nil, "user-visible surface (repeatable): code, browser, terminal, artifact, secret")
 	openCmd.Flags().String("actor", "", "stable person or agent identifier")

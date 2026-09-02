@@ -43,7 +43,7 @@ func (v *Vecgrep) Execute(ctx context.Context, req Request) (Result, error) {
 	dir := req.Str("dir")
 	switch req.Operation {
 	case "search":
-		return v.search(ctx, dir, req.Str("query"), firstNonEmpty(req.Str("mode"), "hybrid"), req.Int("limit", 10))
+		return v.search(ctx, dir, req.Str("query"), firstNonEmpty(req.Str("mode"), "hybrid"), req.Int("limit", 10), req.Str("scope"))
 	case "similar":
 		return v.similar(ctx, dir, req.Str("target"), req.Int("limit", 10))
 	case "memory_recall":
@@ -87,7 +87,7 @@ type vgEnvelope struct {
 	Hits []vgHit `json:"hits"`
 }
 
-func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int) (Result, error) {
+func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int, scope string) (Result, error) {
 	if query == "" {
 		return Result{Tool: "vecgrep", Operation: "search", Status: StatusError, Summary: "search needs a query"}, nil
 	}
@@ -95,7 +95,7 @@ func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int
 	if mode == "" {
 		mode = "hybrid"
 	}
-	res, err := v.searchOnce(ctx, dir, query, mode, limit)
+	res, err := v.searchOnce(ctx, dir, query, mode, limit, scope)
 	if err != nil {
 		return res, err
 	}
@@ -103,7 +103,7 @@ func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int
 	// keyword still searches BM25 without waiting on a slow/dead Ollama path.
 	// Skip the retry for an absent/corrupt index — keyword cannot invent chunks.
 	if mode == "hybrid" && shouldRetryVecgrepKeyword(res) {
-		kw, kwErr := v.searchOnce(ctx, dir, query, "keyword", limit)
+		kw, kwErr := v.searchOnce(ctx, dir, query, "keyword", limit, scope)
 		if kwErr == nil && kw.Status == StatusAuthoritative {
 			kw.Warnings = append([]string{
 				"vecgrep hybrid was unavailable — retried as keyword (embedding path skipped)",
@@ -114,8 +114,13 @@ func (v *Vecgrep) search(ctx context.Context, dir, query, mode string, limit int
 	return res, nil
 }
 
-func (v *Vecgrep) searchOnce(ctx context.Context, dir, query, mode string, limit int) (Result, error) {
-	stdout, stderr, code, err := v.exec(ctx, dir, "search", query, "-m", mode, "-n", strconv.Itoa(limit), "-f", "json-envelope")
+func (v *Vecgrep) searchOnce(ctx context.Context, dir, query, mode string, limit int, scope string) (Result, error) {
+	args := []string{"search", query, "-m", mode, "-n", strconv.Itoa(limit)}
+	if scope = strings.TrimSpace(scope); scope != "" && scope != "." {
+		// --dir is vecgrep's directory-prefix filter (survey module scoping).
+		args = append(args, "--dir", scope)
+	}
+	stdout, stderr, code, err := v.exec(ctx, dir, append(append([]string(nil), args...), "-f", "json-envelope")...)
 	if err != nil {
 		return failExec("vecgrep", "search", err, v.timeout), nil
 	}
@@ -147,7 +152,7 @@ func (v *Vecgrep) searchOnce(ctx context.Context, dir, query, mode string, limit
 	}
 	// Old binary that doesn't emit the envelope: fall back to the bare-array
 	// `-f json` shape so it still returns hits.
-	so, se, code2, err2 := v.exec(ctx, dir, "search", query, "-m", mode, "-n", strconv.Itoa(limit), "-f", "json")
+	so, se, code2, err2 := v.exec(ctx, dir, append(append([]string(nil), args...), "-f", "json")...)
 	if err2 != nil {
 		return failExec("vecgrep", "search", err2, v.timeout), nil
 	}

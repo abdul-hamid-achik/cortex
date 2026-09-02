@@ -657,7 +657,7 @@ func TestInvestigateSetsDegradedOnPartialResult(t *testing.T) {
 
 func TestRouteStepsCapsCandidates(t *testing.T) {
 	// Discovery searches carry the configured candidate-file cap.
-	steps := routeSteps(domain.Route{First: "vecgrep", FollowUp: "codemap"}, "some vague behavioral query", nil, 5)
+	steps := routeSteps(domain.Route{First: "vecgrep", FollowUp: "codemap"}, "some vague behavioral query", nil, 5, "")
 	sawSearch := false
 	for _, s := range steps {
 		if s.op == "search" {

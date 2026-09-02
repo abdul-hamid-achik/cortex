@@ -144,3 +144,25 @@ it does not create a pass.
 If a specialist tool is unavailable, Cortex tells you plainly (`tool_unavailable`) and marks the
 dependent verification `blocked` — it never pretends the tool ran. Adjust your plan accordingly
 (e.g. record `verificationNotPossible` if a required verifier genuinely can't run).
+
+## Long-running work
+
+When the goal is "understand this whole repository" or a multi-session campaign rather than one
+fix, use the long-running tools instead of stretching a single case:
+
+- Open with `mode: "survey"` and let each `cortex_investigate` round take the next unseen module
+  (or pass `module`). `cortex_coverage` and `cortex_status.coverage` are the progress meter;
+  `cortex_remember` refuses a survey with unseen modules unless you set `acceptPartialCoverage`.
+- Promote what you learn with `cortex_dossier` (`add` from the active case, citing evidence ids).
+  Read it (`list`) before re-deriving architecture; entries marked `stale` describe files that
+  changed since they were written.
+- Record what you find with `cortex_finding` (`add` with evidence ids). `dismiss` needs a reason;
+  `convert` opens a linked child case whose acceptance criterion is the finding.
+- Split delegable work with `cortex_workplan` (`add` with `dependsOn`) and take items with
+  `operation: "next"` and your actor.
+- Run long rounds detached (`cortex_investigate` with `async: true` or `fanout: true`, or
+  `cortex_job`) and poll with `cortex_job list`; one job per case at a time.
+- After any context loss, call `cortex_resume` first and continue from its checkpoint and
+  `cursor`. Treat `staleEvidence` as leads to re-read, not as facts.
+
+Details: [Long-running work](/long-running).

@@ -9,13 +9,17 @@
     "cleanShutdown": true,
     "framing": "newline-delimited-json-rpc",
     "stderr": "",
-    "toolCount": 17,
+    "toolCount": 23,
     "tools": [
       "cortex_abort_task",
       "cortex_answer_decision",
       "cortex_begin_change",
+      "cortex_coverage",
+      "cortex_dossier",
+      "cortex_finding",
       "cortex_handoff",
       "cortex_investigate",
+      "cortex_job",
       "cortex_note",
       "cortex_open_task",
       "cortex_plan",
@@ -25,9 +29,11 @@
       "cortex_remember",
       "cortex_request_decision",
       "cortex_resolve",
+      "cortex_resume",
       "cortex_start_task",
       "cortex_status",
-      "cortex_verify"
+      "cortex_verify",
+      "cortex_workplan"
     ],
     "transport": "stdio"
   }

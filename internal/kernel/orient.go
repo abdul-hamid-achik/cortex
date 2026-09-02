@@ -47,8 +47,8 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	goal = k.red.String(goal)
 	mode, ok := normalizeMode(in.Mode)
 	if !ok {
-		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review (got %q)", in.Mode)),
-			k.openContinuation("cortex_start_task", "start", in, "mode", map[string][]string{"mode": {"change", "investigate", "review"}})), nil
+		return k.errEnvelopeActions("", k.red.String(fmt.Sprintf("mode must be one of: change, investigate, review, survey (got %q)", in.Mode)),
+			k.openContinuation("cortex_start_task", "start", in, "mode", map[string][]string{"mode": {"change", "investigate", "review", "survey"}})), nil
 	}
 	risk, ok := normalizeRisk(in.Risk)
 	if !ok {
@@ -194,6 +194,22 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 	if recallWarn != "" {
 		warnings = append(warnings, recallWarn)
 	}
+	// Repository memory: the freshest non-stale dossier entries orient the case
+	// before any discovery, so the second session on a repo starts where the
+	// first one ended instead of re-deriving the architecture.
+	dossierFacts, nDossier := k.dossierOrientationFacts(ctx, c)
+	facts = append(facts, dossierFacts...)
+	if c.Mode == domain.ModeSurvey {
+		ledger, ledgerWarnings := k.buildCoverageLedger(ctx, c)
+		warnings = append(warnings, ledgerWarnings...)
+		if len(ledger.Modules) == 0 {
+			warnings = append(warnings, "survey ledger is empty: neither codemap map nor the git tree produced modules")
+		} else if err := k.store.SaveCoverage(c.ID, ledger); err != nil {
+			warnings = append(warnings, "could not persist the survey coverage ledger: "+err.Error())
+		} else {
+			warnings = append(warnings, fmt.Sprintf("survey ledger: %d modules to cover (source %s); investigate with --module or let each round take the next uncovered module", len(ledger.Modules), ledger.Source))
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return errEnvelope(c.ID, "orientation canceled before commit: "+err.Error()), err
 	}
@@ -238,11 +254,19 @@ func (k *Kernel) finishOrientation(ctx context.Context, c *domain.CaseFile, resu
 	if nPrior > 0 {
 		next = append([]string{fmt.Sprintf("%d prior related case(s) recalled — read before re-deriving a theory", nPrior)}, next...)
 	}
+	if nDossier > 0 {
+		next = append([]string{fmt.Sprintf("%d repository dossier entries available — cortex dossier list before re-deriving the architecture", nDossier)}, next...)
+	}
 	verb := "started"
 	if resumed {
 		verb = "recovered"
 	}
 	env := k.envelope(c, fmt.Sprintf("%s task %s (%s); oriented and ready to investigate", verb, c.ID, c.Goal), facts, warnings, next)
+	if c.Mode == domain.ModeSurvey {
+		if ledger := k.coverageFor(c.ID); ledger != nil {
+			env.Actions = append(k.surveyActions(c, ledger), env.Actions...)
+		}
+	}
 	if len(bob.actions) > 0 {
 		env.Actions = append(k.redactStructuredActions(bob.actions), env.Actions...)
 	}

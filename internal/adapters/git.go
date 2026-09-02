@@ -38,7 +38,9 @@ func (g *Git) Execute(ctx context.Context, req Request) (Result, error) {
 	case "changed_files":
 		return g.changed(ctx, dir, req.Str("since"), boolOf(req.Input["staged"]))
 	case "grep":
-		return g.grep(ctx, dir, req.Str("pattern"), req.Int("limit", 8))
+		return g.grep(ctx, dir, req.Str("pattern"), req.Int("limit", 8), req.Str("scope"))
+	case "tree":
+		return g.tree(ctx, dir, req.Str("scope"), req.Int("limit", 8))
 	default:
 		return Result{Tool: "git", Operation: req.Operation, Status: StatusError,
 			Summary: "unknown git operation: " + req.Operation}, nil
@@ -210,7 +212,7 @@ func (g *Git) changed(ctx context.Context, dir, since string, staged bool) (Resu
 // candidates (one per matching file, bounded to limit), never proof. A clean
 // search with zero matches is authoritative-empty, not an error; a non-repo
 // workspace degrades to partial.
-func (g *Git) grep(ctx context.Context, dir, pattern string, limit int) (Result, error) {
+func (g *Git) grep(ctx context.Context, dir, pattern string, limit int, scope string) (Result, error) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
 		return Result{Tool: "git", Operation: "grep", Status: StatusError,
@@ -227,7 +229,7 @@ func (g *Git) grep(ctx context.Context, dir, pattern string, limit int) (Result,
 	// a broad term cannot flood the capture. `--` keeps a leading dash in the
 	// pattern from being parsed as a flag.
 	out, serr, code, err := g.exec(ctx, dir,
-		"grep", "-n", "-I", "-i", "-F", "--max-count", "3", "--", pattern)
+		append([]string{"grep", "-n", "-I", "-i", "-F", "--max-count", "3", "--", pattern}, grepPathspec(scope)...)...)
 	if err != nil {
 		return unavailable("git", "grep", err.Error()), nil
 	}
@@ -402,4 +404,164 @@ func dedupeSorted(xs []string) []string {
 		}
 	}
 	return out
+}
+
+// Head returns the current HEAD commit without hashing the dirty tree. It is
+// the cheap identity evidence freshness stamps on every record; CurrentRevision
+// remains the verification-grade identity.
+func (g *Git) Head(ctx context.Context, dir string) (string, error) {
+	if !binExists(g.bin) {
+		return "", ErrToolMissing
+	}
+	commit, serr, code, err := g.exec(ctx, dir, "rev-parse", "HEAD")
+	if err != nil || code != 0 {
+		return "", fmt.Errorf("git rev-parse HEAD failed: %s", firstNonEmpty(firstLine(serr), fmt.Sprint(err)))
+	}
+	return strings.TrimSpace(commit), nil
+}
+
+// ChangedSince lists the files that differ between a past commit and the
+// current working tree: committed changes (commit..HEAD), uncommitted changes
+// against HEAD, and untracked files. It is the freshness question "did this
+// file move since the claim was recorded?", so an unknown commit is an error,
+// never an empty (falsely fresh) answer.
+func (g *Git) ChangedSince(ctx context.Context, dir, commit string) ([]string, error) {
+	if !binExists(g.bin) {
+		return nil, ErrToolMissing
+	}
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return nil, fmt.Errorf("changed-since needs a commit")
+	}
+	out, serr, code, err := g.exec(ctx, dir, "diff", "--name-only", commit, "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("git diff %s..HEAD failed: %s", commit, firstNonEmpty(firstLine(serr), fmt.Sprintf("exit %d", code)))
+	}
+	files := splitNonEmpty(out)
+	dirty, _, _, _ := g.exec(ctx, dir, "diff", "--name-only", "HEAD")
+	files = append(files, splitNonEmpty(dirty)...)
+	unt, _, _, _ := g.exec(ctx, dir, "ls-files", "--others", "--exclude-standard")
+	files = append(files, splitNonEmpty(unt)...)
+	return dedupeSorted(files), nil
+}
+
+// TrackedFiles lists every git-tracked path (forward slashes). The survey
+// coverage ledger falls back to it when codemap has no architecture map.
+func (g *Git) TrackedFiles(ctx context.Context, dir string) ([]string, error) {
+	if !binExists(g.bin) {
+		return nil, ErrToolMissing
+	}
+	out, serr, code, err := g.exec(ctx, dir, "ls-files")
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("git ls-files failed: %s", firstNonEmpty(firstLine(serr), fmt.Sprintf("exit %d", code)))
+	}
+	files := splitNonEmpty(out)
+	for i := range files {
+		files[i] = filepath.ToSlash(files[i])
+	}
+	return files, nil
+}
+
+// grepPathspec turns a survey module into a git pathspec (empty for the
+// whole tree) so the literal fallback stays scoped like the semantic search.
+func grepPathspec(scope string) []string {
+	scope = strings.Trim(strings.TrimSpace(strings.ReplaceAll(scope, "\\", "/")), "/")
+	if scope == "" || scope == "." {
+		return nil
+	}
+	return []string{scope}
+}
+
+// tree lists the tracked files under a module as bounded discovery facts: one
+// summary claim plus a handful of file locations. It is the zero-dependency
+// survey primitive — every repository has a tree even when no index exists.
+func (g *Git) tree(ctx context.Context, dir, scope string, limit int) (Result, error) {
+	if !binExists(g.bin) {
+		return unavailable("git", "tree", "git not available"), nil
+	}
+	if limit < 1 {
+		limit = 8
+	}
+	args := append([]string{"ls-files", "--"}, grepPathspec(scope)...)
+	out, serr, code, err := g.exec(ctx, dir, args...)
+	if err != nil {
+		return unavailable("git", "tree", err.Error()), nil
+	}
+	if code != 0 {
+		return Result{Tool: "git", Operation: "tree", Status: StatusError,
+			Summary: "git ls-files failed: " + firstNonEmpty(firstLine(serr), fmt.Sprintf("exit %d", code))}, nil
+	}
+	files := splitNonEmpty(out)
+	label := scope
+	if label == "" || label == "." {
+		label = "repository root"
+	}
+	if len(files) == 0 {
+		return Result{Tool: "git", Operation: "tree", Status: StatusAuthoritative,
+			Summary: "no tracked files under " + label,
+			Facts:   []Fact{{Kind: "code_location", Confidence: "high", Claim: "module " + label + " has no tracked files"}}}, nil
+	}
+	byExt := map[string]int{}
+	tests := 0
+	for _, f := range files {
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(f), "."))
+		if ext == "" {
+			ext = "(none)"
+		}
+		byExt[ext]++
+		if strings.Contains(f, "_test.") || strings.Contains(f, ".test.") || strings.Contains(f, "/tests/") {
+			tests++
+		}
+	}
+	exts := make([]string, 0, len(byExt))
+	for ext := range byExt {
+		exts = append(exts, ext)
+	}
+	sort.Slice(exts, func(i, j int) bool {
+		if byExt[exts[i]] != byExt[exts[j]] {
+			return byExt[exts[i]] > byExt[exts[j]]
+		}
+		return exts[i] < exts[j]
+	})
+	parts := make([]string, 0, len(exts))
+	for i, ext := range exts {
+		if i >= 4 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", byExt[ext], ext))
+	}
+	facts := []Fact{{Kind: "code_location", Confidence: "high",
+		Claim:    fmt.Sprintf("module %s has %d tracked file(s) (%s; %d test file(s))", label, len(files), strings.Join(parts, ", "), tests),
+		Location: &Location{File: scope}}}
+	// Non-test source files first, then the rest, bounded.
+	sort.SliceStable(files, func(i, j int) bool {
+		ti := strings.Contains(files[i], "_test.") || strings.Contains(files[i], ".test.")
+		tj := strings.Contains(files[j], "_test.") || strings.Contains(files[j], ".test.")
+		if ti != tj {
+			return !ti
+		}
+		return files[i] < files[j]
+	})
+	shown := 0
+	for _, f := range files {
+		if shown >= limit {
+			break
+		}
+		if JunkDiscoveryPath(f) {
+			continue
+		}
+		facts = append(facts, Fact{Kind: "code_location", Confidence: "medium", Claim: "tracked file " + f + " belongs to " + label, Location: &Location{File: f}})
+		shown++
+	}
+	summary := fmt.Sprintf("%s under %s", pluralize(len(files), "tracked file"), label)
+	if len(files) > shown {
+		summary += fmt.Sprintf(" (%d listed)", shown)
+	}
+	return Result{Tool: "git", Operation: "tree", Status: StatusAuthoritative, Summary: summary, Facts: facts, Raw: out}, nil
 }

@@ -18,7 +18,8 @@ var qaAgentTools = []string{
 	"cortex_begin_change", "cortex_verify", "cortex_remember", "cortex_status",
 	"cortex_resolve", "cortex_note", "cortex_request_decision", "cortex_answer_decision",
 	"cortex_handoff", "cortex_abort_task", "cortex_read_evidence", "cortex_read_artifact",
-	"cortex_recall_cases",
+	"cortex_recall_cases", "cortex_finding", "cortex_dossier", "cortex_coverage", "cortex_workplan",
+	"cortex_job", "cortex_resume",
 }
 
 var qaOperatorTools = []string{
@@ -208,11 +209,12 @@ func TestMCPToolsAdvertisePortableMetadataAndEnvelopeSchemas(t *testing.T) {
 		"cortex_timeline": true, "cortex_metrics": true, "cortex_overview": true,
 		"cortex_handoff": true, "cortex_read_evidence": true,
 		"cortex_read_artifact": true, "cortex_recall_cases": true,
+		"cortex_coverage": true, "cortex_resume": true,
 	}
 	openWorld := map[string]bool{
 		"cortex_start_task": true, "cortex_open_task": true, "cortex_investigate": true,
 		"cortex_verify": true, "cortex_remember": true, "cortex_resolve": true,
-		"cortex_recall_cases": true,
+		"cortex_recall_cases": true, "cortex_job": true,
 	}
 	destructive := map[string]bool{
 		"cortex_plan": true, "cortex_begin_change": true, "cortex_verify": true,

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
+	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
 const (
@@ -67,6 +68,11 @@ type Handoff struct {
 	Decisions     []domain.Decision           `json:"decisions,omitempty"`
 	Actions       []domain.NextAction         `json:"actions,omitempty"`
 	Warnings      []string                    `json:"warnings,omitempty"`
+	// Long-running task state, when present.
+	Coverage     *domain.CoverageSummary `json:"coverage,omitempty"`
+	Findings     *FindingCounts          `json:"findings,omitempty"`
+	OpenFindings []domain.Finding        `json:"openFindings,omitempty"`
+	Jobs         []domain.Job            `json:"jobs,omitempty"`
 }
 
 // BuildHandoff creates a bounded packet from the same canonical projection
@@ -136,7 +142,37 @@ func BuildHandoffIn(workspace, taskID string, now time.Time) (Handoff, error) {
 		h.Warnings = append(h.Warnings, fmt.Sprintf("%d verification receipt(s) are stale for the current workspace", len(v.StaleVerification)))
 	}
 	h.Warnings = append(h.Warnings, v.VerificationWarnings...)
+	attachLongRunningHandoff(store, &h)
 	return boundHandoff(h), nil
+}
+
+// attachLongRunningHandoff adds coverage, the open backlog, and in-flight
+// jobs so a transfer packet carries the campaign state, not only the case.
+func attachLongRunningHandoff(store *casefs.Store, h *Handoff) {
+	if ledger, err := store.LoadCoverage(h.TaskID); err == nil {
+		s := ledger.Summary()
+		h.Coverage = &s
+	}
+	if findings, err := store.Findings(h.TaskID); err == nil && len(findings) > 0 {
+		counts := countFindings(findings)
+		h.Findings = &counts
+		for _, f := range findings {
+			if f.Status.Terminal() || f.Sensitive {
+				continue
+			}
+			h.OpenFindings = append(h.OpenFindings, f)
+			if len(h.OpenFindings) >= 10 {
+				break
+			}
+		}
+	}
+	if jobs, err := store.Jobs(h.TaskID); err == nil {
+		for _, j := range jobs {
+			if !j.Status.Terminal() {
+				h.Jobs = append(h.Jobs, j)
+			}
+		}
+	}
 }
 
 func latestHandoffReceipts(receipts []domain.VerificationRecord) []domain.VerificationRecord {

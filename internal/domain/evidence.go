@@ -90,6 +90,10 @@ type Evidence struct {
 	// evidence record(s) whose candidate was fed into the structural tool
 	// (causal routing: symptom → candidate → structural expansion).
 	DerivedFrom []string `json:"derivedFrom,omitempty"`
+	// Commit is the workspace HEAD observed when the record was written. It lets
+	// freshness checks tell whether the located file changed since the claim
+	// was recorded. Empty for legacy records and for cases without git.
+	Commit string `json:"commit,omitempty"`
 }
 
 // Validate enforces the evidence invariants: a claim, an origin,

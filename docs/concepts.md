@@ -225,6 +225,7 @@ A proven behavior is preserved in four places so it survives beyond the current 
 | structural | codemap annotations | the proven/failed behavior attached to its owning code symbol |
 | semantic | vecgrep memory | a compact, cross-session recall of the outcome |
 | cross-case | veclite recall index | prior resolved hypotheses (rejected/challenged are the gold) and definitive receipts, recalled as prior disproofs |
+| repository | the dossier (`repos/<slug>/dossier.json`) | evidence-backed statements about modules that outlive cases, orient every later case, and go `stale` when their files change |
 
 After a definitive browser or terminal verification, Cortex annotates the code symbols the task
 declared it would change with the behavior and its evidence reference — so the next agent asking
@@ -365,3 +366,13 @@ the model can report a regression; they are not empirical claims about how much 
 arbitrary agent. Real repository trials can populate the same paired observation model through the
 separate, opt-in [empirical trajectory runner](/evaluation), which keeps launcher authority outside
 scenario YAML and judges every arm with an independent oracle.
+
+## Long-running work
+
+A case is shaped like a ticket. Whole-repository comprehension, bug hunts, and multi-session
+campaigns use seven additional durable pieces — survey mode with a coverage ledger, the repository
+dossier, findings, campaign work plans, checkpoint + resume, detached background jobs, and
+evidence freshness. They are bookkeeping invariants, not autonomy: Cortex still runs nothing but
+its own bounded rounds, and completion only gets stricter (a survey needs coverage, a converted
+finding becomes an acceptance criterion, an in-flight job blocks `remember`). See
+[Long-running work](/long-running).

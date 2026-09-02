@@ -278,6 +278,9 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	for _, claim := range claims {
 		claimStatements = append(claimStatements, claim.Statement)
 	}
+	if staleWarn := k.staleSupportWarning(ctx, c); staleWarn != "" {
+		warnings = append(warnings, staleWarn)
+	}
 	summary := verifySummary(claimStatements, claimStatuses, scope)
 	next := []string{"cortex remember — persist the outcome, evidence, and uncertainty once verification is adequate"}
 	if hasUnrun(claimStatuses) {

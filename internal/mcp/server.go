@@ -51,7 +51,15 @@ Use cortex_status for current state; cortex_resolve for hypothesis outcomes; cor
 provenance-bearing human/agent context; cortex_request_decision and cortex_answer_decision for a
 resumable human pause; cortex_handoff for a bounded transfer packet; cortex_read_evidence and
 cortex_read_artifact for progressively deeper evidence; and cortex_abort_task to stop without
-deleting evidence. The all profile additionally exposes cross-repository operator views and
+deleting evidence.
+
+Long-running work: open with mode=survey to walk a whole repository module by module
+(cortex_coverage shows progress; each cortex_investigate round takes module or the next unseen
+one); record what you learn with cortex_dossier (repository memory that outlives the case and is
+marked stale when its files change) and what you find with cortex_finding (bugs, improvements,
+ideas — convert one into a linked child case); split big goals with cortex_workplan and hand items
+to actors with operation=next; run long rounds detached with cortex_investigate async=true or
+cortex_job; and after any context loss call cortex_resume before doing anything else. The all profile additionally exposes cross-repository operator views and
 archive controls. Never request or expose secret values — Cortex checks capability only.`
 
 // Server wraps the go-sdk MCP server. Kernels are built per-call so one server
@@ -124,7 +132,7 @@ func (s *Server) kernelFor(workspace string) (*kernel.Kernel, error) {
 type startInput struct {
 	Goal               string                   `json:"goal" jsonschema:"the engineering goal for this task"`
 	Workspace          string                   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
-	Mode               string                   `json:"mode,omitempty" jsonschema:"change | investigate | review (default change)"`
+	Mode               string                   `json:"mode,omitempty" jsonschema:"change | investigate | review | survey (default change; survey = coverage-driven whole-repository comprehension)"`
 	Surfaces           []string                 `json:"surfaces,omitempty" jsonschema:"user-visible surfaces: code, browser, terminal, artifact, secret"`
 	Risk               string                   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
 	AcceptanceCriteria []acceptanceCriterionArg `json:"acceptanceCriteria,omitempty" jsonschema:"optional immutable success contract; prove each criterion with a claimSpec using the same id and exact statement"`
@@ -133,7 +141,7 @@ type startInput struct {
 type openTaskInput struct {
 	Goal               string                   `json:"goal" jsonschema:"the engineering goal to resume or start"`
 	Workspace          string                   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
-	Mode               string                   `json:"mode,omitempty" jsonschema:"change | investigate | review (default change)"`
+	Mode               string                   `json:"mode,omitempty" jsonschema:"change | investigate | review | survey (default change; survey = coverage-driven whole-repository comprehension)"`
 	Surfaces           []string                 `json:"surfaces,omitempty" jsonschema:"user-visible surfaces: code, browser, terminal, artifact, secret"`
 	Risk               string                   `json:"risk,omitempty" jsonschema:"low | medium | high (default medium)"`
 	Actor              string                   `json:"actor,omitempty" jsonschema:"stable non-secret person or agent identifier"`
@@ -160,6 +168,10 @@ type investigateInput struct {
 	Question  string   `json:"question" jsonschema:"the question to route through discovery + structural tools"`
 	Surfaces  []string `json:"surfaces,omitempty" jsonschema:"override the surfaces to consider for routing"`
 	Depth     string   `json:"depth,omitempty" jsonschema:"quick | standard | deep (default standard)"`
+	Module    string   `json:"module,omitempty" jsonschema:"scope discovery to one directory (vecgrep --dir) and record survey coverage for it; survey rounds default to the next unseen module"`
+	Async     bool     `json:"async,omitempty" jsonschema:"run the round as a detached background job (poll with cortex_job) instead of waiting"`
+	Fanout    bool     `json:"fanout,omitempty" jsonschema:"survey: queue one background round per unseen module (question optional)"`
+	Max       int      `json:"max,omitempty" jsonschema:"fan-out size (default 5, max 32)"`
 	Video     string   `json:"video,omitempty" jsonschema:"a vidtrace bundle DIRECTORY or vidtrace stash id (NOT a raw .mp4/.mov file): runs vidtrace to link the visible failure to code. Build a bundle from a raw recording first with 'vidtrace extract <file> -json'"`
 	Workspace string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
@@ -216,6 +228,7 @@ type rememberInput struct {
 	VerificationNotPossible bool     `json:"verificationNotPossible,omitempty" jsonschema:"explicitly acknowledge a partial or unverified assessment when adequate verification could not be completed"`
 	AcceptFailed            bool     `json:"acceptFailed,omitempty" jsonschema:"explicitly acknowledge and preserve a canonical failed verification assessment"`
 	AcceptOpenChildren      bool     `json:"acceptOpenChildren,omitempty" jsonschema:"explicitly complete a parent while child tasks are still in-flight"`
+	AcceptPartialCoverage   bool     `json:"acceptPartialCoverage,omitempty" jsonschema:"explicitly complete a survey while ledger modules remain unseen"`
 	Workspace               string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -438,6 +451,7 @@ func (s *Server) register() {
 	sdkmcp.AddTool(s.srv, s.tool("cortex_recall_cases", "Recall related cases",
 		"Recall prior resolved cases (rejected/challenged hypotheses and definitive receipts) related to a query, across repos or scoped to one. Returns low-confidence model_inference evidence — prior disproofs to read before re-deriving a theory. Missing veclite returns an empty success; other recall failures return an error envelope.",
 		toolBehavior{readOnly: true, additive: true, openWorld: true, sharedEnvelope: true}), s.handleRecallCases)
+	s.registerLongRunning()
 }
 
 // ---- handlers (thin: build kernel, call kernel, return JSON) ----
@@ -474,8 +488,16 @@ func (s *Server) handleInvestigate(ctx context.Context, _ *sdkmcp.CallToolReques
 	if err != nil {
 		return envelopeErrorResult(err)
 	}
+	if in.Async || in.Fanout {
+		var modules []string
+		if strings.TrimSpace(in.Module) != "" {
+			modules = []string{in.Module}
+		}
+		rep, err := k.StartJob(ctx, kernel.JobInput{TaskID: in.TaskID, Question: in.Question, Depth: in.Depth, Modules: modules, Fanout: in.Fanout, Max: in.Max})
+		return result(rep, err)
+	}
 	env, err := k.Investigate(ctx, kernel.InvestigateInput{
-		TaskID: in.TaskID, Question: in.Question, Surfaces: toSurfaces(in.Surfaces), Depth: in.Depth, Video: in.Video,
+		TaskID: in.TaskID, Question: in.Question, Surfaces: toSurfaces(in.Surfaces), Depth: in.Depth, Video: in.Video, Module: in.Module,
 	})
 	return result(env, err)
 }
@@ -548,7 +570,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	env, err := k.Remember(ctx, kernel.RememberInput{
 		TaskID: in.TaskID, Outcome: in.Outcome, Importance: in.Importance,
 		Tags: in.Tags, VerificationNotPossible: in.VerificationNotPossible,
-		AcceptFailed: in.AcceptFailed, AcceptOpenChildren: in.AcceptOpenChildren,
+		AcceptFailed: in.AcceptFailed, AcceptOpenChildren: in.AcceptOpenChildren, AcceptPartialCoverage: in.AcceptPartialCoverage,
 	})
 	return result(env, err)
 }
@@ -791,6 +813,18 @@ func envelopeResultState(v any) (structured, ok, nonzero bool) {
 			return true, false, false
 		}
 		return true, value.OK, envelopeNonzero(*value)
+	case kernel.FindingReport:
+		return true, value.OK, envelopeNonzero(value.Envelope)
+	case kernel.DossierReport:
+		return true, value.OK, envelopeNonzero(value.Envelope)
+	case kernel.CoverageReport:
+		return true, value.OK, envelopeNonzero(value.Envelope)
+	case kernel.WorkplanReport:
+		return true, value.OK, envelopeNonzero(value.Envelope)
+	case kernel.JobReport:
+		return true, value.OK, envelopeNonzero(value.Envelope)
+	case kernel.ResumeReport:
+		return true, value.OK, envelopeNonzero(value.Envelope)
 	case kernel.StatusReport:
 		return true, value.OK, envelopeNonzero(value.Envelope)
 	case *kernel.StatusReport:

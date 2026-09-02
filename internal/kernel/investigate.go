@@ -21,13 +21,55 @@ type InvestigateInput struct {
 	// runs vidtrace to turn the recording into timestamped evidence and link the
 	// visible failure to code.
 	Video string
+	// Module scopes discovery to one directory (vecgrep --dir) and, for survey
+	// cases, records the round against the coverage ledger. Survey rounds with
+	// no module default to the next uncovered module.
+	Module string
+	// job marks a round run by a detached worker; it skips the case-level round
+	// budget note (the job already bounds itself).
+	job bool
 }
 
 // Investigate routes a question through the appropriate discovery and
 // structural tools, records the returned evidence, and returns a
 // bounded investigation summary. Search results are recorded as candidates, not
-// proof.
+// proof. Survey cases resolve the module first and record coverage after.
 func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.Envelope, error) {
+	in.Module = strings.TrimSpace(in.Module)
+	var ledger *domain.CoverageLedger
+	if c, err := k.store.Load(in.TaskID); err == nil {
+		ledger = k.coverageFor(c.ID)
+		if ledger != nil && in.Module == "" && c.Mode == domain.ModeSurvey {
+			if next := ledger.Next(); next != nil {
+				in.Module = next.Path
+			}
+		}
+	}
+	env, err := k.investigateRound(ctx, in)
+	if err != nil || !env.OK {
+		return env, err
+	}
+	if in.Module != "" && ledger != nil {
+		if row, mErr := k.markModuleVisited(in.TaskID, in.Module, len(env.Facts)); mErr != nil {
+			env.Warnings = append(env.Warnings, "could not record survey coverage: "+mErr.Error())
+		} else if row != nil {
+			env.Summary = fmt.Sprintf("[%s round %d] %s", row.Path, row.Rounds, env.Summary)
+			if updated := k.coverageFor(in.TaskID); updated != nil {
+				s := updated.Summary()
+				env.Warnings = append(env.Warnings, fmt.Sprintf("survey coverage %.0f%%: %d/%d modules explored, %d unseen", s.Percent, s.Explored+s.Summarized, s.Total, s.Unseen))
+				if c, err := k.store.Load(in.TaskID); err == nil {
+					env.Actions = append(k.surveyActions(c, updated), env.Actions...)
+				}
+			}
+		}
+	}
+	if !in.job {
+		k.checkpoint(in.TaskID)
+	}
+	return env, nil
+}
+
+func (k *Kernel) investigateRound(ctx context.Context, in InvestigateInput) (domain.Envelope, error) {
 	c, err := k.store.Load(in.TaskID)
 	if err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil
@@ -90,7 +132,15 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	// is allowed but recorded — the point is to discourage frantic search, not to
 	// hard-block a legitimately deep investigation.
 	c.InvestigationRounds++
-	if maxRounds := k.cfg.Budget.MaxInvestigationRounds; maxRounds > 0 && c.InvestigationRounds > maxRounds {
+	if maxRounds := k.cfg.Budget.MaxInvestigationRounds; c.Mode == domain.ModeSurvey && maxRounds > 0 && in.Module != "" {
+		// Survey rounds are budgeted per module: the case-level counter only
+		// grows; the ledger row carries the per-module count.
+		if ledger := k.coverageFor(c.ID); ledger != nil {
+			if row := ledger.Find(domain.NormalizeModulePath(in.Module)); row != nil && row.Rounds >= maxRounds {
+				warnings = append(warnings, fmt.Sprintf("module %s already had %d round(s) (budget %d) — write its dossier entry and move to the next module", row.Path, row.Rounds, maxRounds))
+			}
+		}
+	} else if maxRounds > 0 && c.InvestigationRounds > maxRounds && !in.job {
 		note := fmt.Sprintf("investigation round %d exceeds the budget of %d — consider forming a hypothesis and planning, or state why deeper investigation is needed", c.InvestigationRounds, maxRounds)
 		warnings = append(warnings, note)
 		c.Notes = append(c.Notes, "budget: "+note)
@@ -131,7 +181,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 	if route.FollowUp == "codemap" && route.First != "codemap" {
 		discoveryRoute = domain.Route{First: route.First, FollowUp: route.First, Why: route.Why}
 	}
-	steps := routeSteps(discoveryRoute, in.Question, surfaces, candLimit)
+	steps := routeSteps(discoveryRoute, in.Question, surfaces, candLimit, in.Module)
 	if depth == "quick" {
 		// Quick: primary route tool only (no follow-up), still after memory recall.
 		steps = firstRouteStep(steps, route)
@@ -153,6 +203,11 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 				"deep decomposition: %d targeted sub-queries searched: %s",
 				len(subsUsed), strings.Join(subsUsed, " | ")))
 		}
+	}
+	if in.Module != "" {
+		// Survey primitive: the module tree is always available and anchors the
+		// round to real files even when no index exists.
+		steps = append([]step{{tool: "git", op: "tree", input: map[string]any{"scope": in.Module, "limit": 6}}}, steps...)
 	}
 	if in.Video != "" {
 		steps = append([]step{{tool: "vidtrace", op: "investigate", input: map[string]any{
@@ -212,7 +267,7 @@ func (k *Kernel) Investigate(ctx context.Context, in InvestigateInput) (domain.E
 			var greps []adapters.Result
 			for _, pattern := range patterns {
 				greps = append(greps, k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
-					Input: map[string]any{"pattern": pattern, "limit": candLimit}}))
+					Input: map[string]any{"pattern": pattern, "limit": candLimit, "scope": in.Module}}))
 			}
 			var fbErr error
 			facts, warnings, _, fbErr = k.stampResults(c, greps, discoveryBudget, "git-grep fallback", facts, warnings, nil)
@@ -579,13 +634,17 @@ func firstRouteStep(steps []step, r domain.Route) []step {
 // routeSteps expands a Route into concrete adapter operations for the question.
 // Discovery searches are capped at candLimit candidate hits so one broad
 // search can't flood the ledger.
-func routeSteps(r domain.Route, question string, surfaces []domain.Surface, candLimit int) []step {
+func routeSteps(r domain.Route, question string, surfaces []domain.Surface, candLimit int, dir string) []step {
 	if candLimit < 1 {
 		candLimit = 8
 	}
 	var steps []step
 	search := func(tool string) step {
-		return step{tool: tool, op: "search", input: map[string]any{"query": question, "limit": candLimit}}
+		input := map[string]any{"query": question, "limit": candLimit}
+		if dir != "" && dir != "." {
+			input["scope"] = dir
+		}
+		return step{tool: tool, op: "search", input: input}
 	}
 	add := func(tool string) {
 		switch tool {
@@ -734,7 +793,7 @@ func (k *Kernel) investigateForReview(ctx context.Context, c *domain.CaseFile, i
 			var greps []adapters.Result
 			for _, pattern := range patterns {
 				greps = append(greps, k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
-					Input: map[string]any{"pattern": pattern, "limit": candLimit}}))
+					Input: map[string]any{"pattern": pattern, "limit": candLimit, "scope": in.Module}}))
 			}
 			facts, warnings, _, sErr = k.stampResults(c, greps, budget, "review git-grep", facts, warnings, nil)
 			if sErr != nil {
@@ -793,9 +852,13 @@ func (k *Kernel) investigateGitGrepFloor(ctx context.Context, c *domain.CaseFile
 	warnings = append(warnings, "using git-grep discovery floor (vecgrep/codemap skipped until indexes are ready)")
 	if patterns := grepPatterns(in.Question); len(patterns) > 0 {
 		var greps []adapters.Result
+		if in.Module != "" {
+			greps = append(greps, k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "tree",
+				Input: map[string]any{"scope": in.Module, "limit": 6}}))
+		}
 		for _, pattern := range patterns {
 			greps = append(greps, k.run(ctx, "git", adapters.Request{TaskID: c.ID, Operation: "grep",
-				Input: map[string]any{"pattern": pattern, "limit": candLimit}}))
+				Input: map[string]any{"pattern": pattern, "limit": candLimit, "scope": in.Module}}))
 		}
 		var err error
 		facts, warnings, _, err = k.stampResults(c, greps, budget, "git-grep floor", facts, warnings, nil)

@@ -204,6 +204,7 @@ func renderStatus(rep kernel.StatusReport) {
 		}
 		pf(w, "  %s %s\n", paint(styLabel, "rounds  "), rounds)
 	}
+	renderLongRunningStatus(w, rep)
 
 	if len(rep.UnresolvedHypotheses) > 0 {
 		pln(w, heading("Unresolved hypotheses"))
@@ -293,4 +294,41 @@ func clipLine(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// renderLongRunningStatus prints survey coverage, the findings backlog, stale
+// evidence, background jobs, and the campaign rollup when present.
+func renderLongRunningStatus(w *os.File, rep kernel.StatusReport) {
+	if rep.Coverage != nil {
+		line := fmt.Sprintf("%.0f%% · %d/%d explored · %d summarized · %d unseen",
+			rep.Coverage.Percent, rep.Coverage.Explored+rep.Coverage.Summarized, rep.Coverage.Total, rep.Coverage.Summarized, rep.Coverage.Unseen)
+		if rep.Coverage.Next != "" {
+			line += " · next " + rep.Coverage.Next
+		}
+		pf(w, "  %s %s\n", paint(styLabel, "coverage"), line)
+	}
+	if rep.Findings != nil {
+		pf(w, "  %s %d open · %d triaged · %d converted · %d dismissed\n", paint(styLabel, "findings"),
+			rep.Findings.Open, rep.Findings.Triaged, rep.Findings.Converted, rep.Findings.Dismissed)
+	}
+	if rep.Workplan != nil {
+		line := fmt.Sprintf("%d items · %d done · %d active · %d ready · %d blocked · %d failed",
+			rep.Workplan.Items, rep.Workplan.Done, rep.Workplan.Active, rep.Workplan.Ready, rep.Workplan.Blocked, rep.Workplan.Failed)
+		pf(w, "  %s %s\n", paint(styLabel, "workplan"), line)
+	}
+	if len(rep.Jobs) > 0 {
+		for _, j := range rep.Jobs {
+			pf(w, "  %s %s %s %d/%d rounds\n", paint(styLabel, "job     "), j.ID, j.Status, j.RoundsDone, j.RoundsTotal)
+		}
+	}
+	if len(rep.StaleEvidence) > 0 {
+		pln(w, heading("Stale evidence"))
+		for i, s := range rep.StaleEvidence {
+			if i >= 5 {
+				pf(w, "  … %d more\n", len(rep.StaleEvidence)-5)
+				break
+			}
+			pf(w, "  %s %s — %s\n", paint(styWarn, s.ID), s.File, clipLine(s.Reason, 80))
+		}
+	}
 }

@@ -27,6 +27,7 @@ normally completes only when its canonical assessment is verified. Explicit ackn
 		unverified, _ := cmd.Flags().GetBool("unverified")
 		acceptFailed, _ := cmd.Flags().GetBool("accept-failed")
 		acceptChildren, _ := cmd.Flags().GetBool("accept-open-children")
+		acceptCoverage, _ := cmd.Flags().GetBool("accept-partial-coverage")
 		env, err := k.Remember(cmd.Context(), kernel.RememberInput{
 			TaskID:                  args[0],
 			Outcome:                 joinArgs(args[1:]),
@@ -35,6 +36,7 @@ normally completes only when its canonical assessment is verified. Explicit ackn
 			VerificationNotPossible: unverified,
 			AcceptFailed:            acceptFailed,
 			AcceptOpenChildren:      acceptChildren,
+			AcceptPartialCoverage:   acceptCoverage,
 		})
 		if err != nil {
 			return err
@@ -49,5 +51,6 @@ func init() {
 	rememberCmd.Flags().Bool("unverified", false, "complete with an explicit partial/unverified assessment acknowledgment")
 	rememberCmd.Flags().Bool("accept-failed", false, "complete with an explicit failed-verification acknowledgment")
 	rememberCmd.Flags().Bool("accept-open-children", false, "complete a parent while child tasks are still in-flight")
+	rememberCmd.Flags().Bool("accept-partial-coverage", false, "complete a survey while ledger modules remain unseen")
 	rootCmd.AddCommand(rememberCmd)
 }
