@@ -93,19 +93,19 @@ type resumeInput struct {
 func (s *Server) registerLongRunning() {
 	sdkmcp.AddTool(s.srv, s.tool("cortex_finding", "Record or triage a finding",
 		"Durable backlog for what a survey or investigation turns up. operation=add records a bug/improvement/feature/question backed by evidence ids from the case; list filters by status; triage acknowledges; dismiss records a reason (indexed for recall); convert opens a linked child case whose acceptance criterion is the finding.",
-		toolBehavior{additive: true, idempotent: true, sharedEnvelope: true}), s.handleFinding)
+		toolBehavior{additive: true, idempotent: true}), s.handleFinding)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_dossier", "Repository memory",
 		"Evidence-backed, per-module memory that outlives cases. operation=add writes or updates an entry from an active case (module, kind, title, summary, evidence ids); list returns entries with freshness evaluated against HEAD (stale when their files changed since written); refresh persists the stale marks.",
-		toolBehavior{additive: true, idempotent: true, sharedEnvelope: true}), s.handleDossier)
+		toolBehavior{additive: true, idempotent: true}), s.handleDossier)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_coverage", "Read survey coverage",
 		"For a survey case: the module ledger with unseen/explored/summarized state, fan-in, rounds, and the next module to visit. Progress is measured against this ledger; completion refuses while modules remain unseen unless acknowledged.",
 		toolBehavior{readOnly: true, additive: true}), s.handleCoverage)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_workplan", "Plan and hand out campaign work",
 		"Dependency-aware child work under a parent case. operation=add appends an item (goal, mode, criteria, dependsOn); list shows each item's state derived from its child case; next claims the first ready item for an actor by opening its linked, retry-keyed child case.",
-		toolBehavior{additive: true, idempotent: true, sharedEnvelope: true}), s.handleWorkplan)
+		toolBehavior{additive: true, idempotent: true}), s.handleWorkplan)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_job", "Background investigation jobs",
 		"Detached investigations that outlive the MCP call. operation=start queues one round (question) or a survey fan-out (fanout=true or modules) and launches a worker whose evidence lands in the case through the ordinary redacted path; list polls progress and reports dead workers as failed; cancel stops a worker and keeps recorded evidence.",
-		toolBehavior{additive: true, openWorld: true, sharedEnvelope: true}), s.handleJob)
+		toolBehavior{additive: true, openWorld: true}), s.handleJob)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_resume", "Resume after context loss",
 		"Return the case checkpoint (compact what-I-know / what-I-am-doing / what-is-next packet, rewritten after every durable step) plus the deltas since an RFC3339 cursor: evidence, phase moves, pending decision, open findings, coverage, jobs, and stale evidence. Call it first after compaction or when taking over another actor's case.",
 		toolBehavior{readOnly: true, additive: true}), s.handleResume)
