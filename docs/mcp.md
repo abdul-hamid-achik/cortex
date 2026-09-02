@@ -54,7 +54,7 @@ collaboration. See [Empirical trajectory runner: MCP profile decision gate](/eva
 | `cortex_abort_task` | `agent`, `all` | stop without deleting evidence (reason required) |
 | `cortex_read_evidence` | `agent`, `all` | full evidence record by ID |
 | `cortex_read_artifact` | `agent`, `all` | bounded preview of a task-owned raw ref or task-referenced fcheap ref; safe relative `path`; 32 KiB default/128 KiB cap; discovery ≤512 entries/100 files; binary refused unless `allowBinary` |
-| `cortex_recall_cases` | `agent`, `all` | recall prior resolved cases related to a query. Omit `repo` for an explicit cross-repo search; orient/investigate no longer do that automatically |
+| `cortex_recall_cases` | `agent`, `all` | recall prior resolved cases related to a query. Omit `repo` for a cross-repo search. Recall is explicit: orient and investigate never run it on your behalf |
 | `cortex_list_tasks` | `all` | list all tasks in the workspace (newest first) |
 | `cortex_sessions` | `all` | **cross-repo**: every session everywhere — id, goal, phase, repo, verified/required, active, timestamps (filter by `repo`/`active`/AND-token `query`) |
 | `cortex_timeline` | `all` | a session's time-sorted activity — phases, evidence, tool calls, receipts; optional workspace fallback finds repo-local/custom cases |
@@ -246,7 +246,7 @@ You are working through Cortex.
 For non-trivial engineering work:
 1. Open or resume with cortex_open_task; use an idempotency key when a retry is possible.
 2. Treat search output as candidates, not proof.
-3. Before editing, state a testable hypothesis, change boundary, and verification plan.
+3. Before editing, state a testable hypothesis with a disproof path, a change boundary, and a verification plan.
 4. Claim the change with cortex_begin_change and keep the same actor through verification.
 5. Prefer typed claimSpecs and bind important claims to the exact verifier contract.
 6. Do not claim a user-visible behavior works without the relevant behavioral verifier.

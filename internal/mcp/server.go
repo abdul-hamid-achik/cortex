@@ -33,7 +33,7 @@ continuations, while the inputs field lists values you must still supply.
    register acceptanceCriteria and later verify each with the same claim id and exact statement.
    Use cortex_start_task only when you deliberately want a fresh case.
 2. cortex_investigate — route a question through discovery then structure and retain evidence
-   IDs. Treat search output as candidates, NOT proof.
+   IDs. Treat search output as candidates, not proof.
 3. cortex_plan — before editing, state hypotheses WITH disproof paths, uncertainty, a change
    boundary for change tasks, and required verification. Invalid plans are rejected.
 4. cortex_begin_change — for a planned change, name a stable actor, claim the bounded lease,
@@ -365,7 +365,7 @@ func (s *Server) tool(name, title, description string, behavior toolBehavior) *s
 
 func (s *Server) register() {
 	sdkmcp.AddTool(s.srv, s.tool("cortex_start_task", "Start a fresh task",
-		"Create a case file for a non-trivial engineering task and perform lightweight orientation (git identity + tool health). acceptanceCriteria optionally registers an immutable success contract. Returns the task ID and the recommended next action.",
+		"Create a new case file for a non-trivial engineering task and perform lightweight orientation (git identity + tool health). Always starts a fresh case; use cortex_open_task instead when the work may already have a case or a retry could resend the call. acceptanceCriteria optionally registers an immutable success contract. Returns the task ID and the recommended next action.",
 		toolBehavior{additive: true, openWorld: true, sharedEnvelope: true}), s.handleStart)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_open_task", "Open or resume a task",
 		"Idempotently resume matching work or start it once. An idempotencyKey survives response loss; otherwise the newest active case with the same normalized goal, mode, workspace, branch, and acceptanceCriteria is resumed. acceptanceCriteria is an optional immutable success contract.",
@@ -374,7 +374,7 @@ func (s *Server) register() {
 		"Route a question through discovery (vecgrep) then structure (codemap), record the returned evidence with provenance, and return a bounded summary. Search output is recorded as candidates, not proof.",
 		toolBehavior{additive: true, openWorld: true, sharedEnvelope: true}), s.handleInvestigate)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_plan", "Plan a bounded change",
-		"The planning gate. Store hypotheses (each REQUIRES a disproof path), a change boundary (files/symbols), and a verification plan. Rejects plans with no disproof path or (for change tasks) no boundary. Not a code generator.",
+		"The planning gate. Store hypotheses (each with a disproof path), a change boundary (files/symbols), and a verification plan. Rejects plans with no disproof path or (for change tasks) no boundary. Not a code generator.",
 		toolBehavior{sharedEnvelope: true}), s.handlePlan)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_begin_change", "Begin a bounded change",
 		"After planning and before editing, atomically claim a bounded change lease and enter changing. Competing actors are rejected; the same owner may safely retry.",
@@ -393,7 +393,7 @@ func (s *Server) register() {
 			"List all tasks in the workspace (newest first): id, goal, phase, repository, createdAt.",
 			toolBehavior{readOnly: true, additive: true}), s.handleListTasks)
 		sdkmcp.AddTool(s.srv, s.tool("cortex_sessions", "List all sessions",
-			"List Cortex sessions across EVERY repository (the central XDG audit view), newest first: id, goal, phase, mode, repository, slug, verified/required verification counts, active flag, timestamps. Workspace-independent — use it to see everything you have open or left unfinished anywhere. Filter with repo (substring), active (in-flight only), and query (case-insensitive AND terms across identity, goal, state, repo, workspace, and outcome).",
+			"List Cortex sessions across every repository (the central XDG audit view), newest first: id, goal, phase, mode, repository, slug, verified/required verification counts, active flag, timestamps. Workspace-independent — use it to see everything you have open or left unfinished anywhere. Filter with repo (substring), active (in-flight only), and query (case-insensitive AND terms across identity, goal, state, repo, workspace, and outcome).",
 			toolBehavior{readOnly: true, additive: true}), s.handleSessions)
 		sdkmcp.AddTool(s.srv, s.tool("cortex_timeline", "Read a session timeline",
 			"Return a session's chronological activity feed — phase transitions, evidence, audited tool calls, and verification receipts merged and time-sorted. Located centrally by task ID; workspace is a fallback for repo-local/custom stores.",
@@ -402,10 +402,10 @@ func (s *Server) register() {
 			"Observability metrics focused on outcomes and the evidence trail, not tool-call volume. With taskId — that task's tool calls, calls-before-first-evidence, verification coverage, time-in-phase, and each tool's contribution. Without taskId — workspace aggregate (completion/verified rates, mean tools & time to complete).",
 			toolBehavior{readOnly: true, additive: true}), s.handleMetrics)
 		sdkmcp.AddTool(s.srv, s.tool("cortex_overview", "Read the session overview",
-			"Cross-repository rollup of EVERY Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
+			"Cross-repository rollup of every Cortex session: totals, active/stale counts, completion & verified-completion rates, mean time to complete, and a per-repo breakdown. Workspace-independent — the 'what's my overall state across all repos' view.",
 			toolBehavior{readOnly: true, additive: true}), s.handleOverview)
 		sdkmcp.AddTool(s.srv, s.tool("cortex_archive", "Archive a session",
-			"Archive a terminal (complete/abandoned/blocked) session — MOVE it out of the active tree to the archive (reversible via cortex_unarchive; nothing is deleted). Refuses in-flight sessions. Workspace-independent; located by task ID.",
+			"Archive a terminal (complete/abandoned/blocked) session by moving it out of the active tree into the archive. Reversible via cortex_unarchive; nothing is deleted. Refuses in-flight sessions. Workspace-independent; located by task ID.",
 			toolBehavior{idempotent: true}), s.handleArchive)
 		sdkmcp.AddTool(s.srv, s.tool("cortex_unarchive", "Restore an archived session",
 			"Restore an archived session back into the active tree. Workspace-independent; located by task ID.",
@@ -427,7 +427,7 @@ func (s *Server) register() {
 		"Return a bounded transfer packet with coordination metadata, current plan, hypotheses, recent evidence, current verifier/named-claim receipts, decisions, and executable actions. Workspace is a repo-local/custom-store fallback; raw output is excluded.",
 		toolBehavior{readOnly: true, additive: true}), s.handleHandoff)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_abort_task", "Abort a task",
-		"Stop the active task without deleting its evidence. Requires a reason.",
+		"Stop an in-flight task and move it to the terminal abandoned phase. Evidence, receipts, and the timeline stay readable through cortex_status and cortex_handoff. Requires a reason, which is recorded with the phase change. Use cortex_remember with acceptFailed instead when the work reached verification and you want to preserve a failed outcome as the completion.",
 		toolBehavior{idempotent: true, sharedEnvelope: true}), s.handleAbort)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_read_evidence", "Read evidence",
 		"Return a full evidence record by ID. When its rawRef contains /raw/, fetch that bounded detail with cortex_read_artifact; self-pointing human/decision evidence has no separate raw output.",
