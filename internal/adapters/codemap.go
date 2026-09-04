@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -87,45 +88,54 @@ func (c *Codemap) decodeStatus(stdout, stderr string, code int) (Result, error) 
 		}
 		return withFix(unavailable("codemap", "status", msg), "codemap index"), nil
 	}
-	staleCount := decodeCodemapStale(st.Stale)
+	staleCount, checked := decodeCodemapStale(st.Stale)
+	freshness, confidence := "unchecked", "medium"
+	if checked {
+		freshness, confidence = "fresh", "high"
+	}
 	warns := []string{}
 	status := StatusAuthoritative
 	summary := fmt.Sprintf("codemap ready: %s (%s, %s)",
 		firstNonEmpty(st.Project, "project"), pluralize(st.Nodes, "node"), pluralize(st.Files, "file"))
 	if staleCount > 0 {
+		freshness, confidence = "stale", "low"
 		status = StatusPartial
 		warns = append(warns, fmt.Sprintf("codemap index is stale (%d changed file(s)) — run `codemap index` before trusting structural results", staleCount))
 		summary = fmt.Sprintf("codemap indexed but stale: %s", pluralize(staleCount, "changed file"))
+	}
+	if freshness == "unchecked" {
+		summary += " (freshness unchecked)"
+		warns = append(warns, "codemap readiness did not check working-tree freshness")
 	}
 	return Result{
 		Tool: "codemap", Operation: "status", Status: status, Summary: summary,
 		Warnings: warns, Raw: stdout,
 		Facts: []Fact{{
-			Kind: "code_graph", Confidence: "high", Claim: summary,
-			Attributes: map[string]string{"index": "ready", "fix": "codemap index"},
+			Kind: "code_graph", Confidence: confidence, Claim: summary,
+			Attributes: map[string]string{"index": "ready", "fix": "codemap index", "freshness": freshness},
 		}},
 	}, nil
 }
 
 // decodeCodemapStale accepts both legacy `stale: N` and current
 // `stale: {changed,new,deleted}` shapes.
-func decodeCodemapStale(raw json.RawMessage) int {
+func decodeCodemapStale(raw json.RawMessage) (int, bool) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return 0
+		return 0, false
 	}
 	var n int
 	if json.Unmarshal(raw, &n) == nil {
-		return n
+		return n, n >= 0
 	}
 	var obj struct {
-		Changed int `json:"changed"`
-		New     int `json:"new"`
-		Deleted int `json:"deleted"`
+		Changed *int `json:"changed"`
+		New     *int `json:"new"`
+		Deleted *int `json:"deleted"`
 	}
-	if json.Unmarshal(raw, &obj) == nil {
-		return obj.Changed + obj.New + obj.Deleted
+	if json.Unmarshal(raw, &obj) != nil || obj.Changed == nil || obj.New == nil || obj.Deleted == nil || *obj.Changed < 0 || *obj.New < 0 || *obj.Deleted < 0 {
+		return 0, false
 	}
-	return 0
+	return *obj.Changed + *obj.New + *obj.Deleted, true
 }
 
 // Execute routes codemap operations. Each shells out with --json and maps the
@@ -137,7 +147,7 @@ func (c *Codemap) Execute(ctx context.Context, req Request) (Result, error) {
 	dir := req.Str("dir")
 	switch req.Operation {
 	case "impact":
-		return c.impact(ctx, dir, req.Str("symbol"), req.Int("depth", 3))
+		return c.impact(ctx, dir, req)
 	case "callers", "callees":
 		return c.relation(ctx, dir, req.Operation, req.Str("symbol"))
 	case "find":
@@ -222,7 +232,20 @@ func codemapError(op, stdout string) (Result, bool) {
 
 // --- impact ---
 
+type cmSelector struct {
+	File      string `json:"file"`
+	StartLine int    `json:"start_line"`
+	FQN       string `json:"fqn,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+}
+
+type cmFreshness struct {
+	Checked bool  `json:"checked"`
+	Stale   *bool `json:"stale"`
+}
+
 type cmImpact struct {
+	Selector      *cmSelector   `json:"selector"`
 	Symbol        string        `json:"symbol"`
 	Found         bool          `json:"found"`
 	Locations     []cmSymbolRef `json:"locations"`
@@ -266,48 +289,164 @@ func (r *cmSymbolRef) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (c *Codemap) impact(ctx context.Context, dir, symbol string, depth int) (Result, error) {
-	if symbol == "" {
-		return Result{Tool: "codemap", Operation: "impact", Status: StatusError, Summary: "impact needs a symbol"}, nil
+func (c *Codemap) impact(ctx context.Context, dir string, req Request) (Result, error) {
+	if targets, ok := req.Input["targets"].([]Request); ok {
+		return c.impactTargets(ctx, dir, targets, req.Int("depth", 3))
 	}
-	stdout, stderr, code, err := c.exec(ctx, dir, "impact", symbol, "--depth", strconv.Itoa(depth), "--json")
+	if req.Str("file") != "" && req.Int("start_line", 0) > 0 {
+		return c.impactTargets(ctx, dir, []Request{req}, req.Int("depth", 3))
+	}
+	symbol := req.Str("symbol")
+	if symbol == "" {
+		return Result{Tool: "codemap", Operation: "impact", Status: StatusError, Summary: "impact needs a symbol or source selector"}, nil
+	}
+	stdout, stderr, code, err := c.exec(ctx, dir, "impact", symbol, "--depth", strconv.Itoa(req.Int("depth", 3)), "--json")
 	if err != nil {
 		return failExec("codemap", "impact", err, c.timeout), nil
 	}
 	if res, ok := codemapError("impact", stdout); ok {
 		return res, nil
 	}
-	var r cmImpact
-	if derr := decodeJSON(stdout, &r); derr != nil {
+	if code != 0 {
 		return degraded("codemap", "impact", stdout, stderr, code), nil
 	}
-	if rerr := requireFields(stdout, "found"); rerr != nil {
-		return schemaDrift("codemap", "impact", rerr, stdout), nil
+	var report cmImpact
+	if err := decodeJSON(stdout, &report); err != nil {
+		return degraded("codemap", "impact", stdout, stderr, code), nil
 	}
+	if err := requireFields(stdout, "found"); err != nil {
+		return schemaDrift("codemap", "impact", err, stdout), nil
+	}
+	return impactResult(req, report, stdout, nil, false), nil
+}
+
+// impactTargets preserves input order and provenance while paying one process/store open.
+func (c *Codemap) impactTargets(ctx context.Context, dir string, targets []Request, depth int) (Result, error) {
+	if len(targets) == 0 || len(targets) > 25 {
+		return Result{Tool: "codemap", Operation: "impact", Status: StatusError, Summary: "impact requires 1..25 selectors"}, nil
+	}
+	targets = append([]Request(nil), targets...)
+	args := []string{"impact", "--batch", "--depth", strconv.Itoa(depth), "--json"}
+	legacy := append([]string(nil), args...)
+	for i := range targets {
+		req := targets[i]
+		file := req.Str("file")
+		if filepath.IsAbs(file) {
+			relative, err := filepath.Rel(dir, file)
+			if err != nil {
+				return Result{Tool: "codemap", Operation: "impact", Status: StatusError, Summary: err.Error()}, nil
+			}
+			file = relative
+		}
+		if !filepath.IsLocal(file) || req.Int("start_line", 0) <= 0 {
+			return Result{Tool: "codemap", Operation: "impact", Status: StatusError, Summary: "invalid source selector"}, nil
+		}
+		input := make(map[string]any, len(req.Input))
+		for key, value := range req.Input {
+			input[key] = value
+		}
+		input["file"] = filepath.ToSlash(file)
+		targets[i].Input = input
+		selector := cmSelector{File: filepath.ToSlash(file), StartLine: req.Int("start_line", 0), FQN: req.Str("fqn"), Kind: req.Str("kind")}
+		encoded, _ := json.Marshal(selector)
+		args = append(args, "--selector", string(encoded))
+		legacy = append(legacy, "--at", file+":"+strconv.Itoa(selector.StartLine))
+	}
+	if c.timeout > 0 {
+		bounded, cancel := context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+		ctx = bounded
+	}
+	stdout, stderr, code, err := c.exec(ctx, dir, args...)
+	if err == nil && code != 0 && strings.Contains(stderr+stdout, "unknown flag: --selector") {
+		stdout, stderr, code, err = c.exec(ctx, dir, legacy...)
+	}
+	if err != nil {
+		return failExec("codemap", "impact", err, c.timeout), nil
+	}
+	if result, ok := codemapError("impact", stdout); ok {
+		return result, nil
+	}
+	var batch struct {
+		Indexed   bool              `json:"indexed"`
+		Results   []json.RawMessage `json:"results"`
+		Freshness *cmFreshness      `json:"freshness"`
+	}
+	if code != 0 || decodeJSON(stdout, &batch) != nil || !batch.Indexed || len(batch.Results) != len(targets) {
+		return degraded("codemap", "impact", stdout, stderr, code), nil
+	}
+	result := Result{Tool: "codemap", Operation: "impact", Status: StatusAuthoritative, Raw: stdout, Summary: fmt.Sprintf("structural impact for %d source selectors", len(targets))}
+	for i, payload := range batch.Results {
+		var report cmImpact
+		if decodeJSON(string(payload), &report) != nil || requireFields(string(payload), "found") != nil {
+			return degraded("codemap", "impact", stdout, "invalid batch item", code), nil
+		}
+		if report.Found && (report.Symbol == "" || report.Selector == nil || report.Selector.StartLine <= 0 || report.CallGraph == "") {
+			return degraded("codemap", "impact", stdout, "batch item is missing definition identity or graph coverage", code), nil
+		}
+		item := impactResult(targets[i], report, stdout, batch.Freshness, true)
+		if item.Status != StatusAuthoritative {
+			result.Status = StatusPartial
+			result.Warnings = append(result.Warnings, item.Summary)
+		}
+		result.Warnings = append(result.Warnings, item.Warnings...)
+		for _, fact := range item.Facts {
+			index := i
+			if len(targets) > 1 {
+				fact.InputIndex = &index
+			}
+			result.Facts = append(result.Facts, fact)
+		}
+	}
+	return result, nil
+}
+
+func impactResult(req Request, r cmImpact, stdout string, freshness *cmFreshness, exact bool) Result {
+	symbol := req.Str("symbol")
 	if !r.Found {
 		return Result{Tool: "codemap", Operation: "impact", Status: StatusPartial,
-			Summary: "codemap found no symbol " + symbol, Raw: stdout}, nil
+			Summary: "codemap found no symbol " + symbol, Raw: stdout}
+	}
+	if exact && (r.Selector == nil || (symbol != "" && r.Symbol != symbol) || filepath.ToSlash(filepath.Clean(r.Selector.File)) != filepath.ToSlash(filepath.Clean(req.Str("file"))) || (req.Str("fqn") != "" && r.Selector.FQN != req.Str("fqn")) || (req.Str("kind") != "" && r.Selector.Kind != req.Str("kind"))) {
+		return Result{Tool: "codemap", Operation: "impact", Status: StatusPartial, Summary: "the selected definition changed; rediscover its source location", Raw: stdout}
+	}
+	if symbol == "" {
+		symbol = r.Symbol
 	}
 	conf := callGraphConfidence(r.CallGraph, r.Resolution)
+	status := StatusAuthoritative
+	if exact && (freshness == nil || !freshness.Checked || freshness.Stale == nil || *freshness.Stale) {
+		status, conf = StatusPartial, "low"
+	}
 	facts := []Fact{{
 		Kind:       "code_graph",
 		Claim:      fmt.Sprintf("%s has %s in its blast radius and %s covering it", symbol, pluralize(len(r.BlastRadius), "symbol"), pluralize(len(r.Tests), "test")),
 		Confidence: conf,
 	}}
+	if exact && r.Selector != nil {
+		facts[0].Location = &Location{File: r.Selector.File, StartLine: r.Selector.StartLine, FQN: r.Selector.FQN, Kind: r.Selector.Kind, Symbol: r.Symbol}
+	}
 	for _, loc := range r.Locations {
 		facts = append(facts, Fact{Kind: "code_location", Confidence: conf,
 			Claim:    "defined at " + loc.File,
-			Location: &Location{File: loc.File, StartLine: loc.StartLine, EndLine: loc.EndLine, Symbol: symbol}})
+			Location: &Location{File: loc.File, StartLine: loc.StartLine, EndLine: loc.EndLine, Symbol: loc.Symbol, FQN: loc.FQN, Kind: loc.Kind}})
 	}
 	warns := noteWarnings(r.Note, r.Untested, symbol)
+	if exact && status == StatusPartial {
+		reason := "unchecked"
+		if freshness != nil && freshness.Checked && freshness.Stale != nil && *freshness.Stale {
+			reason = "stale"
+		}
+		warns = append(warns, "codemap impact freshness is "+reason+"; structural results are candidates")
+	}
 	warns = appendUnresolvedHint(warns, r.CallGraph, r.Resolution)
 	return Result{
-		Tool: "codemap", Operation: "impact", Status: StatusAuthoritative,
+		Tool: "codemap", Operation: "impact", Status: status,
 		Summary:  facts[0].Claim,
 		Facts:    facts,
 		Warnings: warns,
 		Raw:      stdout,
-	}, nil
+	}
 }
 
 // --- callers / callees ---
@@ -406,7 +545,7 @@ func (c *Codemap) searchLike(ctx context.Context, dir, op, query string, top int
 	for _, h := range r.Hits {
 		facts = append(facts, Fact{Kind: "semantic_search", Confidence: conf,
 			Claim:    fmt.Sprintf("%s (%s) at %s", h.Symbol, h.Kind, h.File),
-			Location: &Location{File: h.File, StartLine: h.StartLine, EndLine: h.EndLine, Symbol: h.Symbol}})
+			Location: &Location{File: h.File, StartLine: h.StartLine, EndLine: h.EndLine, Symbol: h.Symbol, FQN: h.FQN, Kind: h.Kind}})
 	}
 	return Result{
 		Tool: "codemap", Operation: op, Status: StatusAuthoritative,
@@ -770,6 +909,9 @@ func callGraphConfidence(callGraph, resolution string) string {
 	case "name":
 		return "medium"
 	case "unresolved", "none":
+		return "low"
+	case "": // Legacy producer without a call_graph field.
+	default:
 		return "low"
 	}
 	if resolution != "precise" && resolution != "" {

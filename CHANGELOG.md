@@ -5,6 +5,13 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-04
+
+### Integration
+- Preserve exact source selectors and discovery provenance through batched Codemap impact queries.
+- Batch Bob ownership checks and share retry deadlines; report stale and unchecked indexes explicitly.
+
+
 ### Added
 - **Long-running work** (`docs/long-running.md`): `survey` mode with a coverage ledger built from
   `codemap map` (git-tree fallback), module-scoped rounds (`--module`: vecgrep `--dir`, git-grep

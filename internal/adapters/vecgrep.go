@@ -59,16 +59,18 @@ func (v *Vecgrep) Execute(ctx context.Context, req Request) (Result, error) {
 // vgHit is one element of vecgrep's search/similar output (bare array, or the
 // hits[] of a json-envelope).
 type vgHit struct {
-	ChunkID    int     `json:"chunk_id"`
-	FilePath   string  `json:"file_path"`
-	RelPath    string  `json:"relative_path"`
-	Content    string  `json:"content"`
-	StartLine  int     `json:"start_line"`
-	EndLine    int     `json:"end_line"`
-	ChunkType  string  `json:"chunk_type"`
-	SymbolName string  `json:"symbol_name"`
-	Language   string  `json:"language"`
-	Score      float64 `json:"score"`
+	ChunkID    int         `json:"chunk_id"`
+	FilePath   string      `json:"file_path"`
+	RelPath    string      `json:"relative_path"`
+	Content    string      `json:"content"`
+	StartLine  int         `json:"start_line"`
+	EndLine    int         `json:"end_line"`
+	ChunkType  string      `json:"chunk_type"`
+	SymbolName string      `json:"symbol_name"`
+	Language   string      `json:"language"`
+	Score      float64     `json:"score"`
+	Selector   *cmSelector `json:"selector,omitempty"`
+	SourceHash string      `json:"source_hash,omitempty"`
 }
 
 // vgEnvelope is vecgrep ≥2.15's `-f json-envelope` shape: an index-status header
@@ -143,7 +145,14 @@ func (v *Vecgrep) searchOnce(ctx context.Context, dir, query, mode string, limit
 		if code != 0 {
 			return degraded("vecgrep", "search", stdout, stderr, code), nil
 		}
-		return v.hitsResult("search", query, mode, env.Hits, stdout), nil
+		result := v.hitsResult("search", query, mode, env.Hits, stdout)
+		result.Freshness = "fresh"
+		if !env.Index.Fresh {
+			result.Freshness = "stale"
+			result.Status = StatusPartial
+			result.Warnings = append(result.Warnings, "vecgrep index is stale; search hits are candidates from an older index")
+		}
+		return result, nil
 	}
 	// A "not in a vecgrep project" error (whichever stream it lands on) is the
 	// same honest signal.
@@ -279,6 +288,9 @@ func (v *Vecgrep) decodeStatus(stdout, stderr string, code int) (Result, error) 
 // embedder/path problem on an existing index (keyword can still help), not a
 // missing/corrupt store (keyword cannot).
 func shouldRetryVecgrepKeyword(res Result) bool {
+	if res.Freshness == "stale" || res.Freshness == "fresh" {
+		return false
+	}
 	if res.Status != StatusPartial && res.Status != StatusError {
 		return false
 	}
@@ -402,10 +414,14 @@ func (v *Vecgrep) hitsResult(op, q, mode string, hits []vgHit, raw string) Resul
 		if snip := clip(snippetLine(h.Content, markdownDoc(h)), 80); snip != "" {
 			claim += ": " + snip
 		}
+		location := &Location{File: path, StartLine: h.StartLine, EndLine: h.EndLine, Symbol: h.SymbolName, SourceHash: h.SourceHash}
+		if h.Selector != nil && h.Selector.File == path && h.Selector.StartLine > 0 {
+			location.StartLine, location.FQN, location.Kind = h.Selector.StartLine, h.Selector.FQN, h.Selector.Kind
+		}
 		facts = append(facts, Fact{
 			Kind: "semantic_search", Confidence: "low", // discovery is a candidate, not proof
 			Claim:    claim,
-			Location: &Location{File: path, StartLine: h.StartLine, EndLine: h.EndLine, Symbol: h.SymbolName},
+			Location: location,
 		})
 	}
 	return Result{

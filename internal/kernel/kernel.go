@@ -283,7 +283,7 @@ func (k *Kernel) buildEvidenceDerived(taskID, tool string, f adapters.Fact, rawR
 	uri := k.red.String(f.URI)
 	sens := f.Sensitive || k.red.Detected(f.Claim) || k.red.Detected(f.URI)
 	if f.Location != nil {
-		sens = sens || k.red.Detected(f.Location.File) || k.red.Detected(f.Location.Symbol)
+		sens = sens || k.red.Detected(f.Location.File) || k.red.Detected(f.Location.Symbol) || k.red.Detected(f.Location.FQN) || k.red.Detected(f.Location.Kind) || k.red.Detected(f.Location.SourceHash)
 	}
 	ref := rawRef
 	if ref == "" {
@@ -305,6 +305,7 @@ func (k *Kernel) buildEvidenceDerived(taskID, tool string, f adapters.Fact, rawR
 		ev.Location = &domain.Location{
 			File: k.red.String(f.Location.File), StartLine: f.Location.StartLine,
 			EndLine: f.Location.EndLine, Symbol: k.red.String(f.Location.Symbol),
+			FQN: k.red.String(f.Location.FQN), Kind: k.red.String(f.Location.Kind), SourceHash: k.red.String(f.Location.SourceHash),
 		}
 	}
 	return ev

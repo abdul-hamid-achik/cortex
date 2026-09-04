@@ -307,7 +307,7 @@ func (k *Kernel) investigateRound(ctx context.Context, in InvestigateInput) (dom
 			if len(cands) > 0 {
 				steps2, evIDs := structuralSteps(cands, candLimit)
 				if len(steps2) > 0 {
-					res2 := k.runStepsParallel(ctx, c.ID, steps2)
+					res2 := k.runStepsParallel(ctx, c.ID, batchStructuralSteps(steps2))
 					var d2 bool
 					facts, warnings, d2, sErr = k.stampResults(c, res2, budget, "budget", facts, warnings, func(i int) []string {
 						if i < len(evIDs) {
@@ -464,7 +464,12 @@ func (k *Kernel) runStepsParallel(ctx context.Context, taskID string, steps []st
 				results[i] = adapters.TimedOut(s.tool, s.op, investigateRemaining(ctx))
 				return
 			}
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results[i] = adapters.TimedOut(s.tool, s.op, investigateRemaining(ctx))
+				return
+			}
 			defer func() { <-sem }()
 			if ctx.Err() != nil {
 				results[i] = adapters.TimedOut(s.tool, s.op, investigateRemaining(ctx))
@@ -545,7 +550,11 @@ func (k *Kernel) stampResults(c *domain.CaseFile, results []adapters.Result, bud
 				warnings = append(warnings, fmt.Sprintf("evidence truncated to %d items (%s)", budget, stage))
 				break
 			}
-			ev, err := k.stampEvidenceDerived(c.ID, res.Tool, f, rawRef, links)
+			factLinks := links
+			if f.InputIndex != nil && derivedFor != nil {
+				factLinks = derivedFor(*f.InputIndex)
+			}
+			ev, err := k.stampEvidenceDerived(c.ID, res.Tool, f, rawRef, factLinks)
 			if err != nil {
 				return facts, warnings, degraded, err
 			}
@@ -689,6 +698,9 @@ func routeSteps(r domain.Route, question string, surfaces []domain.Surface, cand
 func semanticDiscoveryUnavailable(steps []step, results []adapters.Result) bool {
 	for i, s := range steps {
 		if s.tool == "vecgrep" && s.op == "search" && i < len(results) {
+			if results[i].Freshness == "stale" || results[i].Freshness == "fresh" {
+				return false
+			}
 			switch results[i].Status {
 			case adapters.StatusUnavailable, adapters.StatusError, adapters.StatusPartial:
 				return true
@@ -969,6 +981,10 @@ type candidate struct {
 	Symbol     string
 	File       string
 	EvidenceID string
+	StartLine  int
+	FQN        string
+	Kind       string
+	SourceHash string
 }
 
 // candidatesFrom extracts up to max deduplicated file/symbol candidates from
@@ -1004,7 +1020,7 @@ func candidatesFrom(evs []domain.Evidence, max int) []candidate {
 			// hits became `codemap impact <heading>` steps).
 			continue
 		}
-		key := strings.ToLower(ev.Location.Symbol)
+		key := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d", ev.Location.File, ev.Location.Symbol, ev.Location.FQN, ev.Location.Kind, ev.Location.StartLine)
 		if seenSymbol[key] {
 			continue
 		}
@@ -1012,7 +1028,7 @@ func candidatesFrom(evs []domain.Evidence, max int) []candidate {
 		if ev.Location.File != "" {
 			symbolFiles[ev.Location.File] = true
 		}
-		out = append(out, candidate{Symbol: ev.Location.Symbol, File: ev.Location.File, EvidenceID: ev.ID})
+		out = append(out, candidate{Symbol: ev.Location.Symbol, File: ev.Location.File, EvidenceID: ev.ID, StartLine: ev.Location.StartLine, FQN: ev.Location.FQN, Kind: ev.Location.Kind, SourceHash: ev.Location.SourceHash})
 	}
 	// Second pass: file-only candidates, suppressed when a symbol candidate
 	// already covers that file (symbol wins).
@@ -1079,7 +1095,12 @@ func structuralSteps(cands []candidate, candLimit int) ([]step, []string) {
 			continue
 		}
 		if s != "" {
-			steps = append(steps, step{tool: "codemap", op: "impact", input: map[string]any{"symbol": s}})
+			input := map[string]any{"symbol": s}
+			if f != "" && c.StartLine > 0 {
+				input["file"], input["start_line"] = f, c.StartLine
+				input["fqn"], input["kind"], input["source_hash"] = c.FQN, c.Kind, c.SourceHash
+			}
+			steps = append(steps, step{tool: "codemap", op: "impact", input: input})
 		} else {
 			tok := fileQueryToken(f)
 			if tok == "" {
@@ -1259,4 +1280,21 @@ func dedupeStr(xs []string) []string {
 		}
 	}
 	return out
+}
+
+// Batch only an entirely located structural round; mixed legacy/file-only queries
+// retain their original order and per-step provenance.
+func batchStructuralSteps(steps []step) []step {
+	if len(steps) < 2 {
+		return steps
+	}
+	targets := make([]adapters.Request, 0, len(steps))
+	for _, s := range steps {
+		req := adapters.Request{Operation: s.op, Input: s.input}
+		if s.tool != "codemap" || s.op != "impact" || req.Str("file") == "" || req.Int("start_line", 0) <= 0 {
+			return steps
+		}
+		targets = append(targets, req)
+	}
+	return []step{{tool: "codemap", op: "impact", input: map[string]any{"targets": targets}}}
 }

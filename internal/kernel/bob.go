@@ -220,7 +220,7 @@ func (k *Kernel) inspectBobBoundary(ctx context.Context, c *domain.CaseFile, fil
 	result := bobBoundaryResult{}
 	if len(paths) > maxBobPathCalls {
 		result.warnings = append(result.warnings, fmt.Sprintf(
-			"Bob path review is capped at %d calls; %d of %d declared files were not classified",
+			"Bob path review is capped at %d paths; %d of %d declared files were not classified",
 			maxBobPathCalls, len(paths)-maxBobPathCalls, len(paths)))
 		paths = paths[:maxBobPathCalls]
 		result.degraded = true
@@ -228,11 +228,16 @@ func (k *Kernel) inspectBobBoundary(ctx context.Context, c *domain.CaseFile, fil
 	seenPlaybooks := make(map[string]bool)
 	ctx, cancel := context.WithTimeout(ctx, bobBoundaryTotalTimeout)
 	defer cancel()
+	var res adapters.Result
 	for index, path := range paths {
-		res := k.run(ctx, "bob", adapters.Request{
-			TaskID: c.ID, Operation: "path",
-			Input: map[string]any{"workspace": k.cfg.Workspace, "path": path},
-		})
+		if index%adapters.BobPathBatchSize == 0 {
+			end := min(index+adapters.BobPathBatchSize, len(paths))
+			input := map[string]any{"workspace": k.cfg.Workspace, "path": path}
+			if end-index > 1 {
+				input["paths"] = paths[index:end]
+			}
+			res = k.run(ctx, "bob", adapters.Request{TaskID: c.ID, Operation: "path", Input: input})
+		}
 		for _, warning := range res.Warnings {
 			result.warnings = append(result.warnings, fmt.Sprintf("Bob path %s: %s", path, warning))
 		}
@@ -291,6 +296,7 @@ func (k *Kernel) inspectBobBoundary(ctx context.Context, c *domain.CaseFile, fil
 func (k *Kernel) stageBobBoundary(c *domain.CaseFile, captures []bobPathCapture) ([]domain.Evidence, []casefs.RawRecord, []string) {
 	var facts []domain.Evidence
 	var raws []casefs.RawRecord
+	seenRaw := map[string]bool{}
 	var warnings []string
 	for _, capture := range captures {
 		evidenceID := "ev_bob_path_" + capture.stableKey
@@ -304,7 +310,7 @@ func (k *Kernel) stageBobBoundary(c *domain.CaseFile, captures []bobPathCapture)
 
 		rawRef := ""
 		if capture.result.Raw != "" {
-			rawID := "raw_bob_path_" + capture.stableKey
+			rawID := "raw_bob_path_" + bobIdentity("raw", k.red.String(capture.result.Raw))
 			raw := capRawForStore(k.red.String(capture.result.Raw), k.cfg.Budget.MaxRawOutputBytesPerTool)
 			if durable, err := k.store.ReadRaw(c.ID, rawID); err == nil {
 				raw = durable
@@ -313,7 +319,10 @@ func (k *Kernel) stageBobBoundary(c *domain.CaseFile, captures []bobPathCapture)
 				raw = ""
 			}
 			if raw != "" {
-				raws = append(raws, casefs.RawRecord{ID: rawID, Content: raw})
+				if !seenRaw[rawID] {
+					raws = append(raws, casefs.RawRecord{ID: rawID, Content: raw})
+					seenRaw[rawID] = true
+				}
 				rawRef = fmt.Sprintf("case://%s/raw/%s", c.ID, rawID)
 			}
 		}

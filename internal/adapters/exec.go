@@ -174,6 +174,11 @@ func (t tool) exec(ctx context.Context, dir string, args ...string) (stdout, std
 	if !binExists(t.bin) {
 		return "", "", -1, ErrToolMissing
 	}
+	if t.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t.timeout)
+		defer cancel()
+	}
 	attempts := 0
 	for {
 		attempts++

@@ -682,3 +682,20 @@ func TestBobFailureRunnerErrorIsUnavailable(t *testing.T) {
 		t.Fatalf("runner error result = %#v", result)
 	}
 }
+
+func TestBobBatchUsesOneProcessAndValidatesEveryPath(t *testing.T) {
+	managed := bobPublicPayload(t, "path-managed-v1.json", "path")
+	extension := bobPublicPayload(t, "path-extension-v1.json", "path")
+	payload := mustBobJSON(t, map[string]any{"schema_version": 1, "workspace": bobFixtureWorkspace, "results": []json.RawMessage{managed, extension}})
+	r := &recordingBobRunner{stdout: bobSuccessJSON(t, "path", payload)}
+	req := Request{Operation: "path", Input: map[string]any{"workspace": bobFixtureWorkspace, "paths": []string{"internal/cli/root.go", "internal/cli/hello.go"}}}
+	result, err := testBob(r).Execute(context.Background(), req)
+	if err != nil || result.Status != StatusAuthoritative || len(result.Facts) != 2 || r.callCount() != 1 {
+		t.Fatalf("batch=%+v calls=%d err=%v", result, r.callCount(), err)
+	}
+	req.Input["paths"] = []string{"internal/cli/root.go", "wrong.go"}
+	result, _ = testBob(r).Execute(context.Background(), req)
+	if result.Status == StatusAuthoritative {
+		t.Fatal("accepted mismatched second path")
+	}
+}

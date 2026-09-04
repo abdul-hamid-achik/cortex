@@ -707,14 +707,14 @@ func TestTvaultNamesOnlyFallsBackOnOldBinary(t *testing.T) {
 }
 
 func TestVecgrepEnvelopeIndexedWithSnippet(t *testing.T) {
-	// json-envelope with an index and hits → authoritative, and the matched
+	// A stale indexed envelope keeps its useful hit but remains partial; the matched
 	// content snippet enriches the fact.
 	fixture := `{"schema_version":1,"index":{"indexed":true,"fresh":false,"chunks":2126},"hits":[
 	  {"chunk_id":305,"relative_path":"internal/embed/provider.go","start_line":23,"end_line":45,"symbol_name":"Provider","language":"go","content":"func (p *Provider) Embed() error {","score":0.62}]}`
 	v := &Vecgrep{tool: fakeTool(fixture, "", 0)}
 	res, _ := v.Execute(context.Background(), Request{Operation: "search", Input: map[string]any{"query": "embed"}})
-	if res.Status != StatusAuthoritative || len(res.Facts) != 1 {
-		t.Fatalf("indexed envelope should be authoritative with 1 fact, got %s / %d", res.Status, len(res.Facts))
+	if res.Status != StatusPartial || res.Freshness != "stale" || len(res.Facts) != 1 {
+		t.Fatalf("stale indexed envelope should be partial with 1 fact, got %s / %d", res.Status, len(res.Facts))
 	}
 	if !strings.Contains(res.Facts[0].Claim, "func (p *Provider) Embed") {
 		t.Errorf("search fact should include the matched snippet, got: %s", res.Facts[0].Claim)

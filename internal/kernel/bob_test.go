@@ -55,7 +55,23 @@ func (b *bobKernelAdapter) Execute(ctx context.Context, req adapters.Request) (a
 		if pathResult == nil {
 			return adapters.Result{}, fmt.Errorf("unexpected bob path request")
 		}
-		result = pathResult(req)
+		if paths, ok := req.Input["paths"].([]string); ok {
+			result = adapters.Result{Tool: "bob", Operation: "path", Status: adapters.StatusAuthoritative}
+			for _, path := range paths {
+				single := req
+				single.Input = map[string]any{"workspace": req.Str("workspace"), "path": path}
+				item := pathResult(single)
+				result.Facts = append(result.Facts, item.Facts...)
+				result.Warnings = append(result.Warnings, item.Warnings...)
+				result.Raw += item.Raw + "\n"
+				if item.Status != adapters.StatusAuthoritative {
+					result.Status = item.Status
+					break
+				}
+			}
+		} else {
+			result = pathResult(req)
+		}
 	default:
 		return adapters.Result{}, fmt.Errorf("unexpected bob operation %q", req.Operation)
 	}
@@ -737,7 +753,7 @@ func TestBobPathBudgetAndDedupe(t *testing.T) {
 		TaskID: started.TaskID, Hypotheses: []HypothesisInput{{Statement: "many files may change", DisproveBy: "inspect the bounded path set"}},
 		ChangeBoundary: domain.ChangeBoundary{Files: files}, Uncertainty: "ownership review is budgeted",
 	})
-	if !planned.OK || !planned.Degraded || !hasWarning(planned.Warnings, "capped at 16 calls") {
+	if !planned.OK || !planned.Degraded || !hasWarning(planned.Warnings, "capped at 16 paths") {
 		t.Fatalf("path budget must be explicit: %+v", planned)
 	}
 	pathCalls := 0
@@ -747,14 +763,19 @@ func TestBobPathBudgetAndDedupe(t *testing.T) {
 			continue
 		}
 		pathCalls++
-		path := request.Str("path")
-		if seen[path] {
-			t.Fatalf("duplicate Bob path call for %s", path)
+		paths, ok := request.Input["paths"].([]string)
+		if !ok {
+			paths = []string{request.Str("path")}
 		}
-		seen[path] = true
+		for _, path := range paths {
+			if seen[path] {
+				t.Fatalf("duplicate Bob path call for %s", path)
+			}
+			seen[path] = true
+		}
 	}
-	if pathCalls != maxBobPathCalls {
-		t.Fatalf("Bob path call budget = %d, want %d", pathCalls, maxBobPathCalls)
+	if pathCalls != 3 || len(seen) != maxBobPathCalls {
+		t.Fatalf("Bob path calls = %d, classified = %d; want 3 calls for 16 paths", pathCalls, len(seen))
 	}
 }
 

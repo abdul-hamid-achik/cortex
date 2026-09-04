@@ -94,15 +94,19 @@ func (r Request) StrSlice(key string) []string {
 // Location pins a fact to a source position (mirrors domain.Location; kept
 // adapter-local so adapters don't import domain's full schema).
 type Location struct {
-	File      string
-	StartLine int
-	EndLine   int
-	Symbol    string
+	File       string
+	StartLine  int
+	EndLine    int
+	Symbol     string
+	FQN        string
+	Kind       string
+	SourceHash string
 }
 
 // Fact is adapter-level evidence: a claim plus provenance, before the kernel
 // stamps it with an ID/timestamp and promotes it to a domain.Evidence record.
 type Fact struct {
+	InputIndex *int   // batch input origin, assigned by the adapter after validated positional decoding
 	Kind       string // maps to domain.EvidenceKind
 	Claim      string
 	Confidence string // maps to domain.Confidence
@@ -138,6 +142,7 @@ const (
 
 // Result is the normalized output of an adapter operation.
 type Result struct {
+	Freshness string // fresh|stale|unchecked; distinct from execution status
 	Tool      string
 	Operation string
 	Status    Status

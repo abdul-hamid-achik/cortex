@@ -67,10 +67,13 @@ type Source struct {
 
 // Location pins a claim to a source-code position when available.
 type Location struct {
-	File      string `json:"file,omitempty"`
-	StartLine int    `json:"startLine,omitempty"`
-	EndLine   int    `json:"endLine,omitempty"`
-	Symbol    string `json:"symbol,omitempty"`
+	File       string `json:"file,omitempty"`
+	StartLine  int    `json:"startLine,omitempty"`
+	EndLine    int    `json:"endLine,omitempty"`
+	Symbol     string `json:"symbol,omitempty"`
+	FQN        string `json:"fqn,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+	SourceHash string `json:"sourceHash,omitempty"`
 }
 
 // Evidence is a structured claim backed by a locatable source. A

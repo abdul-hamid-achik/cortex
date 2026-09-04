@@ -133,3 +133,34 @@ code is left untouched.
 4. Degrade to `unavailable` / `degraded` on any failure — never fabricate.
 
 See `internal/adapters/` — one file per tool, sharing the `tool` helper.
+
+## Exact structural handoff and bounded work
+
+Vecgrep structural search hits retain the Codemap selector (`file`, declaration
+`start_line`, `fqn`, `kind`) and raw-file `source_hash`. Cortex preserves these
+fields on evidence locations, so same-named methods in different files remain
+separate discovery candidates. Exact impact requests are batched when all
+candidates have source positions; every resulting fact links to its own discovery
+origin. Older Codemap binaries fall back to position batches and identity is
+checked again before accepting the result.
+
+A stale Vecgrep search remains usable as low-confidence discovery and does not
+trigger the missing-index grep fallback. Missing freshness measurements remain
+`unchecked`; stale or unchecked exact impact is partial, never upgraded to fresh.
+Adapter retries share one total deadline.
+
+Bob ownership checks classify up to seven paths per subprocess and retain the
+16-path planning limit. Older Bob binaries use individual exact-path requests
+within the same deadline. Batch results retain the existing strict per-path
+validation and ownership meanings.
+
+To verify real sibling binaries without model calls or user-data changes:
+
+```sh
+CORTEX_TEST_CODEMAP_BIN=/absolute/path/to/codemap \
+CORTEX_TEST_BOB_BIN=/absolute/path/to/bob \
+go test ./internal/adapters -run TestEcosystem
+```
+
+The tests create temporary repositories and cover same-named methods, stale
+indexes, line shifts after reindexing, and Bob's managed/extension classifications.

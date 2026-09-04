@@ -163,6 +163,10 @@ func (b *Bob) context(ctx context.Context, req Request) (Result, error) {
 }
 
 func (b *Bob) path(ctx context.Context, req Request) (Result, error) {
+	if paths, ok := req.Input["paths"].([]string); ok {
+		return b.pathBatch(ctx, req, paths)
+	}
+
 	workspace, err := bobWorkspace(req)
 	if err != nil {
 		return bobInputError("path", err), nil
@@ -181,25 +185,29 @@ func (b *Bob) path(ctx context.Context, req Request) (Result, error) {
 	if runErr != nil {
 		return unavailable("bob", "path", runErr.Error()), nil
 	}
+	return decodeBobPathResult(workspace, relative, stdout, stderr, exit), nil
+}
+
+func decodeBobPathResult(workspace, relative, stdout, stderr string, exit int) Result {
 	envelope, decodeErr := decodeBobEnvelope(stdout, "path")
 	if decodeErr != nil {
-		return bobInvalidOutput("path", stdout, stderr, decodeErr), nil
+		return bobInvalidOutput("path", stdout, stderr, decodeErr)
 	}
 	if envelope.OK == nil {
-		return bobInvalidOutput("path", stdout, stderr, errors.New("missing ok status")), nil
+		return bobInvalidOutput("path", stdout, stderr, errors.New("missing ok status"))
 	}
 	if !*envelope.OK {
-		return bobFailure("path", workspace, stdout, stderr, exit, envelope), nil
+		return bobFailure("path", workspace, stdout, stderr, exit, envelope)
 	}
 	if exit != 0 {
-		return bobInvalidOutput("path", stdout, stderr, fmt.Errorf("ok response exited %d", exit)), nil
+		return bobInvalidOutput("path", stdout, stderr, fmt.Errorf("ok response exited %d", exit))
 	}
 	var data bobPathData
 	if err := decodeBobStrict(envelope.Data, &data); err != nil {
-		return bobInvalidOutput("path", stdout, stderr, fmt.Errorf("decode data: %w", err)), nil
+		return bobInvalidOutput("path", stdout, stderr, fmt.Errorf("decode data: %w", err))
 	}
 	if err := validateBobPath(data, workspace, relative); err != nil {
-		return bobInvalidOutput("path", stdout, stderr, err), nil
+		return bobInvalidOutput("path", stdout, stderr, err)
 	}
 	attributes := map[string]string{
 		"schema_version":    strconv.Itoa(data.SchemaVersion),
@@ -246,7 +254,7 @@ func (b *Bob) path(ctx context.Context, req Request) (Result, error) {
 		}},
 		Warnings: warnings,
 		Raw:      stdout,
-	}, nil
+	}
 }
 
 func bobWorkspace(req Request) (string, error) {
@@ -829,4 +837,102 @@ func sameBobWorkspace(left, right string) bool {
 		return false
 	}
 	return canonicalBobWorkspace(left) == canonicalBobWorkspace(right)
+}
+
+// BobPathBatchSize leaves envelope headroom within Bob's 64 KiB transport limit.
+const BobPathBatchSize = 7
+
+func (b *Bob) pathBatch(ctx context.Context, req Request, paths []string) (Result, error) {
+	workspace, err := bobWorkspace(req)
+	if err != nil {
+		return bobInputError("path", err), nil
+	}
+	if len(paths) == 0 || len(paths) > BobPathBatchSize {
+		return bobInputError("path", errors.New("path batch requires 1..7 paths")), nil
+	}
+	normalized := make([]string, len(paths))
+	for i, path := range paths {
+		normalized[i], err = normalizeBobPath(path)
+		if err != nil {
+			return bobInputError("path", err), nil
+		}
+	}
+	if !binExists(b.bin) {
+		return unavailable("bob", "path", "not on PATH"), nil
+	}
+	if b.timeout > 0 {
+		bounded, cancel := context.WithTimeout(ctx, b.timeout)
+		defer cancel()
+		ctx = bounded
+	}
+	args := append([]string{"--json", "path", "--batch", "--workspace", workspace, "--"}, normalized...)
+	stdout, stderr, exit, err := b.exec(ctx, workspace, args...)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return Result{}, ctxErr
+	}
+	if err != nil {
+		return unavailable("bob", "path", err.Error()), nil
+	}
+	// An older Bob may lack batching. Keep the exact path contract and one
+	// deadline while issuing the existing read-only commands sequentially.
+	if exit != 0 && strings.Contains(stdout+stderr, "unknown flag: --batch") {
+		result := Result{Tool: "bob", Operation: "path", Status: StatusAuthoritative}
+		for _, path := range normalized {
+			item, err := b.path(ctx, Request{Operation: "path", Input: map[string]any{"workspace": workspace, "path": path}})
+			if err != nil {
+				return Result{}, err
+			}
+			result.Facts = append(result.Facts, item.Facts...)
+			result.Warnings = append(result.Warnings, item.Warnings...)
+			result.Raw += item.Raw + "\n"
+			if item.Status != StatusAuthoritative {
+				result.Status = StatusPartial
+			}
+			if len(item.Facts) == 0 || item.Status == StatusUnavailable || item.Status == StatusError {
+				break
+			}
+		}
+		return result, nil
+	}
+	envelope, err := decodeBobEnvelope(stdout, "path")
+	if err != nil {
+		return bobInvalidOutput("path", stdout, stderr, err), nil
+	}
+	if !*envelope.OK {
+		return bobFailure("path", workspace, stdout, stderr, exit, envelope), nil
+	}
+	if exit != 0 {
+		return bobInvalidOutput("path", stdout, stderr, fmt.Errorf("ok response exited %d", exit)), nil
+	}
+	var batch struct {
+		SchemaVersion int               `json:"schema_version"`
+		Workspace     string            `json:"workspace"`
+		Results       []json.RawMessage `json:"results"`
+	}
+	if err := decodeBobStrict(envelope.Data, &batch); err != nil {
+		return bobInvalidOutput("path", stdout, stderr, err), nil
+	}
+	if batch.SchemaVersion != bobSchemaVersion || !sameBobWorkspace(batch.Workspace, workspace) || len(batch.Results) != len(normalized) {
+		return bobInvalidOutput("path", stdout, stderr, errors.New("batch identity or size mismatch")), nil
+	}
+	result := Result{Tool: "bob", Operation: "path", Status: StatusAuthoritative, Raw: stdout}
+	for i, data := range batch.Results {
+		single := envelope
+		single.Data = data
+		encoded, err := json.Marshal(single)
+		if err != nil {
+			return bobInvalidOutput("path", stdout, stderr, err), nil
+		}
+		item := decodeBobPathResult(workspace, normalized[i], string(encoded), stderr, exit)
+		if len(item.Facts) == 0 || item.Status != StatusAuthoritative && item.Status != StatusPartial {
+			return item, nil
+		}
+		if item.Status != StatusAuthoritative {
+			result.Status = StatusPartial
+		}
+		result.Facts = append(result.Facts, item.Facts...)
+		result.Warnings = append(result.Warnings, item.Warnings...)
+	}
+	result.Summary = fmt.Sprintf("Bob classified %d paths with one workspace plan", len(normalized))
+	return result, nil
 }

@@ -39,6 +39,7 @@ type ToolSetup struct {
 	Status     SetupStatus `json:"status"`
 	Detail     string      `json:"detail,omitempty"`
 	FixCommand string      `json:"fixCommand,omitempty"`
+	Freshness  string      `json:"freshness,omitempty"`
 }
 
 // SetupReport is a read-only readiness snapshot for onboarding a workspace: is
@@ -110,6 +111,11 @@ func (k *Kernel) probeSetupTool(ctx context.Context, p setupProbe) ToolSetup {
 	}
 	if fix := resultFixCommand(res); fix != "" {
 		ts.FixCommand = fix
+	}
+	for _, f := range res.Facts {
+		if freshness := f.Attributes["freshness"]; freshness != "" {
+			ts.Freshness = freshness
+		}
 	}
 	if res.Status == adapters.StatusAuthoritative {
 		ts.Status = SetupReady
