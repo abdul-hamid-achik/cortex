@@ -1,0 +1,148 @@
+/* Copyright © 2026 abdul hamid <abdulachik@icloud.com> */
+
+/* Design tokens. Dark is the default; light is a deliberate, not inverted, palette. */
+
+:root,
+[data-theme='dark'] {
+  --bg: #0b0e13;
+  --bg-grad: radial-gradient(1200px 600px at 12% -10%, #14202c 0%, transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, #1a1626 0%, transparent 55%);
+  --panel: #10141b;
+  --panel-2: #141a22;
+  --panel-3: #19212b;
+  --line: #1e2733;
+  --line-2: #2a3543;
+  --line-3: #3a4757;
+
+  --text: #e7edf4;
+  --text-2: #a3b0be;
+  --text-3: #74818f;
+  --text-4: #56616e;
+
+  --accent: #35d6c0;
+  --accent-2: #1fb3a0;
+  --accent-soft: rgba(53, 214, 192, 0.12);
+  --accent-line: rgba(53, 214, 192, 0.35);
+
+  --info: #6aa9ff;
+  --info-soft: rgba(106, 169, 255, 0.13);
+  --violet: #b39ddb;
+  --violet-soft: rgba(179, 157, 219, 0.13);
+  --amber: #f0b429;
+  --amber-soft: rgba(240, 180, 41, 0.13);
+  --green: #4ade80;
+  --green-soft: rgba(74, 222, 128, 0.13);
+  --red: #ff6b6b;
+  --red-soft: rgba(255, 107, 107, 0.13);
+  --slate: #8b98a8;
+  --slate-soft: rgba(139, 152, 168, 0.13);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.6);
+
+  --rail-bg: #0d1117;
+  --topbar-bg: rgba(11, 14, 19, 0.82);
+  --code-bg: #0a0d12;
+  --selection: rgba(53, 214, 192, 0.28);
+}
+
+[data-theme='light'] {
+  --bg: #f6f7f9;
+  --bg-grad: radial-gradient(1000px 520px at 10% -10%, #e6f4f1 0%, transparent 60%),
+    radial-gradient(800px 460px at 100% 0%, #eee9f7 0%, transparent 55%);
+  --panel: #ffffff;
+  --panel-2: #fbfcfd;
+  --panel-3: #f2f4f7;
+  --line: #e2e6ec;
+  --line-2: #d3d9e2;
+  --line-3: #bcc5d1;
+
+  --text: #16202b;
+  --text-2: #4a5766;
+  --text-3: #6d7b8a;
+  --text-4: #93a0ae;
+
+  --accent: #0f9b8a;
+  --accent-2: #0b7d6f;
+  --accent-soft: rgba(15, 155, 138, 0.1);
+  --accent-line: rgba(15, 155, 138, 0.3);
+
+  --info: #2f6fd0;
+  --info-soft: rgba(47, 111, 208, 0.1);
+  --violet: #7a5cc4;
+  --violet-soft: rgba(122, 92, 196, 0.1);
+  --amber: #a9741a;
+  --amber-soft: rgba(169, 116, 26, 0.12);
+  --green: #1f9254;
+  --green-soft: rgba(31, 146, 84, 0.12);
+  --red: #cf3b3b;
+  --red-soft: rgba(207, 59, 59, 0.1);
+  --slate: #64748b;
+  --slate-soft: rgba(100, 116, 139, 0.12);
+
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-2: 0 8px 24px rgba(16, 24, 40, 0.1);
+  --shadow-3: 0 24px 60px rgba(16, 24, 40, 0.16);
+
+  --rail-bg: #ffffff;
+  --topbar-bg: rgba(246, 247, 249, 0.85);
+  --code-bg: #f7f9fb;
+  --selection: rgba(15, 155, 138, 0.2);
+}
+
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+
+  --fs-10: 10px;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-22: 22px;
+  --fs-28: 28px;
+
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 9px;
+  --r-4: 14px;
+  --r-pill: 999px;
+
+  --rail-w: 236px;
+  --rail-w-collapsed: 60px;
+  --inspector-w: 420px;
+  --topbar-h: 54px;
+
+  --pad-row: 10px;
+  --pad-card: 16px;
+  --gap: 14px;
+  --row-h: 34px;
+
+  --t-fast: 110ms cubic-bezier(0.32, 0.72, 0, 1);
+  --t-med: 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+[data-density='compact'] {
+  --pad-row: 6px;
+  --pad-card: 12px;
+  --gap: 10px;
+  --row-h: 27px;
+  --fs-13: 12.5px;
+  --fs-14: 13px;
+}
+
+/* Phase → color mapping, used by badges, rails, and the loop diagram. */
+[data-phase='new'] { --phase: var(--slate); --phase-soft: var(--slate-soft); }
+[data-phase='orienting'] { --phase: var(--info); --phase-soft: var(--info-soft); }
+[data-phase='investigating'] { --phase: var(--info); --phase-soft: var(--info-soft); }
+[data-phase='planned'] { --phase: var(--violet); --phase-soft: var(--violet-soft); }
+[data-phase='changing'] { --phase: var(--amber); --phase-soft: var(--amber-soft); }
+[data-phase='verifying'] { --phase: var(--accent); --phase-soft: var(--accent-soft); }
+[data-phase='persisting'] { --phase: var(--violet); --phase-soft: var(--violet-soft); }
+[data-phase='complete'] { --phase: var(--green); --phase-soft: var(--green-soft); }
+[data-phase='abandoned'] { --phase: var(--red); --phase-soft: var(--red-soft); }
+[data-phase='blocked'] { --phase: var(--amber); --phase-soft: var(--amber-soft); }
+[data-phase='paused'] { --phase: var(--slate); --phase-soft: var(--slate-soft); }

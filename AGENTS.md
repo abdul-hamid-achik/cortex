@@ -89,6 +89,9 @@ cortex/
 │   ├── forge/forge.go        # PR review action (ModeReview: PR fetch + APPROVE/REQUEST CHANGES verdict)
 │   └── version/version.go    # Version/Commit/Date (ldflags-injected)
 ├── docs/                     # VitePress site (product docs ONLY) → deploy to Vercel
+├── desktop/                  # Cortex Deck — Electron operator console over CLI+MCP+case store;
+│                             #   no bundler/framework; own README, tests (node --test) and a
+│                             #   headless smoke pass that screenshots every view
 ├── contracts/v1/             # public deterministic JSON/MCP conformance schema + fixtures
 ├── evaluations/              # trusted empirical manifests, repository fixtures, and independent oracles
 ├── specs/                    # glyphrun E2E specs (*.yml)
@@ -164,6 +167,11 @@ CORTEX_APPROVE_TRAJECTORY=1 task trajectory MANIFEST=... LAUNCHER=...  # trusted
 task docs            # VitePress dev server (Bun)  ·  task docsbuild / docstest / docsdeps
 task ship            # check + race + build + flows + docstest + docsbuild
 task install         # go install ./cmd/cortex
+
+# Cortex Deck (desktop console) — see desktop/README.md
+cd desktop && npm install && npm start   # launch the Electron operator console
+cd desktop && npm test                   # deck unit tests (node --test, no browser)
+cd desktop && npm run smoke              # headless render+bridge smoke; screenshots to desktop/screenshots/
 ```
 
 ## Prerequisites
@@ -455,6 +463,11 @@ boundary above; Bob's public BOB-5 fixtures are the consumer contract.
   satisfy verification. Never require a live Bob binary in ordinary CI.
 - glyphrun specs in `specs/` are the E2E contract. Run with `task flows` (local only); the task
   supplies and cleans up a temporary `CORTEX_HOME` so specs never pollute the operator's XDG state.
+- Cortex Deck (`desktop/`) is verified with `npm test` (pure node, plus a minimal DOM stub for the
+  renderer's builders) and `npm run smoke` (real Electron against the real binary and central
+  store; fails on any renderer console error and on any failed in-app bridge probe). The deck's
+  command registry is completeness-tested against the CLI help tree, so a new cortex subcommand
+  must be added to `desktop/src/main/registry.js` or the deck tests fail.
 - Public JSON/MCP compatibility goldens live in `contracts/v1/` and are generated from kernel,
   handoff, and MCP test paths. Update them only with `CORTEX_UPDATE_CONTRACTS=1` and review every
   diff; IDs, timestamps, digests, private paths, and secrets must remain normalized or absent.

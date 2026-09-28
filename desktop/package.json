@@ -1,0 +1,51 @@
+{
+  "name": "cortex-deck",
+  "productName": "Cortex Deck",
+  "version": "0.1.0",
+  "description": "Desktop console for reviewing and operating Cortex — the evidence-guided agent kernel.",
+  "license": "MIT",
+  "private": true,
+  "main": "src/main/index.js",
+  "type": "module",
+  "author": "abdul hamid <abdulachik@icloud.com>",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --deck-smoke",
+    "icon": "electron scripts/make-icon.mjs",
+    "test": "node --test test/*.test.js",
+    "check": "npm run syntax && npm test",
+    "syntax": "node scripts/syntax-check.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "tools.cortex.deck",
+    "productName": "Cortex Deck",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development"
+    }
+  }
+}
