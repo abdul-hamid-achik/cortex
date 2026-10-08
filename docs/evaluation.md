@@ -125,7 +125,10 @@ It is evaluation infrastructure only and is not part of release archives.
   with `ANTHROPIC_API_KEY`; without it the arm is `blocked` rather than run unisolated.
 - **Parity.** Both arms get the same prompt. The only difference is the MCP configuration: the
   `cortex` arm gets `cortex serve` with that arm's isolated roots and `CORTEX_APPROVE_COMMANDS=1`,
-  so a fixture's committed `cortex.yaml` unit verifier can run.
+  so a fixture's committed `cortex.yaml` unit verifier can run. With `--cortex-instructions`, the
+  `cortex` arm also receives the deployed instruction snippet (the `CLAUDE.md` block from the
+  [Quick Start](/quick-start)) through `--append-system-prompt-file`; its digest is logged in the
+  arm trace. Without it the arm measures MCP availability alone, which agents often ignore.
 - **Honesty.** The CLI cannot set temperature or seed, so manifests for this launcher must use
   `temperature_unsupported_reason` and `seed_unsupported_reason`; a pinned value is refused as
   `blocked`. A model in the stream that differs from the manifest fails the arm. Completion is read
@@ -142,6 +145,8 @@ argv:
   - /absolute/path/to/claude
   - --cortex
   - /absolute/path/to/cortex
+  - --cortex-instructions
+  - /absolute/path/to/cortex-agent-instructions.md
   - --tool
   - git=/usr/bin/git
   - --tool

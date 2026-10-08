@@ -498,3 +498,34 @@ func TestCortexArmWithoutCaseFilesScoresZero(t *testing.T) {
 		t.Fatalf("observation = %+v", o)
 	}
 }
+
+// The deployed Cortex condition appends the instruction snippet in the cortex
+// arm only; the raw arm must never see it, or the arms differ by more than
+// the Cortex deployment.
+func TestCortexInstructionsReachOnlyTheCortexArm(t *testing.T) {
+	snippet := filepath.Join(t.TempDir(), "instructions.md")
+	if err := os.WriteFile(snippet, []byte("## Cortex\nuse it\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, arm := range []trajectory.Arm{trajectory.ArmRawTools, trajectory.ArmCortex} {
+		r := newRig(t)
+		r.installAgent(happyStream(t), "exit 0")
+		got := r.launch(r.request(arm), []string{"--cortex", r.cortex, "--cortex-instructions", snippet}, r.environ())
+		if got.code != 0 || got.result.Status != trajectory.RunCompleted {
+			t.Fatalf("%s: code %d status %s stderr: %s", arm, got.code, got.result.Status, got.stderr)
+		}
+		path, appended := argAfter(r.agentArgs(), "--append-system-prompt-file")
+		if arm == trajectory.ArmCortex && (!appended || path != snippet || !strings.Contains(got.stderr, "sha256:")) {
+			t.Fatalf("cortex arm must append and log the snippet: args=%v stderr=%s", r.agentArgs(), got.stderr)
+		}
+		if arm == trajectory.ArmRawTools && appended {
+			t.Fatal("the raw arm must never receive the cortex instructions")
+		}
+	}
+	r := newRig(t)
+	r.installAgent(happyStream(t), "exit 0")
+	missing := r.launch(r.request(trajectory.ArmCortex), []string{"--cortex", r.cortex, "--cortex-instructions", filepath.Join(t.TempDir(), "absent.md")}, r.environ())
+	if missing.result.Status != trajectory.RunBlocked || r.agentRan() {
+		t.Fatalf("unreadable instructions must block before the agent starts: %+v", missing.result)
+	}
+}

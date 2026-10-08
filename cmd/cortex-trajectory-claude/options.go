@@ -33,11 +33,14 @@ type toolSpec struct {
 // options is the operator-supplied launcher configuration (argv from the
 // trusted launcher.yaml). The scenario manifest cannot influence any of it.
 type options struct {
-	Agent         string
-	Cortex        string
-	Tools         []toolSpec
-	RequireAPIKey bool
-	WallMargin    time.Duration
+	Agent  string
+	Cortex string
+	// CortexInstructions is the deployed agent-instruction snippet appended to
+	// the system prompt in the cortex arm only (empty = MCP-only condition).
+	CortexInstructions string
+	Tools              []toolSpec
+	RequireAPIKey      bool
+	WallMargin         time.Duration
 }
 
 type toolFlag struct{ tools *[]toolSpec }
@@ -59,6 +62,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.SetOutput(stderr)
 	flags.StringVar(&opt.Agent, "agent", "", "absolute path of the claude executable")
 	flags.StringVar(&opt.Cortex, "cortex", "", "absolute path of the cortex executable (cortex arm)")
+	flags.StringVar(&opt.CortexInstructions, "cortex-instructions", "", "absolute path of the agent-instruction snippet appended to the system prompt in the cortex arm only")
 	flags.Var(toolFlag{tools: &opt.Tools}, "tool", "extra executable exposed to both arms, name=/absolute/path (repeatable)")
 	flags.BoolVar(&opt.RequireAPIKey, "require-api-key", true, "block the run when ANTHROPIC_API_KEY is empty")
 	flags.DurationVar(&opt.WallMargin, "wall-margin", defaultWallMargin, "time reserved out of the wall-time budget for observation and output")
@@ -83,6 +87,11 @@ func (o options) validate() error {
 	}
 	if o.Cortex != "" {
 		if err := requireCleanAbs("--cortex", o.Cortex); err != nil {
+			return err
+		}
+	}
+	if o.CortexInstructions != "" {
+		if err := requireCleanAbs("--cortex-instructions", o.CortexInstructions); err != nil {
 			return err
 		}
 	}

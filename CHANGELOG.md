@@ -10,6 +10,9 @@ All notable changes to Cortex are documented here. The format follows
   runtime cannot set sampling temperature (mirrors `seed_unsupported_reason`), and
   `cmd/cortex-trajectory-claude` is a reference launcher that runs isolated `raw_tools` and
   `cortex` arms through the Claude Code CLI (`--bare`, allowlisted env, shimmed `PATH`).
+- Quick Start "Connect your agent": `claude mcp add` registration and the recommended
+  `CLAUDE.md`/`AGENTS.md` instruction block; the trajectory launcher can append the same block in
+  the cortex arm (`--cortex-instructions`) and logs MCP server status and per-tool call counts.
 - `cortex init` detects Taskfile, Makefile, and justfile runners: a `test` task takes precedence
   over language markers (`task test`, `make test`, `just test`), and `build`/`lint` tasks yield
   `build`/`lint` verifiers. Detection is a bounded read-only text scan (Taskfile parsed as YAML);

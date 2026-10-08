@@ -114,6 +114,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if request.Arm == trajectory.ArmCortex && opt.Cortex == "" {
 		return block("the cortex arm requires --cortex")
 	}
+	if request.Arm == trajectory.ArmCortex && opt.CortexInstructions != "" {
+		digest, err := resolvedDigest(opt.CortexInstructions)
+		if err != nil {
+			return block("cortex instructions are unreadable: %v", err)
+		}
+		logf("cortex arm instructions %s (%s)", opt.CortexInstructions, digest)
+	}
 	roots, err := armRoots(host, request.Arm)
 	if err != nil {
 		return block("%v", err)
@@ -132,7 +139,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	logf("running %s arm with model %s (tool-call budget %d, deadline %s)",
 		request.Arm, request.Model.Identifier, request.Budget.MaxToolCalls, remaining.Round(time.Millisecond))
-	outcome := runAgent(ctx, opt.Agent, agentArgs(request, request.Arm, box.MCPConfig), request.Workspace,
+	outcome := runAgent(ctx, opt.Agent, agentArgs(request, request.Arm, box.MCPConfig, opt.CortexInstructions), request.Workspace,
 		box.Env, request.Budget.MaxToolCalls, remaining, stderr)
 
 	status, reported := classify(request, outcome, func(message string) { logf("%s", message) })

@@ -1,0 +1,42 @@
+version: 1
+name: trajectory-slugify-unicode-titles
+intent: |
+    The slug command keeps accented and other unicode letters in post permalinks, lowercased, and
+    still collapses punctuation and whitespace into single dashes for plain ASCII titles.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-c"
+        - 'for t in "Crème Brûlée" "Straße Über Alles" "Go 1.25 -- Released" "ÉCOLE du Soir"; do echo "== $t"; go run ./cmd/slug "$t"; done; echo FINISHED'
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 40
+    profile: xterm-256color
+steps:
+    - wait:
+        screen:
+            contains: "FINISHED"
+        timeoutMs: 90000
+    - snapshot: permalinks
+outcomes:
+    - id: accents_are_kept
+      description: accented letters survive in the permalink
+      verify:
+        screen:
+            contains: "/posts/crème-brûlée"
+    - id: sharp_s_and_diaeresis_are_kept
+      description: non-latin1-folded letters such as ß and Ü are kept and lowercased
+      verify:
+        screen:
+            contains: "/posts/straße-über-alles"
+    - id: uppercase_accent_is_lowercased
+      description: an uppercase accented letter is lowercased
+      verify:
+        screen:
+            contains: "/posts/école-du-soir"
+    - id: ascii_titles_still_collapse
+      description: punctuation and whitespace in ASCII titles still collapse to single dashes
+      verify:
+        screen:
+            contains: "/posts/go-1-25-released"

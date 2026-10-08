@@ -38,7 +38,7 @@ func agentDeadline(maxWall, margin time.Duration) time.Duration {
 
 // agentArgs builds the isolated, non-interactive claude invocation. Nothing
 // here depends on the arm except the MCP config file and the allowed tools.
-func agentArgs(request trajectory.LauncherRequest, arm trajectory.Arm, mcpConfigPath string) []string {
+func agentArgs(request trajectory.LauncherRequest, arm trajectory.Arm, mcpConfigPath, cortexInstructions string) []string {
 	allowed := agentBaseTools
 	if arm == trajectory.ArmCortex {
 		allowed += ",mcp__cortex"
@@ -54,6 +54,12 @@ func agentArgs(request trajectory.LauncherRequest, arm trajectory.Arm, mcpConfig
 		"--no-session-persistence",
 		"--model", request.Model.Identifier,
 		"--permission-mode", "acceptEdits",
+	}
+	// The deployed Cortex condition includes the instruction snippet a user
+	// would put in CLAUDE.md; --bare skips CLAUDE.md discovery, so it is
+	// appended explicitly, and only in the cortex arm.
+	if arm == trajectory.ArmCortex && cortexInstructions != "" {
+		args = append(args, "--append-system-prompt-file", cortexInstructions)
 	}
 	if micros := request.Budget.MaxEstimatedCostMicros; micros > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(float64(micros)/1e6, 'f', 6, 64))

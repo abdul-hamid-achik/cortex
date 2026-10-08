@@ -1,0 +1,49 @@
+schema_version: 1
+id: pagination-cursor
+repository:
+  fixture: testrepos/pagination-cursor
+  digest: sha256:900f025de0dd7c105d0e05925d3fbc0fb946a5820cbe72928149fd3b68748879
+goal: >-
+  The pager command prints a trailing empty page when the list length is an exact multiple of the
+  page size. For example `go run ./cmd/pager -total 6 -size 3` prints two full pages and then a
+  third "page 3: (empty)" line, and the page API keeps reporting that more results exist after the
+  final page. Paging should end cleanly on the last page, whatever the list length and page size.
+acceptance:
+  - id: last_page_reports_no_more
+    statement: The final page of a list reports that no further results exist
+  - id: exact_multiple_has_no_trailing_page
+    statement: Paging a list whose length is an exact multiple of the page size ends without a trailing empty page
+surfaces: [code, terminal]
+allowed_changes:
+  - internal/page/page.go
+model:
+  identifier: claude-haiku-5-5
+  build: claude-code-cli
+  temperature_unsupported_reason: claude code cli exposes no temperature flag
+  seed_unsupported_reason: claude code cli exposes no seed flag
+  context_budget_tokens: 200000
+arms:
+  - raw_tools
+  - cortex
+budget:
+  max_tool_calls: 40
+  max_wall_time: 10m
+  max_oracle_wall_time: 5m
+  max_trace_bytes: 16777216
+  max_estimated_cost_micros: 300000
+oracle:
+  protected_paths:
+    - cmd/pager/main_test.go
+    - internal/page/page_test.go
+    - go.mod
+    - cortex.yaml
+  commands:
+    - id: go_tests
+      argv: [go, test, ./...]
+      claim_ids: [last_page_reports_no_more]
+      timeout: 2m
+  glyphrun_specs:
+    - id: exact_multiple_flow
+      path: oracles/pagination-cursor/exact-multiple.yml
+      claim_ids: [last_page_reports_no_more, exact_multiple_has_no_trailing_page]
+      timeout: 2m
