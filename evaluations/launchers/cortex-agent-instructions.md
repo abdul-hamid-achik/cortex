@@ -3,8 +3,9 @@
 This repository is connected to Cortex (MCP server `cortex`). Use it for any code change beyond
 a one-line or typo fix; skip it for trivial edits and plain questions.
 
-1. `cortex_open_task` with the goal, then `cortex_investigate` to locate the code. Treat search
-   hits as candidates, not proof.
+1. `cortex_open_task` with the goal. If the task says which files may change, pass them as
+   `allowedPaths`. Then `cortex_investigate` to locate the code; treat search hits as candidates,
+   not proof.
 2. `cortex_plan`: state a hypothesis, how it would be disproved, the files you will change, and
    what you are unsure about.
 3. `cortex_begin_change`, then edit only the files you declared.

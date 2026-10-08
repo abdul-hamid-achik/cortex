@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"unicode/utf8"
 )
@@ -69,4 +70,53 @@ func ValidateAcceptanceCriteria(criteria []AcceptanceCriterion) error {
 		seen[criterion.ID] = struct{}{}
 	}
 	return nil
+}
+
+const (
+	// MaxAllowedPaths and MaxAllowedPathBytes bound the owner-registered path
+	// contract.
+	MaxAllowedPaths     = 64
+	MaxAllowedPathBytes = 512
+)
+
+// ValidateAllowedPaths checks an owner-registered path contract: clean,
+// relative, slash-separated path.Match patterns that never climb out of the
+// workspace. An empty contract means "no restriction" (legacy behavior).
+func ValidateAllowedPaths(patterns []string) error {
+	if len(patterns) > MaxAllowedPaths {
+		return fmt.Errorf("allowed paths exceed %d entries", MaxAllowedPaths)
+	}
+	seen := make(map[string]bool, len(patterns))
+	for _, pattern := range patterns {
+		if pattern == "" || pattern != strings.TrimSpace(pattern) || !utf8.ValidString(pattern) || len(pattern) > MaxAllowedPathBytes {
+			return fmt.Errorf("allowed path %q must be a non-empty, trimmed pattern of at most %d bytes", pattern, MaxAllowedPathBytes)
+		}
+		if strings.HasPrefix(pattern, "/") || strings.Contains(pattern, `\`) || path.Clean(pattern) != pattern ||
+			pattern == ".." || strings.HasPrefix(pattern, "../") {
+			return fmt.Errorf("allowed path %q must be a clean workspace-relative pattern", pattern)
+		}
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("allowed path %q is not a valid pattern", pattern)
+		}
+		if seen[pattern] {
+			return fmt.Errorf("duplicate allowed path %q", pattern)
+		}
+		seen[pattern] = true
+	}
+	return nil
+}
+
+// PathAllowed reports whether a workspace-relative file matches the contract.
+// An empty contract allows every path.
+func PathAllowed(patterns []string, file string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	file = path.Clean(strings.ReplaceAll(file, `\`, "/"))
+	for _, pattern := range patterns {
+		if matched, _ := path.Match(pattern, file); matched {
+			return true
+		}
+	}
+	return false
 }

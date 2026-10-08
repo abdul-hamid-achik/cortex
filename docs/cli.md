@@ -51,6 +51,7 @@ success rule; the same id and exact statement must later appear in a typed verif
 | `--idempotency-key` | — | stable, non-secret retry identity |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
 | `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
+| `--allow-path` (repeatable) | — | immutable owner path contract (`path.Match` pattern, e.g. `internal/auth/*.go`); plans may not declare files outside it and verify refuses changes outside it — no acknowledgment flag widens it |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 `mode=review` biases later `investigate` rounds toward git changed-files + `codemap review`
@@ -73,6 +74,7 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
 | `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
+| `--allow-path` (repeatable) | — | immutable owner path contract (`path.Match` pattern, e.g. `internal/auth/*.go`); plans may not declare files outside it and verify refuses changes outside it — no acknowledgment flag widens it |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 ### `cortex investigate <taskId> <question>`

@@ -418,6 +418,11 @@ Each of these cost a real debugging session. They extend the Architecture Notes 
 - **Acceptance criteria are immutable case identity.** `open`/`start` may register up to 64 stable
   ID + exact-statement pairs. Store saves and transactions reject later mutation; verification
   must reuse the exact ID/statement, and `--unverified`/`--accept-failed` cannot bypass missing
+- **Allowed paths are immutable case identity too.** `--allow-path` patterns registered at open
+  bound every later plan boundary and diff: a plan declaring a file outside them is rejected and
+  verify refuses while any changed file falls outside them. `--ack-drift` cannot widen the
+  contract; the exits are reverting the files or a new task. Legacy cases without a contract are
+  unchanged.
   criterion proof. The only exception is `--accept-missing-criteria` with exactly the missing ids:
   the outcome stays partial and every unproven criterion is named. `verify --from-plan` never binds
   a criterion to the structural `codemap_review` and refuses ambiguous or cross-surface choices. A

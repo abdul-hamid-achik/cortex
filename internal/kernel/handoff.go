@@ -60,6 +60,7 @@ type Handoff struct {
 	ChangeLease   *domain.ChangeLease         `json:"changeLease,omitempty"`
 	Workspace     domain.Workspace            `json:"workspace"`
 	Boundary      domain.ChangeBoundary       `json:"boundary,omitempty"`
+	AllowedPaths  []string                    `json:"allowedPaths,omitempty"`
 	Plan          *domain.Plan                `json:"plan,omitempty"`
 	Hypotheses    []domain.Hypothesis         `json:"hypotheses,omitempty"`
 	Evidence      []domain.FactView           `json:"evidence,omitempty"`
@@ -102,7 +103,7 @@ func BuildHandoffIn(workspace, taskID string, now time.Time) (Handoff, error) {
 		Phase: c.Status, Mode: c.Mode, Risk: c.Risk, Actor: c.Actor,
 		ParentTaskID: c.ParentTaskID, ChildTaskIDs: append([]string(nil), c.ChildTaskIDs...),
 		ChangeLease: cloneChangeLease(c.ChangeLease), Workspace: c.Workspace,
-		Boundary: c.ChangeBoundary, Plan: v.Plan, Hypotheses: v.Hypotheses,
+		Boundary: c.ChangeBoundary, AllowedPaths: append([]string(nil), c.AllowedPaths...), Plan: v.Plan, Hypotheses: v.Hypotheses,
 		Verification: v.VerificationAssessment, Receipts: receipts,
 		Decisions: decisions, Actions: safeHandoffActions(v.Actions, sensitivePending),
 	}

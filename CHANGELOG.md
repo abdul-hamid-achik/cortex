@@ -6,6 +6,10 @@ All notable changes to Cortex are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Owner path contract: `open/start --allow-path <pattern>` (MCP `allowedPaths`) registers immutable
+  `path.Match` patterns. Plans may not declare files outside them, verify refuses changes outside
+  them (no acknowledgment widens the contract), and status/handoff show the contract and any
+  `outsideAllowedPaths`.
 - Trajectory harness: `temperature_unsupported_reason` lets a manifest state that the agent
   runtime cannot set sampling temperature (mirrors `seed_unsupported_reason`), and
   `cmd/cortex-trajectory-claude` is a reference launcher that runs isolated `raw_tools` and
