@@ -314,7 +314,7 @@ health plus discovery index readiness (`index` / `fixCommand` for vecgrep and co
 bounded `claimProofs` manifest with exact total/truncation metadata, receipt/batch identity,
 binding, revision/diff digest, and non-sensitive evidence references.
 
-`cortex show` and Studio use one task-locked composite projection. They retain the 200 newest
+`cortex show` uses one task-locked composite projection. It retains the 200 newest
 evidence, command, and phase ledger records and return exact `evidenceTotal` / `timelineTotal`
 counts plus a truncation warning; use `read-evidence` or `timeline` for older detail.
 
@@ -457,7 +457,7 @@ forgotten or stuck work. Add `--archived` to list retired sessions instead of ac
 ### `cortex archive <taskId>` / `cortex unarchive <taskId>`
 
 Retire a finished session — **move** it (a *terminal* session: complete / abandoned / blocked) out of
-the active tree into `$XDG_STATE_HOME/cortex/archive/`, so `sessions` / `overview` / `studio` stay
+the active tree into `$XDG_STATE_HOME/cortex/archive/`, so `sessions` / `overview` stay
 focused on live work as history accumulates. The data is preserved and reversible with `unarchive`;
 **nothing is deleted**, and in-flight sessions are refused. View the archive with
 `cortex sessions --archived`.
