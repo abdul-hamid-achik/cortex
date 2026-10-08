@@ -154,6 +154,14 @@ type openTaskInput struct {
 type acceptanceCriterionArg struct {
 	ID        string `json:"id" jsonschema:"stable non-secret criterion id; use the same id in verify.claimSpecs"`
 	Statement string `json:"statement" jsonschema:"the exact success statement that verification must prove"`
+	Kind      string `json:"kind,omitempty" jsonschema:"empty for a behavioral criterion that needs verifier proof; process for a rule about how the work was done (e.g. no commit made) that verify.attestations may satisfy"`
+}
+
+type attestationArg struct {
+	ID        string   `json:"id" jsonschema:"the registered process criterion id"`
+	Statement string   `json:"statement,omitempty" jsonschema:"optional; must equal the registered statement exactly"`
+	Evidence  []string `json:"evidence" jsonschema:"evidence ids in this task that support the attestation (e.g. from cortex_note)"`
+	Note      string   `json:"note,omitempty" jsonschema:"short explanation of how the evidence shows the rule held"`
 }
 
 type beginChangeInput struct {
@@ -217,6 +225,7 @@ type verifyInput struct {
 	NoOpAcknowledged  bool                   `json:"noOpAcknowledged,omitempty" jsonschema:"explicitly acknowledge that this change task intentionally produced no diff"`
 	FromPlan          bool                   `json:"fromPlan,omitempty" jsonschema:"materialize typed claims from acceptance criteria and planned verification requirements when claimSpecs are omitted"`
 	DriftAcknowledged bool                   `json:"driftAcknowledged,omitempty" jsonschema:"acknowledge unexpected files on a high-risk change so verification may proceed"`
+	Attestations      []attestationArg       `json:"attestations,omitempty" jsonschema:"evidence-backed attestations for process acceptance criteria only; never verifier proof"`
 	Workspace         string                 `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -559,6 +568,7 @@ func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 		NoOpAcknowledged:  in.NoOpAcknowledged,
 		FromPlan:          in.FromPlan,
 		DriftAcknowledged: in.DriftAcknowledged,
+		Attestations:      toAttestations(in.Attestations),
 	})
 	return result(env, err)
 }
@@ -766,7 +776,7 @@ func toSurfaces(ss []string) []domain.Surface {
 func toAcceptanceCriteria(criteria []acceptanceCriterionArg) []domain.AcceptanceCriterion {
 	out := make([]domain.AcceptanceCriterion, 0, len(criteria))
 	for _, criterion := range criteria {
-		out = append(out, domain.AcceptanceCriterion{ID: criterion.ID, Statement: criterion.Statement})
+		out = append(out, domain.AcceptanceCriterion{ID: criterion.ID, Statement: criterion.Statement, Kind: criterion.Kind})
 	}
 	return out
 }
@@ -849,4 +859,12 @@ func errResult(msg string) *sdkmcp.CallToolResult {
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "Error: " + msg}},
 		IsError: true,
 	}
+}
+
+func toAttestations(args []attestationArg) []kernel.AttestationInput {
+	out := make([]kernel.AttestationInput, 0, len(args))
+	for _, arg := range args {
+		out = append(out, kernel.AttestationInput{ClaimID: arg.ID, Statement: arg.Statement, Evidence: arg.Evidence, Note: arg.Note})
+	}
+	return out
 }

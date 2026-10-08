@@ -39,6 +39,9 @@ type ClaimProof struct {
 	SensitiveRefsOmitted bool                       `json:"sensitiveRefsOmitted,omitempty"`
 	EvidenceRefsOmitted  int                        `json:"evidenceRefsOmitted,omitempty"`
 	MetadataTruncated    bool                       `json:"metadataTruncated,omitempty"`
+	// Attested marks a process criterion backed by an agent attestation rather
+	// than verifier proof.
+	Attested bool `json:"attested,omitempty"`
 }
 
 func (k *Kernel) normalizeAcceptanceCriteria(input []domain.AcceptanceCriterion) ([]domain.AcceptanceCriterion, error) {
@@ -50,6 +53,7 @@ func (k *Kernel) normalizeAcceptanceCriteria(input []domain.AcceptanceCriterion)
 		criterion := domain.AcceptanceCriterion{
 			ID:        strings.TrimSpace(raw.ID),
 			Statement: strings.TrimSpace(raw.Statement),
+			Kind:      strings.TrimSpace(raw.Kind),
 		}
 		if err := criterion.Validate(); err != nil {
 			return nil, err
@@ -125,12 +129,17 @@ func assessCaseVerification(c *domain.CaseFile, receipts []domain.VerificationRe
 			assessment.SatisfiedCriteria = append(assessment.SatisfiedCriteria, criterion.ID)
 			continue
 		}
+		if _, attested := currentAttestation(receipts, current, criterion); attested {
+			assessment.AttestedCriteria = append(assessment.AttestedCriteria, criterion.ID)
+			continue
+		}
 		assessment.MissingCriteria = append(assessment.MissingCriteria, criterion.ID)
 		if !ok || receipt.Claim != criterion.Statement || !receipt.Failed() {
 			assessment.NonPassingClaims = append(assessment.NonPassingClaims, criterion.Statement)
 		}
 	}
 	assessment.SatisfiedCriteria = dedupeSorted(assessment.SatisfiedCriteria)
+	assessment.AttestedCriteria = dedupeSorted(assessment.AttestedCriteria)
 	assessment.MissingCriteria = dedupeSorted(assessment.MissingCriteria)
 	assessment.NonPassingClaims = dedupeSorted(assessment.NonPassingClaims)
 	if len(assessment.MissingCriteria) > 0 && assessment.Outcome == VerificationVerified {
@@ -156,6 +165,14 @@ func claimProofsForCase(taskID string, c *domain.CaseFile, receipts []domain.Ver
 	if len(c.AcceptanceCriteria) > 0 {
 		for _, criterion := range c.AcceptanceCriteria {
 			receipt, ok := byID[criterion.ID]
+			if !ok || receipt.Claim != criterion.Statement || !receipt.Proven() {
+				if attestation, attested := currentAttestation(receipts, current, criterion); attested {
+					proof := claimProofFromReceipt(taskID, attestation, receipts, true)
+					proof.Attested = true
+					proofs = append(proofs, proof)
+					continue
+				}
+			}
 			if !ok || receipt.Claim != criterion.Statement {
 				proofs = append(proofs, missingClaimProof(criterion))
 				continue

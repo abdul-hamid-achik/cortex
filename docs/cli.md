@@ -50,6 +50,7 @@ success rule; the same id and exact statement must later appear in a typed verif
 | `--parent` | — | parent task ID for same-workspace delegated work |
 | `--idempotency-key` | — | stable, non-secret retry identity |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
+| `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 `mode=review` biases later `investigate` rounds toward git changed-files + `codemap review`
@@ -71,6 +72,7 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 | `--risk` | `medium` | `low` \| `medium` \| `high` |
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
+| `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 ### `cortex investigate <taskId> <question>`
@@ -258,6 +260,7 @@ cortex verify task_06FK… \
 | `--no-op` | acknowledge that a change task intentionally produced no diff; does not create a pass |
 | `--from-plan` | materialize typed claims from registered acceptance criteria and the plan's verification requirements. Criteria bind to the single runnable verifier (a `unit_test` command wins); they are never proven implicitly by the structural `codemap_review`, and an ambiguous choice is refused with an explicit `--claim-spec` continuation |
 | `--ack-drift` | acknowledge unexpected files on a `risk: high` change so verification may proceed |
+| `--attest` (repeatable) | `id=evidence-id[,evidence-id…][|note]` for a **process** criterion only; cites evidence from this case (e.g. a `cortex note`), goes stale when the workspace changes, and is reported as attested, never as verifier proof |
 | `--actor` | change-lease owner; defaults to the active lease owner when the task is leased |
 
 `--claim-spec` bundles a whole typed claim into one value (recognized keys `id`, `surface`,

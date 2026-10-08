@@ -223,6 +223,10 @@ cd desktop && npm run smoke              # headless render+bridge smoke; screens
   terminal, artifact, secret, or general behavioral verification. Raw output is case-only when
   adapter policy permits and is never model-visible by default. Preserve digest-based retry
   identity so open/resume does not duplicate equivalent context.
+- Agent attestations (`verify --attest`, purpose `agent_attestation`) satisfy only acceptance
+  criteria registered with `kind: process`, must cite existing non-placeholder evidence, bind to
+  the current HEAD/diff like any receipt, and are reported as `attestedCriteria`. The domain makes
+  `Proven`/`Failed`/`Definitive` false for them, so they can never stand in for verifier proof.
 - Bob plan checks warn on owned, reserved, manifest-controlled, or unsafe paths and stay silent for
   human-owned extension points. They do not rewrite or reject the plan automatically. Structured
   `bob_path` actions carry `{workspace,path}` and exact path argv; `bob_playbook` carries only a

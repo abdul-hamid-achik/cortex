@@ -461,6 +461,11 @@ func renderSummary(c *domain.CaseFile, outcome string, unverified bool, state co
 	} else {
 		fmt.Fprintf(&b, "_Showing %d most recent non-sensitive current receipts; %d older, stale, or sensitive receipts omitted._\n\n", len(receipts), receiptOmitted)
 		for _, r := range receipts {
+			if r.EffectivePurpose() == domain.VerificationPurposeAttestation {
+				fmt.Fprintf(&b, "- [attested, not verifier-proven] **%s** — evidence %s\n",
+					clipSummaryField(r.Claim, 320), clipSummaryField(strings.Join(r.Evidence, ", "), 256))
+				continue
+			}
 			fmt.Fprintf(&b, "- [%s] **%s** — %s (%s)\n", clipSummaryField(string(r.Status), 64),
 				clipSummaryField(r.Claim, 320), clipSummaryField(r.Tool, 128), clipSummaryField(string(r.Surface), 64))
 		}

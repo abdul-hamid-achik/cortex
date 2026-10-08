@@ -304,7 +304,7 @@ var workplanAddCmd = &cobra.Command{
 		files, _ := cmd.Flags().GetStringArray("file")
 		after, _ := cmd.Flags().GetStringArray("after")
 		criterionFlags, _ := cmd.Flags().GetStringArray("criterion")
-		criteria, err := parseAcceptanceCriteria(criterionFlags)
+		criteria, err := parseAcceptanceCriteria(criterionFlags, nil)
 		if err != nil {
 			return err
 		}

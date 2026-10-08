@@ -74,6 +74,15 @@ const criterionFlag = () => ({
   help: 'Immutable id=statement pair. Once registered it cannot be edited or removed.',
 });
 
+const processCriterionFlag = () => ({
+  name: '--process-criterion',
+  label: 'Process criterion',
+  type: 'text',
+  repeatable: true,
+  placeholder: 'no_commit=No commit is made',
+  help: 'Immutable id=statement process rule. Satisfiable by an evidence-backed verify --attest instead of a verifier.',
+});
+
 const stringArray = (name, label, help, placeholder) => ({
   name,
   label,
@@ -105,6 +114,7 @@ export const COMMANDS = [
       { name: '--risk', label: 'Risk', type: 'enum', options: RISKS, default: 'medium', help: 'Risk band; high-risk changes require drift acknowledgment at verify time.' },
       { name: '--idempotency-key', label: 'Idempotency key', type: 'text', placeholder: 'checkout-redirect', help: 'Stable retry key. An exact match returns the existing task, even after completion.' },
       criterionFlag(),
+      processCriterionFlag(),
       { name: '--parent', label: 'Parent task', type: 'task', help: 'Parent task id for delegated work (workplan items and converted findings set this).' },
       stringArray('--seed', 'Orientation seed', 'Note or packet file stamped into orientation evidence (max 8).', 'handoff.md'),
     ],
@@ -129,6 +139,7 @@ export const COMMANDS = [
       surfaceFlag(),
       { name: '--risk', label: 'Risk', type: 'enum', options: RISKS, default: 'medium' },
       criterionFlag(),
+      processCriterionFlag(),
     ],
     docs: 'docs/cli.md',
     related: ['open'],
@@ -240,6 +251,7 @@ export const COMMANDS = [
       { name: '--no-auto-specs', label: 'Disable spec auto-selection', type: 'boolean', help: 'Do not auto-select and run the specs covering the change.' },
       { name: '--no-op', label: 'Acknowledge no diff', type: 'boolean', help: 'Explicitly acknowledge that this change task intentionally produced no diff.' },
       { name: '--ack-drift', label: 'Acknowledge scope drift', type: 'boolean', help: 'Acknowledge unexpected files on a high-risk change so verification may proceed.' },
+      { name: '--attest', label: 'Attest process criterion', type: 'text', repeatable: true, placeholder: 'no_commit=ev_123|checked git log', help: 'id=evidence-id[,evidence-id...][|note] for a process criterion. Never verifier proof.' },
     ],
     examples: [
       'cortex verify task_06FK… --claim-spec "id=checkout_return|surface=browser|contract=specs/cairntrace/checkout_return.yml|Login started at checkout returns to checkout" --browser-spec specs/cairntrace/checkout_return.yml',

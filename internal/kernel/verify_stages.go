@@ -20,6 +20,9 @@ type verification struct {
 	c      *domain.CaseFile
 	in     VerifyInput
 	claims []domain.VerificationClaim
+	// attestations are validated process-criterion attestations to record as
+	// agent_attestation receipts in this batch.
+	attestations []AttestationInput
 
 	changed []string
 	scope   ScopeReport
@@ -264,5 +267,24 @@ func (v *verification) recordScopeDriftEvidence() {
 		ev := v.stage.stampFact(v.k, "git", adapters.Fact{Kind: "code_location", Confidence: "high",
 			Claim: "scope drift: changed outside declared boundary: " + strings.Join(v.scope.UnexpectedFiles, ", ")})
 		v.facts = append(v.facts, ev)
+	}
+}
+
+// recordAttestations writes one agent_attestation receipt per validated
+// process-criterion attestation into this batch, so it shares the batch's
+// revision/diff binding and goes stale with it.
+func (v *verification) recordAttestations() {
+	for _, attestation := range v.attestations {
+		notes := "agent attestation, not verifier proof"
+		if attestation.Note != "" {
+			notes += ": " + attestation.Note
+		}
+		if err := v.writeReceipt(receiptSpec{
+			Claim: attestation.Statement, ClaimID: attestation.ClaimID,
+			Purpose: domain.VerificationPurposeAttestation, Tool: "attestation", Contract: domain.CriterionKindProcess,
+			Status: domain.VerifyPassed, Evidence: attestation.Evidence, Notes: notes,
+		}); err != nil {
+			v.warn("could not persist attestation receipt: " + err.Error())
+		}
 	}
 }

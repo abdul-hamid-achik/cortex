@@ -41,6 +41,20 @@ type VerifyInput struct {
 	// DriftAcknowledged permits a high-risk change with detected scope drift to
 	// enter verification. Medium/low risk still records drift without blocking.
 	DriftAcknowledged bool
+	// Attestations record evidence-backed agent claims that process acceptance
+	// criteria held. They satisfy only criteria registered with kind "process"
+	// and are never verifier proof.
+	Attestations []AttestationInput
+}
+
+// AttestationInput attests one process acceptance criterion. Statement may be
+// omitted (the registered statement is used) but must match exactly when set;
+// Evidence names durable evidence IDs in this case that support the claim.
+type AttestationInput struct {
+	ClaimID   string
+	Statement string
+	Evidence  []string
+	Note      string
 }
 
 // behavioralSurfaces pairs each behavioral surface with its verifier tool and a
@@ -105,6 +119,10 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	if claimErr := k.validateStableClaimIdentities(c.ID, claims); claimErr != nil {
 		return errEnvelope(in.TaskID, k.red.String(claimErr.Error())), nil
 	}
+	attestations, attestErr := k.normalizeAttestations(c, in.Attestations)
+	if attestErr != nil {
+		return errEnvelope(in.TaskID, k.red.String(attestErr.Error())), nil
+	}
 
 	// Git is authoritative for changed files. Caller-provided files are additive
 	// hints only, so an incomplete list cannot hide an out-of-boundary change.
@@ -165,6 +183,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	// verify_stages.go for the individual stages.
 	v := &verification{
 		k: k, ctx: ctx, c: c, in: in, claims: claims,
+		attestations:    attestations,
 		changed:         changed,
 		scope:           scope,
 		stage:           verificationStage{taskID: c.ID},
@@ -186,6 +205,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	v.runBehavioralVerifiers()
 	v.runCapabilityVerifiers()
 	v.mapClaims()
+	v.recordAttestations()
 	v.recordScopeDriftEvidence()
 
 	// Re-bind the accumulated state for the commit step below.
@@ -1236,4 +1256,64 @@ func commandApprovalAction(c *domain.CaseFile, receipts []domain.VerificationRec
 		}
 	}
 	return domain.NextAction{}, false
+}
+
+// maxAttestations bounds attestations per verify call (one per criterion).
+const maxAttestations = domain.MaxAcceptanceCriteria
+
+// normalizeAttestations validates attestations against the immutable
+// acceptance contract: each must name a registered criterion of kind process,
+// repeat its exact statement (or omit it), and cite at least one existing,
+// non-placeholder evidence record from this case.
+func (k *Kernel) normalizeAttestations(c *domain.CaseFile, input []AttestationInput) ([]AttestationInput, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	if len(input) > maxAttestations {
+		return nil, fmt.Errorf("attestations exceed %d entries", maxAttestations)
+	}
+	criteria := make(map[string]domain.AcceptanceCriterion, len(c.AcceptanceCriteria))
+	for _, criterion := range c.AcceptanceCriteria {
+		criteria[criterion.ID] = criterion
+	}
+	seen := make(map[string]bool, len(input))
+	out := make([]AttestationInput, 0, len(input))
+	for _, raw := range input {
+		id := strings.TrimSpace(raw.ClaimID)
+		criterion, ok := criteria[id]
+		if !ok {
+			return nil, fmt.Errorf("attestation %q is not a registered acceptance criterion of this task", id)
+		}
+		if criterion.Kind != domain.CriterionKindProcess {
+			return nil, fmt.Errorf("attestation %q is not a process criterion; behavioral criteria need verifier proof", id)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("attestation %q is duplicated", id)
+		}
+		seen[id] = true
+		if statement := strings.TrimSpace(raw.Statement); statement != "" && k.red.String(statement) != criterion.Statement {
+			return nil, fmt.Errorf("attestation %q must repeat the registered statement exactly", id)
+		}
+		refs := dedupeStr(raw.Evidence)
+		if len(refs) == 0 {
+			return nil, fmt.Errorf("attestation %q must cite at least one evidence id", id)
+		}
+		if len(refs) > maxHypothesisSupports {
+			return nil, fmt.Errorf("attestation %q cites more than %d evidence ids", id, maxHypothesisSupports)
+		}
+		for _, ref := range refs {
+			ev, err := k.store.GetEvidence(c.ID, ref)
+			if err != nil {
+				return nil, fmt.Errorf("attestation %q cites %q, which is not evidence in task %s", id, ref, c.ID)
+			}
+			if ev.Kind == domain.KindToolUnavailable {
+				return nil, fmt.Errorf("attestation %q cites %q, a tool-unavailable placeholder, not evidence", id, ref)
+			}
+		}
+		if textExceeds(strings.TrimSpace(raw.Note), maxRecordTextBytes) {
+			return nil, fmt.Errorf("attestation %q note exceeds %d bytes", id, maxRecordTextBytes)
+		}
+		out = append(out, AttestationInput{ClaimID: id, Statement: criterion.Statement, Evidence: refs, Note: strings.TrimSpace(raw.Note)})
+	}
+	return out, nil
 }

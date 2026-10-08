@@ -71,6 +71,11 @@ the coupled --claim-id/-surface/-verifier/-contract flags (repeat per claim):
 		noOp, _ := cmd.Flags().GetBool("no-op")
 		fromPlan, _ := cmd.Flags().GetBool("from-plan")
 		ackDrift, _ := cmd.Flags().GetBool("ack-drift")
+		attestFlags, _ := cmd.Flags().GetStringArray("attest")
+		attestations, err := parseAttestations(attestFlags)
+		if err != nil {
+			return err
+		}
 		actor, _ := cmd.Flags().GetString("actor")
 		env, err := k.Verify(cmd.Context(), kernel.VerifyInput{
 			TaskID:            args[0],
@@ -86,6 +91,7 @@ the coupled --claim-id/-surface/-verifier/-contract flags (repeat per claim):
 			NoOpAcknowledged:  noOp,
 			FromPlan:          fromPlan,
 			DriftAcknowledged: ackDrift,
+			Attestations:      attestations,
 		})
 		if err != nil {
 			return err
@@ -110,6 +116,7 @@ func init() {
 	verifyCmd.Flags().Bool("no-op", false, "explicitly acknowledge that this change task intentionally produced no diff")
 	verifyCmd.Flags().Bool("from-plan", false, "materialize typed claims from acceptance criteria and the plan's verification requirements")
 	verifyCmd.Flags().Bool("ack-drift", false, "acknowledge unexpected files on a high-risk change so verification may proceed")
+	verifyCmd.Flags().StringArray("attest", nil, "attest a process criterion as id=evidence-id[,evidence-id...][|note] (repeatable); never verifier proof")
 	verifyCmd.Flags().String("actor", "", "change-lease owner (defaults to the active lease owner when the task is leased)")
 	rootCmd.AddCommand(verifyCmd)
 }
@@ -181,4 +188,25 @@ func parseClaimSpec(spec string) (domain.VerificationClaim, error) {
 		return claim, fmt.Errorf("claim spec %q has no statement", spec)
 	}
 	return claim, nil
+}
+
+// parseAttestations reads --attest values of the form
+// id=evidence-id[,evidence-id...][|note].
+func parseAttestations(values []string) ([]kernel.AttestationInput, error) {
+	out := make([]kernel.AttestationInput, 0, len(values))
+	for _, value := range values {
+		refs, note, _ := strings.Cut(value, "|")
+		id, evidence, ok := strings.Cut(refs, "=")
+		if !ok || strings.TrimSpace(id) == "" || strings.TrimSpace(evidence) == "" {
+			return nil, fmt.Errorf("attestation %q must use id=evidence-id[,evidence-id...][|note]", value)
+		}
+		var ids []string
+		for _, ref := range strings.Split(evidence, ",") {
+			if ref = strings.TrimSpace(ref); ref != "" {
+				ids = append(ids, ref)
+			}
+		}
+		out = append(out, kernel.AttestationInput{ClaimID: strings.TrimSpace(id), Evidence: ids, Note: strings.TrimSpace(note)})
+	}
+	return out, nil
 }

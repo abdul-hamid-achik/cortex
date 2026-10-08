@@ -18,6 +18,13 @@ All notable changes to Cortex are documented here. The format follows
 - Plan rejections (missing disproof, missing boundary, unknown verifier) carry a retry action that
   rebuilds the CLI command; unknown verifiers list the valid requirements and offer `cortex init`.
 
+- Process acceptance criteria (`open --process-criterion`, MCP `kind: "process"`) for rules about
+  how work was done, such as "no commit is made". `verify --attest id=ev_…[|note]` (MCP
+  `attestations`) records an `agent_attestation` receipt that must cite evidence from the case,
+  binds to the current HEAD/diff, and is reported as `attestedCriteria` and "attested, not
+  verifier-proven" in `summary.md`. Attestations are never verifier proof and cannot satisfy a
+  behavioral criterion.
+
 ### Changed
 - With a `unit_test` command verifier configured, `codemap_review` is advisory: it still runs and
   leaves a receipt, but is no longer a default or risk-mandated requirement, so a passing repository
