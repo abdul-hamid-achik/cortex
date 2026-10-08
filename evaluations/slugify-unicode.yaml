@@ -8,6 +8,7 @@ goal: >-
   them: `go run ./cmd/slug "Crème Brûlée"` prints /posts/cr-me-br-l-e instead of
   /posts/crème-brûlée. Slugs should keep letters from any script, lowercased, and plain ASCII
   titles must keep producing the same slugs as before.
+  The fix belongs in internal/post/permalink.go; add tests anywhere.
 acceptance:
   - id: unicode_letters_kept
     statement: Accented and other unicode letters stay in the permalink, lowercased

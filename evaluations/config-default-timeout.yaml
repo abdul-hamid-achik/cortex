@@ -9,6 +9,7 @@ goal: >-
   documented default is 30 seconds. `client.Client.Timeout()` should report 30s for a config
   without `timeout`, and `fetchd -config FILE` should show the same value, while an explicit
   `timeout = 5s` keeps working.
+  The fix belongs in internal/config/config.go; add tests anywhere.
 acceptance:
   - id: omitted_timeout_defaults_to_30s
     statement: A config file that omits timeout loads with the documented 30 second default

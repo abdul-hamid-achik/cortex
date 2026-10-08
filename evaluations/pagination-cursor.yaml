@@ -8,6 +8,7 @@ goal: >-
   page size. For example `go run ./cmd/pager -total 6 -size 3` prints two full pages and then a
   third "page 3: (empty)" line, and the page API keeps reporting that more results exist after the
   final page. Paging should end cleanly on the last page, whatever the list length and page size.
+  The fix belongs in internal/page/page.go; add tests anywhere.
 acceptance:
   - id: last_page_reports_no_more
     statement: The final page of a list reports that no further results exist
