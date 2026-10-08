@@ -6,6 +6,10 @@ All notable changes to Cortex are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Trajectory harness: `temperature_unsupported_reason` lets a manifest state that the agent
+  runtime cannot set sampling temperature (mirrors `seed_unsupported_reason`), and
+  `cmd/cortex-trajectory-claude` is a reference launcher that runs isolated `raw_tools` and
+  `cortex` arms through the Claude Code CLI (`--bare`, allowlisted env, shimmed `PATH`).
 - `cortex init` detects Taskfile, Makefile, and justfile runners: a `test` task takes precedence
   over language markers (`task test`, `make test`, `just test`), and `build`/`lint` tasks yield
   `build`/`lint` verifiers. Detection is a bounded read-only text scan (Taskfile parsed as YAML);

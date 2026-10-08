@@ -232,3 +232,33 @@ func TestPathComponentSymlinkIsRejected(t *testing.T) {
 		t.Fatalf("symlink component accepted: %v", err)
 	}
 }
+
+func TestModelRequiresExactlyOneTemperatureOrUnsupportedReason(t *testing.T) {
+	zero := 0.0
+	seed := int64(1)
+	base := Model{Identifier: "m", Build: "b", Seed: &seed, ContextBudgetTokens: 1}
+	cases := []struct {
+		name  string
+		model func(Model) Model
+		ok    bool
+	}{
+		{"temperature", func(m Model) Model { m.Temperature = &zero; return m }, true},
+		{"unsupported reason", func(m Model) Model { m.TemperatureUnsupportedReason = "cli has no temperature flag"; return m }, true},
+		{"neither", func(m Model) Model { return m }, false},
+		{"both", func(m Model) Model { m.Temperature = &zero; m.TemperatureUnsupportedReason = "x"; return m }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.model(base).validate(); (err == nil) != tc.ok {
+				t.Fatalf("validate() err=%v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+	reason := base
+	reason.TemperatureUnsupportedReason = "cli has no temperature flag"
+	pinned := base
+	pinned.Temperature = &zero
+	if modelsEqual(reason, pinned) {
+		t.Fatal("an uncontrolled temperature must not match a pinned one")
+	}
+}

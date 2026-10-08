@@ -35,6 +35,7 @@ Product docs: `docs/quick-start.md` (humans), `docs/mcp.md` (agents). Monitor se
 ```
 cortex/
 ├── cmd/cortex-trajectory/    # opt-in trusted empirical harness; separate from runtime/release CLI
+├── cmd/cortex-trajectory-claude/ # reference arm launcher (Claude Code CLI, isolated raw_tools/cortex arms)
 ├── cmd/cortex/               # Cobra CLI, split per-command. Each RunE is THIN → builds a
 │                             #   kernel (kernelFor) → calls internal/kernel. Files carry the
 │                             #   header `/* Copyright © 2026 abdul hamid <abdulachik@icloud.com> */`.
