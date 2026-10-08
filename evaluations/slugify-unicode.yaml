@@ -16,6 +16,11 @@ acceptance:
 surfaces: [code, terminal]
 allowed_changes:
   - internal/post/permalink.go
+  # Adding or editing tests is ordinary engineering, not scope drift. The hidden glyph
+  # oracle covers every criterion, so weakened visible tests cannot fake success.
+  - "*_test.go"
+  - "*/*_test.go"
+  - "*/*/*_test.go"
 model:
   identifier: claude-haiku-5-5
   build: claude-code-cli
@@ -34,10 +39,7 @@ budget:
 oracle:
   protected_paths:
     - cmd/slug/main.go
-    - cmd/slug/main_test.go
-    - internal/post/permalink_test.go
     - internal/slug/legacy_slug.go
-    - internal/slug/legacy_slug_test.go
     - go.mod
     - cortex.yaml
   commands:

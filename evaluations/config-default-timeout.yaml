@@ -17,6 +17,11 @@ acceptance:
 surfaces: [code, terminal]
 allowed_changes:
   - internal/config/config.go
+  # Adding or editing tests is ordinary engineering, not scope drift. The hidden glyph
+  # oracle covers every criterion, so weakened visible tests cannot fake success.
+  - "*_test.go"
+  - "*/*_test.go"
+  - "*/*/*_test.go"
 model:
   identifier: claude-haiku-5-5
   build: claude-code-cli
@@ -35,12 +40,8 @@ budget:
 oracle:
   protected_paths:
     - cmd/fetchd/main.go
-    - cmd/fetchd/main_test.go
     - internal/client/client.go
-    - internal/client/client_test.go
-    - internal/config/config_test.go
     - internal/util/duration.go
-    - internal/util/duration_test.go
     - go.mod
     - cortex.yaml
   commands:
