@@ -125,14 +125,16 @@ func (k *Kernel) PlanContext(ctx context.Context, in PlanInput) (domain.Envelope
 			// A rejected plan preserves the investigating phase so the model can
 			// supply a disproof path and retry (the planning gate rejects
 			// plans with no disproof path).
-			return errEnvelope(in.TaskID, "plan rejected: "+err.Error()), nil
+			return k.errEnvelopeActions(in.TaskID, "plan rejected: "+err.Error(), planRetryAction(c, in,
+				"give every hypothesis a disproof path: the observation that would show it wrong", "hypotheses")), nil
 		}
 		hyps = append(hyps, hyp)
 	}
 
 	// A change task must declare a boundary before it can mutate.
 	if c.Mode == domain.ModeChange && !boundary.Declared() {
-		return errEnvelope(in.TaskID, "plan rejected: a change task must declare a change boundary (files and/or symbols)"), nil
+		return k.errEnvelopeActions(in.TaskID, "plan rejected: a change task must declare a change boundary (files and/or symbols)", planRetryAction(c, in,
+			"declare the files this change may touch with --file (repeatable) so scope drift can be checked", "changeBoundary")), nil
 	}
 
 	verification := in.Verification
@@ -141,9 +143,13 @@ func (k *Kernel) PlanContext(ctx context.Context, in PlanInput) (domain.Envelope
 	}
 	verification, err = k.normalizeVerificationRequirements(verification)
 	if err != nil {
-		return errEnvelope(in.TaskID, "plan rejected: "+err.Error()), nil
+		return k.errEnvelopeActions(in.TaskID, "plan rejected: "+err.Error(), k.verificationRequirementActions(c, in)...), nil
 	}
-	if c.Mode == domain.ModeChange && (c.Risk == "medium" || c.Risk == "high") {
+	// The structural diff review is the code proof of last resort: once the
+	// repository's own test command is configured it still runs, but only as
+	// advisory evidence (enforceChangeControlRigor keeps warning on a
+	// medium/high-risk diff it could not pass).
+	if c.Mode == domain.ModeChange && (c.Risk == "medium" || c.Risk == "high") && !k.hasRepositoryTestCommand() {
 		verification = appendUniqueRequirement(verification, "codemap_review")
 	}
 
@@ -374,7 +380,10 @@ func normalizeBoundaryEntries(kind string, entries []string) ([]string, error) {
 // defaultVerification derives a verifier list from the task's surfaces when the
 // model doesn't supply one, preserving an explicit claim-to-proof mapping.
 func (k *Kernel) defaultVerification(surfaces []domain.Surface) []string {
-	out := []string{"codemap_review"}
+	var out []string
+	if !k.hasRepositoryTestCommand() {
+		out = append(out, "codemap_review")
+	}
 	for _, s := range surfaces {
 		switch s {
 		case domain.SurfaceBrowser:
@@ -396,6 +405,18 @@ func (k *Kernel) defaultVerification(surfaces []domain.Surface) []string {
 	return dedupeStr(out)
 }
 
+// hasRepositoryTestCommand reports whether cortex.yaml declares a unit-test
+// command verifier. The repository's own tests then prove code changes, and
+// the structural diff review is demoted from requirement to advisory evidence.
+func (k *Kernel) hasRepositoryTestCommand() bool {
+	for _, verifier := range k.cfg.Verifiers {
+		if verifier.Kind == domain.KindUnitTest {
+			return true
+		}
+	}
+	return false
+}
+
 func boundarySummary(b domain.ChangeBoundary) string {
 	if !b.Declared() {
 		return "no files (investigation only)"
@@ -408,4 +429,53 @@ func pluralizeGeneric(n int, singular, plural string) string {
 		return "1 " + singular
 	}
 	return fmt.Sprintf("%d %s", n, plural)
+}
+
+// planRetryAction rebuilds a CLI plan command from the rejected input so the
+// caller can fix the one named problem and resubmit, instead of guessing which
+// flags carry which fields. Missing pieces become uppercase placeholders.
+func planRetryAction(c *domain.CaseFile, in PlanInput, reason string, inputs ...string) domain.NextAction {
+	args := []string{"plan", c.ID}
+	for _, h := range in.Hypotheses {
+		args = append(args, "--hypothesis", firstNonEmptyStr(strings.TrimSpace(h.Statement), "STATEMENT"),
+			"--disprove", firstNonEmptyStr(strings.TrimSpace(h.DisproveBy), "DISPROOF"))
+	}
+	files := in.ChangeBoundary.Files
+	if len(files) == 0 && c.Mode == domain.ModeChange {
+		files = []string{"FILE"}
+	}
+	for _, file := range files {
+		args = append(args, "--file", file)
+	}
+	for _, requirement := range in.Verification {
+		args = append(args, "--verify", requirement)
+	}
+	args = append(args, "--uncertainty", firstNonEmptyStr(strings.TrimSpace(in.Uncertainty), "UNCERTAINTY"))
+	return domain.NextAction{
+		Tool: "cortex_plan", Command: cortexCommand(c, args...), Reason: reason,
+		Arguments: knownActionArgs(c), Inputs: inputs,
+	}
+}
+
+// verificationRequirementActions answers an unknown planned verifier with the
+// requirements that exist here, and with cortex init when the repository has
+// no command verifiers configured yet.
+func (k *Kernel) verificationRequirementActions(c *domain.CaseFile, in PlanInput) []domain.NextAction {
+	known := []string{"codemap_review", "cairntrace_flow", "glyphrun_flow", "fcheap_artifact", "tvault_capability"}
+	configured := make([]string, 0, len(k.cfg.Verifiers))
+	for name := range k.cfg.Verifiers {
+		configured = append(configured, "command:"+name)
+	}
+	sort.Strings(configured)
+	retry := planRetryAction(c, PlanInput{Hypotheses: in.Hypotheses, ChangeBoundary: in.ChangeBoundary, Uncertainty: in.Uncertainty},
+		"name only verifiers that exist in this workspace with --verify, or omit --verify to use the defaults", "verification")
+	retry.Candidates = map[string][]string{"verification": append(known, configured...)}
+	out := []domain.NextAction{retry}
+	if len(configured) == 0 {
+		out = append(out, domain.NextAction{
+			Command: cortexCommand(c, "init"),
+			Reason:  "detect the repository's test command and write it to cortex.yaml as a command:<name> verifier",
+		})
+	}
+	return out
 }

@@ -407,7 +407,7 @@ func impactResult(req Request, r cmImpact, stdout string, freshness *cmFreshness
 		return Result{Tool: "codemap", Operation: "impact", Status: StatusPartial,
 			Summary: "codemap found no symbol " + symbol, Raw: stdout}
 	}
-	if exact && (r.Selector == nil || (symbol != "" && r.Symbol != symbol) || filepath.ToSlash(filepath.Clean(r.Selector.File)) != filepath.ToSlash(filepath.Clean(req.Str("file"))) || (req.Str("fqn") != "" && r.Selector.FQN != req.Str("fqn")) || (req.Str("kind") != "" && r.Selector.Kind != req.Str("kind"))) {
+	if exact && (r.Selector == nil || (symbol != "" && !sameDefinitionName(symbol, r)) || filepath.ToSlash(filepath.Clean(r.Selector.File)) != filepath.ToSlash(filepath.Clean(req.Str("file"))) || (req.Str("fqn") != "" && r.Selector.FQN != req.Str("fqn")) || (req.Str("kind") != "" && r.Selector.Kind != req.Str("kind"))) {
 		return Result{Tool: "codemap", Operation: "impact", Status: StatusPartial, Summary: "the selected definition changed; rediscover its source location", Raw: stdout}
 	}
 	if symbol == "" {
@@ -1007,4 +1007,12 @@ func (c *Codemap) Map(ctx context.Context, dir string) ([]Subsystem, error) {
 		return nil, fmt.Errorf("codemap map: project is not indexed")
 	}
 	return m.Subsystems, nil
+}
+
+// sameDefinitionName reports whether a requested symbol names the definition
+// codemap resolved. Discovery tools (vecgrep) carry the qualified FQN while
+// codemap reports the bare symbol and puts the FQN on its selector, so either
+// spelling identifies the same definition.
+func sameDefinitionName(symbol string, r cmImpact) bool {
+	return symbol == r.Symbol || (r.Selector != nil && r.Selector.FQN != "" && symbol == r.Selector.FQN)
 }

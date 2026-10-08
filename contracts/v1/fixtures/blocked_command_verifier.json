@@ -101,7 +101,7 @@
           "revision": "$REVISION_OR_DIGEST_2",
           "dirtyDigest": "sha256:$REVISION_OR_DIGEST_3",
           "binding": "bound",
-          "notes": "configured command could not run",
+          "notes": "configured command was not approved to run; an operator grants it interactively with `cortex setup --trust-commands` or launches Cortex with CORTEX_APPROVE_COMMANDS=1",
           "timestamp": "$TIMESTAMP"
         }
       ],
@@ -139,12 +139,19 @@
       "summary": "verification run complete; scope within_boundary",
       "warnings": [
         "verifying an unleased planned change uses the compatibility path; new agent flows should call begin-change first",
-        "command.unit (configured_execution) blocked: requires explicit approval"
+        "command.unit (configured_execution) blocked: requires explicit approval — an operator grants it interactively with `cortex setup --trust-commands` (agents must not pass --yes) or launches Cortex with CORTEX_APPROVE_COMMANDS=1"
       ],
       "nextActions": [
         "cortex remember — persist the outcome, evidence, and uncertainty once verification is adequate"
       ],
       "actions": [
+        {
+          "command": "cortex -C $WORKSPACE setup --trust-commands",
+          "reason": "human step: the repository test command was not approved to run. an operator reviews its argv and grants it interactively (digests stored outside the repo; agents must not pass --yes) or launches Cortex with CORTEX_APPROVE_COMMANDS=1, then re-run verify",
+          "blockedBy": [
+            "operator approval of the command verifier"
+          ]
+        },
         {
           "tool": "cortex_verify",
           "command": "cortex -C $WORKSPACE verify $TASK_ID_1",

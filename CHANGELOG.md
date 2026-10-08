@@ -5,6 +5,50 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `cortex init` detects Taskfile, Makefile, and justfile runners: a `test` task takes precedence
+  over language markers (`task test`, `make test`, `just test`), and `build`/`lint` tasks yield
+  `build`/`lint` verifiers. Detection is a bounded read-only text scan (Taskfile parsed as YAML);
+  recipes are repository code, so the `CORTEX_APPROVE_COMMANDS=1` launcher gate stays the boundary.
+- `remember --accept-missing-criteria <ids>` (MCP `acceptMissingCriteria`) records registered
+  acceptance criteria as unmet. It must name exactly the missing set, never yields a verified
+  outcome, and lists every unproven criterion in the warnings and `summary.md`.
+- The owner of an expired change lease may `lease renew` it within 15 minutes of expiry when no other
+  actor has acquired it; verify's expired-lease error names that renewal.
+- Plan rejections (missing disproof, missing boundary, unknown verifier) carry a retry action that
+  rebuilds the CLI command; unknown verifiers list the valid requirements and offer `cortex init`.
+
+### Changed
+- With a `unit_test` command verifier configured, `codemap_review` is advisory: it still runs and
+  leaves a receipt, but is no longer a default or risk-mandated requirement, so a passing repository
+  test suite can verify a change whose structural review is inconclusive.
+- A blocked command verifier explains the approval path and leads verify's actions with it as a
+  human step: an operator grants it interactively with `cortex setup --trust-commands` (agents
+  never pass `--yes`) or launches Cortex with `CORTEX_APPROVE_COMMANDS=1`.
+- A claim id whose receipts never reached a verdict (`not_run`/`blocked`/`inconclusive`) may be
+  rebound to another surface, verifier, or contract; its statement stays pinned, and an id with a
+  passed or failed receipt keeps its binding.
+- Remember acknowledgment messages name the CLI flags, and structured remember actions' commands
+  include the matching flag. `cortex serve --help` reports the real 23/30 tool counts.
+
+### Fixed
+- `verify --from-plan` no longer binds every acceptance criterion to the first planned verifier
+  (often the structural `codemap_review`); a behavioral criterion is never proven implicitly by a
+  structural review, and ambiguous or cross-surface bindings (e.g. a unit test plus a planned
+  terminal flow) are refused with an explicit `--claim-spec` action.
+- An investigate round that loses the case snapshot CAS to a concurrent writer re-applies only its
+  own round count and notes instead of failing after its evidence was already recorded.
+- Discovery reserves wall clock for the git-grep fallback, so a hung semantic search no longer
+  leaves the fallback an expired context that reported git as unavailable.
+- Codemap structural expansion accepts vecgrep's qualified symbol names (the selector FQN); it
+  previously rejected every discovery candidate as "the selected definition changed".
+- Cortex Deck: external links require an exact `https` host match, a workspace `bin/cortex` runs
+  only with the opt-in `trustWorkspaceBinary` setting, dev tasks run only in the Deck's own repo, and
+  approval variables are no longer inherited by the MCP server it spawns.
+- The eval harness tests no longer register temporary case stores in the operator's real
+  `known-stores.json`.
+- Background jobs no longer trust a bare worker PID: workers now carry a per-job token and a recorded process start time, `job list`/`remember` fail jobs whose pid was reused or whose unverifiable worker stopped heartbeating, and `job cancel` only signals a confirmed worker (its process group) and otherwise warns "worker identity could not be confirmed; not signaled". Running workers refresh their heartbeat on a timer.
+
 ## [0.20.0] - 2026-09-04
 
 ### Integration

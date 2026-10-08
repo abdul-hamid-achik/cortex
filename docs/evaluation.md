@@ -217,7 +217,7 @@ evidence needed to reproduce the conclusion.
 
 CTX-5 is not implemented. This release contains neither a reviewed empirical result set comparing
 the profile alternatives nor an explicit selection of a `lite` design. Cortex therefore continues
-to expose only the contract-tested `agent` and `all` profiles. The fact that `agent` exposes 17
+to expose only the contract-tested `agent` and `all` profiles. The fact that `agent` exposes 23
 tools is not evidence that a smaller surface would help.
 
 Deterministic fixtures do not open this gate. Public conformance goldens, exact profile-set tests,

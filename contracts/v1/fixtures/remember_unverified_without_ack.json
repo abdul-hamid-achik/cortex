@@ -8,7 +8,7 @@
   "payload": {
     "ok": false,
     "taskId": "$TASK_ID_1",
-    "summary": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed",
+    "summary": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true (CLI --unverified) to record explicitly that verification could not be performed",
     "actions": [
       {
         "tool": "cortex_verify",
@@ -21,7 +21,7 @@
       },
       {
         "tool": "cortex_remember",
-        "command": "cortex -C $WORKSPACE remember $TASK_ID_1",
+        "command": "cortex -C $WORKSPACE remember $TASK_ID_1 OUTCOME --unverified",
         "reason": "preserve the outcome once verification is adequate",
         "arguments": {
           "taskId": "$TASK_ID_1",
@@ -34,6 +34,6 @@
       }
     ],
     "rawAvailable": false,
-    "error": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed"
+    "error": "cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true (CLI --unverified) to record explicitly that verification could not be performed"
   }
 }

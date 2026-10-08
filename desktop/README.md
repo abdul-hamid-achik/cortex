@@ -8,7 +8,7 @@ free-form shell, and never treats prose as verification.
 ```
 npm install     # once, inside desktop/
 npm start       # launch the app
-npm test        # 124 unit tests (node --test, no browser needed)
+npm test        # 142 unit tests (node --test, no browser needed)
 npm run smoke   # headless Electron pass: renders every view, fails on any console
                 # error, and writes a screenshot per view to desktop/screenshots/
 npm run icon    # re-render the app icon set from docs/public/cortex-mark.svg
@@ -19,8 +19,24 @@ The app icon is not forked artwork: `scripts/make-icon.mjs` renders the reposito
 `build/icon*.png`, `build/icon.icns`, and the 256² copy the shell shows in the rail and boot
 splash (`src/renderer/assets/icon.png`). Re-run `npm run icon` whenever the mark changes.
 
-Requires the cortex binary. Resolution order: Settings → `<workspace>/bin/cortex` →
-`<cwd>/bin/cortex` → `PATH`. `task build` at the repository root produces `./bin/cortex`.
+Requires the cortex binary. Resolution order: Settings ▸ Binary path → `PATH`. A repository you
+open must never choose the program the deck executes, so `<workspace>/bin/cortex` and
+`<cwd>/bin/cortex` are **not** looked up by default. `task build` produces `./bin/cortex`; point
+Settings ▸ Binary path at it (or `task install` onto `PATH`). For development, turn on Settings ▸
+**Trust `<workspace>/bin/cortex`** (`trustWorkspaceBinary` in `settings.json`, off by default,
+confirmed when enabled) to add `<workspace>/bin/cortex` after the configured path.
+
+Trust boundaries the main process enforces:
+
+- **Launcher approvals** — `CORTEX_APPROVE_COMMANDS`, `CORTEX_APPROVE_REMOTE_RECALL` and
+  `CORTEX_APPROVE_TRAJECTORY` inherited from the environment the deck was started in are stripped
+  from every cortex CLI/MCP process and every dev task. They are set only by the matching
+  Settings toggle ("repository configuration cannot approve itself").
+- **Dev tasks** (`task …`, `go test`) only run when the selected workspace is the cortex checkout
+  the deck itself ships from (`go.mod` module `github.com/abdul-hamid-achik/cortex`, same
+  directory). Packaged builds and other workspaces refuse to start them.
+- **External links** open only for `https://github.com` and `https://cortexai.tools` — exact
+  hostname, no userinfo, no port.
 
 ---
 
@@ -160,6 +176,7 @@ desktop/
 │   │   ├── ipc.js          the only place electron IPC is wired
 │   │   ├── registry.js     declarative spec of all 55 commands (args, flags, kinds, docs)
 │   │   ├── cortex.js       spawn + --json normalization + approval env + timeouts
+│   │   ├── trust.js        external-URL allowlist, approval-env scrubbing, deck-repo check
 │   │   ├── casestore.js    read-only, path-confined access to the central XDG case store
 │   │   ├── mcp.js          MCP stdio client (newline-delimited JSON-RPC)
 │   │   ├── repo.js         workspace git info + bounded file reads + Taskfile parse
@@ -188,7 +205,7 @@ Design rules the code enforces:
 
 ## Verification
 
-- `npm test` — 124 tests: registry completeness against the CLI help tree, argv construction and
+- `npm test` — 142 tests: registry completeness against the CLI help tree, argv construction and
   shell quoting, JSON envelope normalization, approval-env gating, timeouts, case-store path
   confinement, JSONL corruption handling, MCP framing/handshake/errors, markdown structure and
   injection safety, and renderer shape normalizers.

@@ -33,7 +33,7 @@ var leaseCmd = &cobra.Command{
 
 var leaseRenewCmd = &cobra.Command{
 	Use:   "renew <taskId>",
-	Short: "Renew an active change lease owned by the same actor",
+	Short: "Renew a change lease owned by the same actor (also within 15m after it expired, unless replaced)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		k, err := kernelFor(cmd)

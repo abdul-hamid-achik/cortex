@@ -9,6 +9,20 @@
     "ok": false,
     "taskId": "$TASK_ID_1",
     "summary": "plan rejected: a change task must declare a change boundary (files and/or symbols)",
+    "actions": [
+      {
+        "tool": "cortex_plan",
+        "command": "cortex -C $WORKSPACE plan $TASK_ID_1 --hypothesis 'callback is wrong' --disprove 'inspect the diff' --file FILE --uncertainty unknown",
+        "reason": "declare the files this change may touch with --file (repeatable) so scope drift can be checked",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "changeBoundary"
+        ]
+      }
+    ],
     "rawAvailable": false,
     "error": "plan rejected: a change task must declare a change boundary (files and/or symbols)"
   }

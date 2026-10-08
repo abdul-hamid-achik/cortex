@@ -17,8 +17,8 @@ var serveCmd = &cobra.Command{
 	Aliases: []string{"mcp"},
 	Short:   "Run the Cortex MCP server over stdio",
 	Long: `Start the Model Context Protocol server. It speaks newline-delimited
-JSON-RPC over stdio. The default agent profile exposes 17 focused lifecycle,
-evidence, decision, and handoff tools. Use --profile all for the 24-tool surface,
+JSON-RPC over stdio. The default agent profile exposes 23 focused lifecycle,
+evidence, decision, handoff, and long-running-work tools. Use --profile all for the 30-tool surface,
 which also includes cross-repository observability and archive administration.
 
 The change workflow is explicit: open_task → investigate → plan → begin_change
@@ -49,6 +49,6 @@ All diagnostic logging goes to stderr so stdout stays pure JSON-RPC.`,
 }
 
 func init() {
-	serveCmd.Flags().String("profile", "agent", "MCP tool exposure: agent (17 focused tools) | all (24 including operator tools)")
+	serveCmd.Flags().String("profile", "agent", "MCP tool exposure: agent (23 focused tools) | all (30 including operator tools)")
 	rootCmd.AddCommand(serveCmd)
 }

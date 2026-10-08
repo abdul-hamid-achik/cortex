@@ -97,6 +97,11 @@ func (v *verification) runStructuralReview() {
 func (v *verification) enforceChangeControlRigor() {
 	if v.c.Mode == domain.ModeChange && len(v.changed) > 0 && (v.c.Risk == "medium" || v.c.Risk == "high") {
 		if st := v.surfaceStatus[domain.SurfaceCode]; st != domain.VerifyPassed {
+			if v.k.hasRepositoryTestCommand() {
+				v.warn(fmt.Sprintf("%s-risk change: the advisory structural diff review is %s (the repository test command is the required code proof) — run `codemap index` to see its blast radius",
+					v.c.Risk, reviewStateWord(st)))
+				return
+			}
 			v.warn(fmt.Sprintf("%s-risk change requires a structural diff review that passed, but codemap review is %s — run `codemap index` and re-verify",
 				v.c.Risk, reviewStateWord(st)))
 		}

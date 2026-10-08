@@ -270,6 +270,7 @@ export const COMMANDS = [
       { name: '--accept-failed', label: 'Acknowledge failed verification', type: 'boolean' },
       { name: '--accept-open-children', label: 'Accept open children', type: 'boolean', help: 'Complete a parent while child tasks are still in flight.' },
       { name: '--accept-partial-coverage', label: 'Accept partial coverage', type: 'boolean', help: 'Complete a survey while ledger modules remain unseen.' },
+      { name: '--accept-missing-criteria', label: 'Accept missing criteria', type: 'text', placeholder: 'retry_ok,no_commit', help: 'Record exactly the unproven acceptance criteria (comma-separated ids) as unmet. The outcome can only be partial.' },
     ],
     docs: 'docs/cli.md',
     related: ['status', 'handoff', 'dossier.add'],

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 	if in.FromPlan && len(in.Claims) == 0 && len(in.ClaimSpecs) == 0 {
 		planned, planErr := k.claimsFromPlan(c, in)
 		if planErr != nil {
-			return errEnvelope(in.TaskID, k.red.String(planErr.Error())), nil
+			return k.errEnvelopeActions(in.TaskID, k.red.String(planErr.Error()), k.fromPlanBindingActions(c, planErr)...), nil
 		}
 		in.ClaimSpecs = planned
 	}
@@ -287,7 +288,11 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 		next = append([]string{"provide the missing verifier spec (browser_spec / terminal_spec) and re-run cortex verify"}, next...)
 	}
 	env := k.envelope(c, summary, facts, dedupeStr(warnings), next)
-	env.Actions = k.redactStructuredActions(structuredNextForCaseAt(c, k.now().UTC(), assessCaseVerification(c, assessmentReceipts)))
+	actions := structuredNextForCaseAt(c, k.now().UTC(), assessCaseVerification(c, assessmentReceipts))
+	if approval, ok := commandApprovalAction(c, pendingReceipts); ok {
+		actions = append([]domain.NextAction{approval}, actions...)
+	}
+	env.Actions = k.redactStructuredActions(actions)
 	return env, nil
 }
 
@@ -577,12 +582,16 @@ func (k *Kernel) claimsFromPlan(c *domain.CaseFile, in VerifyInput) ([]domain.Ve
 		return nil, err
 	}
 	if len(c.AcceptanceCriteria) > 0 {
+		binding, err := k.criterionBinding(bindings)
+		if err != nil {
+			return nil, err
+		}
 		out := make([]domain.VerificationClaim, 0, len(c.AcceptanceCriteria))
 		for _, criterion := range c.AcceptanceCriteria {
 			out = append(out, domain.VerificationClaim{
 				ID: criterion.ID, Statement: criterion.Statement,
-				Surface: bindings[0].Surface, Verifier: bindings[0].Verifier,
-				Contract: bindings[0].Contract, Required: true,
+				Surface: binding.Surface, Verifier: binding.Verifier,
+				Contract: binding.Contract, Required: true,
 			})
 		}
 		return out, nil
@@ -622,6 +631,108 @@ func planClaimBindings(c *domain.CaseFile, in VerifyInput) ([]planClaimBinding, 
 		return nil, fmt.Errorf("verify --from-plan could not bind any planned verification requirement")
 	}
 	return out, nil
+}
+
+// errStructuralOnlyCriteria marks a from-plan verify whose plan offers nothing
+// but the structural diff review to prove registered acceptance criteria.
+var errStructuralOnlyCriteria = errors.New("verify --from-plan will not prove acceptance criteria with a structural diff review; configure a repository command verifier or bind each criterion explicitly with --claim-spec")
+
+// criterionBinding picks the one planned verifier that may prove registered
+// acceptance criteria implicitly. A structural diff review (codemap_review)
+// says nothing about behavior, so it is never chosen; among the remaining
+// verifiers a single unit-test command wins, any other single verifier is
+// used as-is, and several candidates are refused rather than guessed.
+func (k *Kernel) criterionBinding(bindings []planClaimBinding) (planClaimBinding, error) {
+	var candidates, unitTests []planClaimBinding
+	codeOnly := true
+	for _, binding := range bindings {
+		if binding.Contract == "codemap_review" {
+			continue
+		}
+		candidates = append(candidates, binding)
+		codeOnly = codeOnly && binding.Surface == domain.SurfaceCode
+		if name, ok := strings.CutPrefix(binding.Verifier, "command:"); ok && k.cfg.Verifiers[name].Kind == domain.KindUnitTest {
+			unitTests = append(unitTests, binding)
+		}
+	}
+	switch {
+	case len(candidates) == 0:
+		return planClaimBinding{}, errStructuralOnlyCriteria
+	case len(candidates) == 1:
+		return candidates[0], nil
+	case len(unitTests) == 1 && codeOnly:
+		// The unit test wins only among code checks (build/lint); a planned
+		// browser/terminal flow might be what the criterion is about.
+		return unitTests[0], nil
+	}
+	names := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		names = append(names, candidate.Verifier)
+	}
+	return planClaimBinding{}, fmt.Errorf("verify --from-plan cannot choose which planned verifier proves the acceptance criteria (%s); bind each criterion explicitly with --claim-spec", strings.Join(names, ", "))
+}
+
+// maxFromPlanCriterionSpecs bounds how many explicit --claim-spec templates a
+// refused from-plan verify spells out in its continuation command.
+const maxFromPlanCriterionSpecs = 8
+
+// fromPlanBindingActions turns a refused implicit criterion binding into the
+// concrete ways forward: an explicit per-criterion --claim-spec verify and,
+// when the plan offers only the structural review, the commands that put a
+// repository test command in place. It returns nil for unrelated errors.
+func (k *Kernel) fromPlanBindingActions(c *domain.CaseFile, err error) []domain.NextAction {
+	if c == nil || len(c.AcceptanceCriteria) == 0 {
+		return nil
+	}
+	structuralOnly := errors.Is(err, errStructuralOnlyCriteria)
+	if !structuralOnly && !strings.Contains(err.Error(), "cannot choose which planned verifier") {
+		return nil
+	}
+	var verifiers []string
+	for name, verifier := range k.cfg.Verifiers {
+		if verifier.Kind == domain.KindUnitTest {
+			verifiers = append(verifiers, "command:"+name)
+		}
+	}
+	sort.Strings(verifiers)
+	verifier := "command:unit"
+	if len(verifiers) > 0 {
+		verifier = verifiers[0]
+	}
+	contract := strings.TrimPrefix(verifier, "command:")
+	args := []string{"verify", c.ID}
+	for i, criterion := range c.AcceptanceCriteria {
+		if i == maxFromPlanCriterionSpecs {
+			break
+		}
+		args = append(args, "--claim-spec", fmt.Sprintf("id=%s|surface=code|verifier=%s|contract=%s|%s", criterion.ID, verifier, contract, criterion.Statement))
+	}
+	reason := "bind each acceptance criterion to the verifier that actually proves it, reusing the exact registered statement"
+	if len(c.AcceptanceCriteria) > maxFromPlanCriterionSpecs {
+		reason += fmt.Sprintf(" (first %d of %d criteria shown)", maxFromPlanCriterionSpecs, len(c.AcceptanceCriteria))
+	}
+	explicit := domain.NextAction{
+		Tool: "cortex_verify", Command: cortexCommand(c, args...), Reason: reason,
+		Arguments: knownActionArgs(c), Inputs: []string{"claimSpecs"},
+	}
+	if len(verifiers) > 0 {
+		explicit.Candidates = map[string][]string{"verifier": verifiers}
+	}
+	if !structuralOnly {
+		return []domain.NextAction{explicit}
+	}
+	out := make([]domain.NextAction, 0, 3)
+	if len(k.cfg.Verifiers) == 0 {
+		out = append(out, domain.NextAction{
+			Command: cortexCommand(c, "init"),
+			Reason:  "detect the repository's test command and write it to cortex.yaml as a command verifier",
+		})
+	}
+	out = append(out, domain.NextAction{
+		Command: cortexCommand(c, "setup", "--trust-commands"),
+		Reason:  "human step: an operator reviews and grants the configured command verifiers interactively (digests stored outside the repo; agents must not pass --yes), or launches Cortex with CORTEX_APPROVE_COMMANDS=1",
+	}, explicit)
+	return out
 }
 
 func bindingForRequirement(requirement string, in VerifyInput) (planClaimBinding, error) {
@@ -670,15 +781,29 @@ func (k *Kernel) validateStableClaimIdentities(taskID string, claims []domain.Ve
 	if err != nil {
 		return err
 	}
+	// The statement is pinned forever. The verifier binding (surface, verifier,
+	// contract) is pinned once any receipt for the id reached a verdict; while
+	// every prior receipt is not_run/blocked/inconclusive the id never proved or
+	// disproved anything, so moving it to a verifier that can run destroys no
+	// evidence and keeps the old receipts in the ledger.
 	for _, claim := range claims {
+		rebound, verdict := false, false
 		for _, receipt := range receipts {
 			if receipt.EffectivePurpose() != domain.VerificationPurposeNamedClaim || receipt.ClaimID == "" || receipt.ClaimID != claim.ID {
 				continue
 			}
-			if receipt.Claim != k.red.String(claim.Statement) || receipt.Surface != claim.Surface ||
-				receipt.Tool != k.red.String(claim.Verifier) || receipt.Contract != k.red.String(claim.Contract) {
-				return fmt.Errorf("verification claim id %q already identifies a different statement, surface, verifier, or contract", claim.ID)
+			if receipt.Claim != k.red.String(claim.Statement) {
+				return fmt.Errorf("verification claim id %q already identifies a different statement", claim.ID)
 			}
+			if receipt.Surface != claim.Surface || receipt.Tool != k.red.String(claim.Verifier) || receipt.Contract != k.red.String(claim.Contract) {
+				rebound = true
+			}
+			if receipt.Status == domain.VerifyPassed || receipt.Status == domain.VerifyFailed {
+				verdict = true
+			}
+		}
+		if rebound && verdict {
+			return fmt.Errorf("verification claim id %q already reached a verdict with a different surface, verifier, or contract", claim.ID)
 		}
 	}
 	return nil
@@ -729,6 +854,10 @@ func commandVerificationStatus(res adapters.Result) domain.VerificationStatus {
 	return domain.VerifyInconclusive
 }
 
+// commandNotApprovedNote marks a configured command verifier that policy kept
+// from running because no trusted launcher approved repository argv.
+const commandNotApprovedNote = "configured command was not approved to run; an operator grants it interactively with `cortex setup --trust-commands` or launches Cortex with CORTEX_APPROVE_COMMANDS=1"
+
 func commandLimitation(res adapters.Result, status domain.VerificationStatus) string {
 	switch status {
 	case domain.VerifyPassed:
@@ -736,6 +865,9 @@ func commandLimitation(res adapters.Result, status domain.VerificationStatus) st
 	case domain.VerifyFailed:
 		return "configured command ran and exited non-zero; inspect the linked raw evidence"
 	case domain.VerifyBlocked:
+		if res.Status == adapters.StatusBlocked {
+			return commandNotApprovedNote
+		}
 		return "configured command could not run"
 	default:
 		return firstNonEmptyStr(res.Summary, "configured command result was inconclusive")
@@ -1088,4 +1220,20 @@ func worseStatus(a, b domain.VerificationStatus) domain.VerificationStatus {
 		return b
 	}
 	return a
+}
+
+// commandApprovalAction surfaces the approval path when a configured command
+// verifier was blocked by policy. Without it a blocked test command reads like
+// an ordinary inconclusive run and the next action points at remember.
+func commandApprovalAction(c *domain.CaseFile, receipts []domain.VerificationRecord) (domain.NextAction, bool) {
+	for _, receipt := range receipts {
+		if receipt.Tool == "command" && receipt.Status == domain.VerifyBlocked && receipt.Notes == commandNotApprovedNote {
+			return domain.NextAction{
+				Command:   cortexCommand(c, "setup", "--trust-commands"),
+				Reason:    "human step: the repository test command was not approved to run. an operator reviews its argv and grants it interactively (digests stored outside the repo; agents must not pass --yes) or launches Cortex with CORTEX_APPROVE_COMMANDS=1, then re-run verify",
+				BlockedBy: []string{"operator approval of the command verifier"},
+			}, true
+		}
+	}
+	return domain.NextAction{}, false
 }

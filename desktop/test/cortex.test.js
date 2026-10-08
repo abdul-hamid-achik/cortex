@@ -133,20 +133,76 @@ test('streaming delivers stdout chunks as they arrive', async () => {
   assert.match(chunks.map(([, text]) => text).join(''), /line one/);
 });
 
-test('binary resolution prefers the configured path, then <workspace>/bin/cortex', () => {
+test('binary resolution never picks a repository-supplied bin/cortex by default', () => {
   const dir = tempDir();
   fs.mkdirSync(path.join(dir, 'bin'));
-  const binary = writeScript(dir, path.join('bin', 'cortex'), 'echo "{}"');
+  const planted = writeScript(dir, path.join('bin', 'cortex'), 'echo "{}"');
 
   const auto = createCortex({ settings: settingsFor('') });
-  assert.equal(auto.resolveBinary(dir).path, binary);
-  assert.equal(auto.resolveBinary(dir).source, 'workspace bin/');
+  const resolved = auto.resolveBinary(dir);
+  assert.notEqual(resolved.path, planted);
+  assert.notEqual(resolved.source, 'workspace bin/ (trusted)');
+  assert.ok(!auto.candidates(dir).some((c) => c.path === planted), 'workspace bin/ must not be a candidate');
+  assert.ok(!auto.candidates(dir).some((c) => c.path === path.join(process.cwd(), 'bin', 'cortex')), 'cwd bin/ must not be a candidate');
 
-  const explicit = createCortex({ settings: settingsFor(binary) });
-  const resolved = explicit.resolveBinary(dir);
-  assert.equal(resolved.source, 'settings');
-  assert.equal(resolved.path, binary);
-  assert.equal(explicit.candidates(dir)[0].path, binary);
+  const explicit = createCortex({ settings: settingsFor(planted) });
+  const configured = explicit.resolveBinary(dir);
+  assert.equal(configured.source, 'settings');
+  assert.equal(configured.path, planted);
+  assert.equal(explicit.candidates(dir)[0].path, planted);
+});
+
+test('trustWorkspaceBinary opts in to <workspace>/bin/cortex, after the configured path', () => {
+  const dir = tempDir();
+  fs.mkdirSync(path.join(dir, 'bin'));
+  const planted = writeScript(dir, path.join('bin', 'cortex'), 'echo "{}"');
+
+  const trusting = createCortex({ settings: settingsFor('', { trustWorkspaceBinary: true }) });
+  const resolved = trusting.resolveBinary(dir);
+  assert.equal(resolved.path, planted);
+  assert.equal(resolved.source, 'workspace bin/ (trusted)');
+
+  const other = writeScript(dir, 'explicit-cortex', 'echo "{}"');
+  const both = createCortex({ settings: settingsFor(other, { trustWorkspaceBinary: true }) });
+  assert.equal(both.resolveBinary(dir).path, other);
+});
+
+test('an untrusted workspace binary is never executed', async () => {
+  const dir = tempDir();
+  const marker = path.join(dir, 'pwned');
+  fs.mkdirSync(path.join(dir, 'bin'));
+  writeScript(dir, path.join('bin', 'cortex'), `touch "${marker}"\necho "{}"`);
+  const result = await createCortex({ settings: settingsFor('') }).exec(['list'], { workspace: dir });
+  assert.equal(fs.existsSync(marker), false, 'planted bin/cortex ran');
+  assert.notEqual(result.binary.source, 'workspace bin/ (trusted)');
+});
+
+test('inherited CORTEX_APPROVE_* variables are stripped unless the toggle is on', async () => {
+  const dir = tempDir();
+  const binary = writeScript(dir, 'cortex', 'echo "{\\"commands\\":\\"${CORTEX_APPROVE_COMMANDS-unset}\\",\\"recall\\":\\"${CORTEX_APPROVE_REMOTE_RECALL-unset}\\",\\"traj\\":\\"${CORTEX_APPROVE_TRAJECTORY-unset}\\"}"');
+  const names = ['CORTEX_APPROVE_COMMANDS', 'CORTEX_APPROVE_REMOTE_RECALL', 'CORTEX_APPROVE_TRAJECTORY'];
+  const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+  for (const n of names) process.env[n] = '1';
+  try {
+    const off = await createCortex({ settings: settingsFor(binary) }).exec(['config'], { workspace: dir });
+    assert.deepEqual(off.json, { commands: 'unset', recall: 'unset', traj: 'unset' });
+
+    const viaOpts = await createCortex({ settings: settingsFor(binary) }).exec(['config'], {
+      workspace: dir,
+      env: { CORTEX_APPROVE_COMMANDS: '1' },
+    });
+    assert.equal(viaOpts.json.commands, 'unset', 'per-call env must not smuggle a grant');
+
+    const partial = await createCortex({
+      settings: settingsFor(binary, { approvals: { commands: true, remoteRecall: false, trajectory: false } }),
+    }).exec(['config'], { workspace: dir });
+    assert.deepEqual(partial.json, { commands: '1', recall: 'unset', traj: 'unset' });
+  } finally {
+    for (const n of names) {
+      if (saved[n] === undefined) delete process.env[n];
+      else process.env[n] = saved[n];
+    }
+  }
 });
 
 test('exec puts -C before the subcommand — cobra rejects the other order', async () => {

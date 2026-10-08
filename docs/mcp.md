@@ -44,7 +44,7 @@ collaboration. See [Empirical trajectory runner: MCP profile decision gate](/eva
 | `cortex_plan` | `agent`, `all` | the planning gate — hypotheses (with disproof and optional per-hypothesis evidence IDs), boundary, verification plan; optionally adds bounded Bob path-ownership guidance when `bob.yaml` exists |
 | `cortex_begin_change` | `agent`, `all` | atomically acquire the actor's expiring change lease and enter `changing`; same-owner retries are safe |
 | `cortex_verify` | `agent`, `all` | run planned verifiers, detect scope drift, and bind typed `claimSpecs` (or `fromPlan`) to an exact surface/verifier/contract; high-risk drift requires `driftAcknowledged`; leased tasks require the owner actor; intentional no-diff changes require `noOpAcknowledged` |
-| `cortex_remember` | `agent`, `all` | persist the outcome and complete; `acceptPartialCoverage` preserves a survey with unseen modules; normal completion requires the canonical assessment to be `verified`, while explicit `verificationNotPossible` / `acceptFailed` / `acceptOpenChildren` acknowledgments preserve non-green or still-open child work |
+| `cortex_remember` | `agent`, `all` | persist the outcome and complete; `acceptPartialCoverage` preserves a survey with unseen modules; normal completion requires the canonical assessment to be `verified`, while explicit `verificationNotPossible` / `acceptFailed` / `acceptOpenChildren` acknowledgments preserve non-green or still-open child work; registered acceptance criteria need proof or `acceptMissingCriteria` listing exactly the missing ids (never verified) |
 | `cortex_status` | `agent`, `all` | phase, case revision/actor/linkage/lease, pending decision, scope, bounded named-claim proof manifest, structured actions, and canonical `verified / partial / failed / unverified` assessment. `detail=full` adds per-tool binary health **and** discovery index readiness (`index`, `fixCommand`) |
 | `cortex_resolve` | `agent`, `all` | mark a hypothesis confirmed/challenged/rejected as evidence accumulates (history retained) |
 | `cortex_note` | `agent`, `all` | append redacted human/agent/reviewer context as provenance-bearing `human_report`; never satisfies verification alone |
@@ -208,7 +208,7 @@ cortex doctor --probe
 ```
 
 For the default profile, the gateway report should show `registered=true`, `handshake_ok=true`, and
-`tool_count=17`. The check is advisory: unavailable specialist tools still appear separately and
+`tool_count=23`. The check is advisory: unavailable specialist tools still appear separately and
 degrade honestly at runtime.
 
 In `gateway` mode the agent sees only mcphub, which proxies Cortex's tools namespaced as

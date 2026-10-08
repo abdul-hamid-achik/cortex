@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { withoutApprovals } from './trust.js';
 
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 
@@ -12,13 +13,22 @@ const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
  * kernel gate, or could not find the binary at all.
  */
 export function createCortex({ settings, clock = Date.now }) {
-  /** Where the binary comes from, in precedence order. */
+  /**
+   * Where the binary comes from, in precedence order.
+   *
+   * A repository must never choose the program the deck executes: opening an
+   * untrusted workspace would otherwise run its own bin/cortex. So the
+   * implicit `<workspace>/bin/cortex` and `<cwd>/bin/cortex` lookups are gone;
+   * the workspace binary is only a candidate when the user turned on
+   * `trustWorkspaceBinary` in Settings (off by default).
+   */
   function candidates(workspace) {
     const out = [];
-    const configured = settings?.all?.().binaryPath || '';
-    if (configured) out.push({ path: configured, source: 'settings' });
-    if (workspace) out.push({ path: path.join(workspace, 'bin', 'cortex'), source: 'workspace bin/' });
-    out.push({ path: path.join(process.cwd(), 'bin', 'cortex'), source: 'cwd bin/' });
+    const current = settings?.all?.() ?? {};
+    if (current.binaryPath) out.push({ path: current.binaryPath, source: 'settings' });
+    if (workspace && current.trustWorkspaceBinary === true) {
+      out.push({ path: path.join(workspace, 'bin', 'cortex'), source: 'workspace bin/ (trusted)' });
+    }
     out.push({ path: 'cortex', source: 'PATH' });
     return out;
   }
@@ -37,17 +47,18 @@ export function createCortex({ settings, clock = Date.now }) {
     return { path: 'cortex', source: 'PATH', exists: false };
   }
 
+  /**
+   * The environment every spawned cortex process gets. Inherited approvals are
+   * always stripped; a grant exists only when its Settings toggle is on.
+   */
   function approvalEnv() {
     const approvals = settings?.all?.().approvals ?? {};
-    const env = { ...process.env, NO_COLOR: '1', TERM: 'dumb' };
+    const env = { ...withoutApprovals(), NO_COLOR: '1', TERM: 'dumb' };
     // The desktop app is a trusted launcher in the same sense the shell is:
     // these variables are only ever set from an explicit user toggle.
-    if (approvals.commands) env.CORTEX_APPROVE_COMMANDS = '1';
-    else delete env.CORTEX_APPROVE_COMMANDS;
-    if (approvals.remoteRecall) env.CORTEX_APPROVE_REMOTE_RECALL = '1';
-    else delete env.CORTEX_APPROVE_REMOTE_RECALL;
-    if (approvals.trajectory) env.CORTEX_APPROVE_TRAJECTORY = '1';
-    else delete env.CORTEX_APPROVE_TRAJECTORY;
+    if (approvals.commands === true) env.CORTEX_APPROVE_COMMANDS = '1';
+    if (approvals.remoteRecall === true) env.CORTEX_APPROVE_REMOTE_RECALL = '1';
+    if (approvals.trajectory === true) env.CORTEX_APPROVE_TRAJECTORY = '1';
     return env;
   }
 
@@ -89,7 +100,7 @@ export function createCortex({ settings, clock = Date.now }) {
       try {
         child = spawn(binary.path, fullArgv, {
           cwd: workspace || process.cwd(),
-          env: opts.env ? { ...approvalEnv(), ...opts.env } : approvalEnv(),
+          env: opts.env ? { ...approvalEnv(), ...withoutApprovals(opts.env) } : approvalEnv(),
           windowsHide: true,
         });
       } catch (err) {
@@ -227,7 +238,7 @@ export function createCortex({ settings, clock = Date.now }) {
     };
   }
 
-  return { exec, probe, resolveBinary, candidates };
+  return { exec, probe, resolveBinary, candidates, approvalEnv };
 }
 
 /**

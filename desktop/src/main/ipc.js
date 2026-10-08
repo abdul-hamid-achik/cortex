@@ -9,6 +9,7 @@ import { createCaseStore } from './casestore.js';
 import { createRepo } from './repo.js';
 import { createMcpClient, toolResultEnvelope, toolResultText } from './mcp.js';
 import { createRunner } from './runner.js';
+import { allowedExternalUrl } from './trust.js';
 
 const CONFIG_TTL_MS = 30_000;
 
@@ -22,7 +23,7 @@ function isExistingDir(value) {
 }
 
 /** All Electron wiring lives here; every other main-process module is plain node. */
-export function registerIpc({ settings, mainWindow }) {
+export function registerIpc({ settings, mainWindow, repoRoot = '' }) {
   const send = (payload) => {
     const win = mainWindow();
     if (win && !win.isDestroyed()) win.webContents.send('deck:event', payload);
@@ -63,13 +64,14 @@ export function registerIpc({ settings, mainWindow }) {
       return {
         binary: binary.path,
         argv: [binary.path, 'serve', '--profile', profile],
-        env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+        // Same gating as cortex.exec: only the Settings toggles may grant CORTEX_APPROVE_*.
+        env: { ...cortex.approvalEnv(), NO_COLOR: '1', TERM: 'dumb' },
       };
     },
   });
   mcp.events.on('event', (event) => send({ type: 'mcp', event }));
 
-  const runner = createRunner({ getWorkspace: () => workspaceOf(), emit: (payload) => send(payload) });
+  const runner = createRunner({ getWorkspace: () => workspaceOf(), emit: (payload) => send(payload), repoRoot });
 
   /** Warm the config cache so the case store has roots before first use. */
   async function ensureRoots(workspace) {
@@ -113,6 +115,7 @@ export function registerIpc({ settings, mainWindow }) {
         configCache.delete(patch.workspace);
       }
     }
+    if (patch.trustWorkspaceBinary !== undefined) patch.trustWorkspaceBinary = patch.trustWorkspaceBinary === true;
     if (patch.binaryPath !== undefined && patch.binaryPath && !isExistingDir(path.dirname(patch.binaryPath))) {
       throw new Error(`binary directory does not exist: ${patch.binaryPath}`);
     }
@@ -290,8 +293,8 @@ export function registerIpc({ settings, mainWindow }) {
     return { revealed: payload.path };
   });
   handle('shell:openExternal', async (payload) => {
-    const url = String(payload.url ?? '');
-    if (!/^https:\/\/(github\.com|cortexai\.tools)/.test(url)) throw new Error('only github.com and cortexai.tools https links may open');
+    const url = allowedExternalUrl(payload.url);
+    if (!url) throw new Error('only https links to github.com and cortexai.tools may open');
     await shell.openExternal(url);
     return { opened: url };
   });

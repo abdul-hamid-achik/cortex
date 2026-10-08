@@ -440,7 +440,7 @@ func (k *Kernel) attachLongRunningStatus(ctx context.Context, rep *StatusReport,
 			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d evidence record(s) describe files that changed since they were recorded — re-investigate before relying on them", len(stale)))
 		}
 	}
-	if jobs, err := k.repairedJobs(c.ID); err == nil {
+	if jobs, err := k.repairedJobsCtx(ctx, c.ID); err == nil {
 		for _, j := range jobs {
 			if !j.Status.Terminal() {
 				rep.Jobs = append(rep.Jobs, j)

@@ -114,7 +114,8 @@ cortex remember task_06FK… \
 Completion uses one canonical assessment: `verified`, `partial`, `failed`, or `unverified`.
 Normal completion requires `verified`. If adequate proof could not be completed and the assessment
 is `partial` or `unverified`, use `--unverified`; if it is `failed`, use `--accept-failed`. Those
-acknowledgments do not bypass registered acceptance criteria. Cortex preserves the real assessment rather
+acknowledgments do not bypass registered acceptance criteria: prove them, or pass
+`--accept-missing-criteria` with exactly the missing ids to record them as unmet. Cortex preserves the real assessment rather
 than letting an incomplete or failed outcome masquerade as a clean pass.
 
 ## Inspect anytime

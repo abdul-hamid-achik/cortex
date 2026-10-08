@@ -100,3 +100,15 @@ test('get returns a copy so callers cannot mutate the cache', () => {
   approvals.commands = true;
   assert.equal(settings.get('approvals').commands, false);
 });
+
+test('trustWorkspaceBinary defaults off and only a literal true turns it on', () => {
+  assert.equal(DEFAULT_SETTINGS.trustWorkspaceBinary, false);
+  assert.equal(normalize({}).trustWorkspaceBinary, false);
+  assert.equal(normalize({ trustWorkspaceBinary: 'true' }).trustWorkspaceBinary, false);
+  assert.equal(normalize({ trustWorkspaceBinary: 1 }).trustWorkspaceBinary, false);
+  assert.equal(normalize({ trustWorkspaceBinary: true }).trustWorkspaceBinary, true);
+
+  const settings = createSettings(tempDir());
+  assert.equal(settings.update({ trustWorkspaceBinary: true }).trustWorkspaceBinary, true);
+  assert.equal(settings.reset().trustWorkspaceBinary, false);
+});

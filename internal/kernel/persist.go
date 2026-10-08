@@ -30,6 +30,11 @@ type RememberInput struct {
 	// remain unseen. The default refuses so "understood the codebase" cannot be
 	// claimed over an unfinished walk.
 	AcceptPartialCoverage bool
+	// CriteriaUnmetAcknowledged records registered acceptance criteria as unmet.
+	// It must name exactly the criteria that lack current bound proof — never a
+	// subset or a guess — and the outcome can then only be partial/unverified,
+	// with every unproven criterion named in the warnings and summary.md.
+	CriteriaUnmetAcknowledged []string
 }
 
 // Remember persists a concise, provenance-rich conclusion to durable memory and
@@ -104,7 +109,7 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		if ledger := k.coverageFor(c.ID); ledger != nil && !surveyComplete(ledger) {
 			s := ledger.Summary()
 			return k.rememberAcknowledgmentEnvelope(c, fmt.Sprintf(
-				"cannot complete: survey coverage is %.0f%% (%d of %d modules unseen; next %s). keep investigating, or set accept_partial_coverage=true to preserve a partial survey explicitly",
+				"cannot complete: survey coverage is %.0f%% (%d of %d modules unseen; next %s). keep investigating, or set accept_partial_coverage=true (CLI --accept-partial-coverage) to preserve a partial survey explicitly",
 				s.Percent, s.Unseen, s.Total, s.Next), "acceptPartialCoverage"), nil
 		}
 	}
@@ -112,11 +117,12 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	// review. A pass on one surface cannot launder a failed/unrun named claim or a
 	// missing required verifier into a verified result.
 	assessment := assessCaseVerification(c, receipts)
+	criteriaUnmet := false
 	if len(c.AcceptanceCriteria) > 0 && len(assessment.MissingCriteria) > 0 {
-		return errEnvelope(c.ID, fmt.Sprintf(
-			"cannot complete: %d registered acceptance criterion/criteria lack current bound passing named-claim receipts (%s)",
-			len(assessment.MissingCriteria), strings.Join(clipList(assessment.MissingCriteria, 5), ", "),
-		)), nil
+		if !sameStringSet(in.CriteriaUnmetAcknowledged, assessment.MissingCriteria) {
+			return k.rememberCriteriaEnvelope(c, assessment.MissingCriteria, len(in.CriteriaUnmetAcknowledged) > 0), nil
+		}
+		criteriaUnmet = true
 	}
 	switch assessment.Outcome {
 	case VerificationVerified:
@@ -124,19 +130,19 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 	case VerificationFailed:
 		if !in.AcceptFailed {
 			return k.rememberAcknowledgmentEnvelope(c,
-				"cannot complete: verification failed. fix the change and re-run cortex verify, or set accept_failed=true to record the failed outcome explicitly",
+				"cannot complete: verification failed. fix the change and re-run cortex verify, or set accept_failed=true (CLI --accept-failed) to record the failed outcome explicitly",
 				"acceptFailed"), nil
 		}
 	case VerificationPartial:
-		if !in.VerificationNotPossible {
+		if !in.VerificationNotPossible && !criteriaUnmet {
 			return k.rememberAcknowledgmentEnvelope(c,
-				"cannot complete: verification is partial (a required verifier or named claim did not pass). run the missing verification, or set verification_not_possible=true to acknowledge the incomplete result explicitly",
+				"cannot complete: verification is partial (a required verifier or named claim did not pass). run the missing verification, or set verification_not_possible=true (CLI --unverified) to acknowledge the incomplete result explicitly",
 				"verificationNotPossible"), nil
 		}
 	case VerificationUnverified:
-		if !in.VerificationNotPossible {
+		if !in.VerificationNotPossible && !criteriaUnmet {
 			return k.rememberAcknowledgmentEnvelope(c,
-				"cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true to record explicitly that verification could not be performed",
+				"cannot complete: no adequate verification was performed (receipts are absent, blocked, inconclusive, or not_run). run cortex verify with an available verifier, or set verification_not_possible=true (CLI --unverified) to record explicitly that verification could not be performed",
 				"verificationNotPossible"), nil
 		}
 	}
@@ -184,6 +190,9 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		ShareableEvidenceTotal:   snapshot.ShareableEvidenceTotal,
 		SensitiveEvidenceOmitted: snapshot.SensitiveEvidenceOmitted,
 	}))
+	if criteriaUnmet {
+		summary += k.red.String(unmetCriteriaSection(c, assessment.MissingCriteria))
+	}
 	summary = boundCompletionSummary(summary)
 	// summary.md is idempotent (a plain overwrite), so writing it before Save is
 	// safe on a retry.
@@ -246,6 +255,9 @@ func (k *Kernel) Remember(ctx context.Context, in RememberInput) (domain.Envelop
 		gaps = append(gaps, assessment.NonPassingClaims...)
 		env.Warnings = append(env.Warnings, fmt.Sprintf("completed with INCOMPLETE verification — required verifier(s) or named claim(s) not passed: %s. the outcome is only partially verified", strings.Join(dedupeStr(gaps), ", ")))
 	}
+	if criteriaUnmet {
+		env.Warnings = append(env.Warnings, fmt.Sprintf("completed with UNMET acceptance criteria (acknowledged): %s — these were never proven", strings.Join(clipList(assessment.MissingCriteria, 8), ", ")))
+	}
 	// A task that completes with hypotheses still 'active' leaves its hypothesis
 	// list showing nothing resolved even though the outcome settled the question
 	// (dogfooding 2026-07-07). The task is already terminal, so this is a nudge
@@ -276,6 +288,9 @@ func (k *Kernel) rememberAcknowledgmentEnvelope(c *domain.CaseFile, msg, flag st
 			env.Actions[i].Arguments = map[string]any{}
 		}
 		env.Actions[i].Arguments[flag] = true
+		if cli := rememberAcknowledgmentFlags[flag]; cli != "" {
+			env.Actions[i].Command = cortexCommand(c, "remember", c.ID, "OUTCOME", cli)
+		}
 	}
 	return env
 }
@@ -508,4 +523,67 @@ func boundCompletionSummary(summary string) string {
 	const marker = "\n\n_Additional summary content omitted to preserve the completion artifact size bound._\n"
 	clipped, _ := boundedUTF8(summary, maxCompletionSummaryBytes-len(marker))
 	return clipped + marker
+}
+
+// rememberCriteriaEnvelope refuses completion while registered acceptance
+// criteria lack current bound proof. It names the two honest exits — prove
+// them, or record exactly these criteria as unmet — and the remember action
+// carries the exact missing set so a caller never has to guess or retype it.
+func (k *Kernel) rememberCriteriaEnvelope(c *domain.CaseFile, missing []string, mismatched bool) domain.Envelope {
+	msg := fmt.Sprintf(
+		"cannot complete: %d registered acceptance criterion/criteria lack current bound passing named-claim receipts (%s). prove them with cortex verify, or set accept_missing_criteria (CLI --accept-missing-criteria) to exactly these ids to record them as unmet",
+		len(missing), strings.Join(clipList(missing, 5), ", "))
+	if mismatched {
+		msg += "; accept_missing_criteria must name exactly the missing criteria, no more and no fewer"
+	}
+	env := errEnvelope(c.ID, msg)
+	k.attachStructuredActions(&env, c)
+	for i := range env.Actions {
+		if env.Actions[i].Tool != "cortex_remember" {
+			continue
+		}
+		env.Actions[i].Arguments = cloneArgs(env.Actions[i].Arguments, "acceptMissingCriteria", append([]string(nil), missing...))
+		env.Actions[i].Command = cortexCommand(c, "remember", c.ID, "OUTCOME", "--accept-missing-criteria", strings.Join(missing, ","))
+	}
+	return env
+}
+
+// unmetCriteriaSection renders the acknowledged-unmet criteria for summary.md
+// so the durable record says what was never proven, not just the outcome prose.
+func unmetCriteriaSection(c *domain.CaseFile, missing []string) string {
+	statements := make(map[string]string, len(c.AcceptanceCriteria))
+	for _, criterion := range c.AcceptanceCriteria {
+		statements[criterion.ID] = criterion.Statement
+	}
+	var b strings.Builder
+	b.WriteString("\n## Unmet acceptance criteria (acknowledged)\n\n")
+	for _, id := range missing {
+		fmt.Fprintf(&b, "- `%s`: %s\n", id, clipStr(statements[id], 200))
+	}
+	return b.String()
+}
+
+// sameStringSet reports whether two id lists name exactly the same set.
+func sameStringSet(a, b []string) bool {
+	set := make(map[string]bool, len(a))
+	for _, s := range a {
+		set[strings.TrimSpace(s)] = true
+	}
+	if len(set) != len(dedupeStr(b)) {
+		return false
+	}
+	for _, s := range b {
+		if !set[s] {
+			return false
+		}
+	}
+	return true
+}
+
+// rememberAcknowledgmentFlags maps each MCP acknowledgment argument to its CLI
+// flag so a structured remember action's command matches its arguments.
+var rememberAcknowledgmentFlags = map[string]string{
+	"verificationNotPossible": "--unverified",
+	"acceptFailed":            "--accept-failed",
+	"acceptPartialCoverage":   "--accept-partial-coverage",
 }

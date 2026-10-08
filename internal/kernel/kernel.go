@@ -436,6 +436,9 @@ func (k *Kernel) run(ctx context.Context, tool string, req adapters.Request) ada
 	}
 	if !k.actionAllowed(req.TaskID, tool, req.Operation, class) {
 		note := fmt.Sprintf("%s.%s (%s) blocked: requires explicit approval", tool, req.Operation, class)
+		if class == domain.ActionConfiguredExecution {
+			note += " — an operator grants it interactively with `cortex setup --trust-commands` (agents must not pass --yes) or launches Cortex with CORTEX_APPROVE_COMMANDS=1"
+		}
 		k.recordCommandAs(actor, req.TaskID, tool, req.Operation, class, adapters.StatusBlocked, started, note)
 		return adapters.Result{Tool: tool, Operation: req.Operation, Status: adapters.StatusBlocked, Summary: note,
 			Warnings: []string{note}}

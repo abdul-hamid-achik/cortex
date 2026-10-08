@@ -229,6 +229,7 @@ type rememberInput struct {
 	AcceptFailed            bool     `json:"acceptFailed,omitempty" jsonschema:"explicitly acknowledge and preserve a canonical failed verification assessment"`
 	AcceptOpenChildren      bool     `json:"acceptOpenChildren,omitempty" jsonschema:"explicitly complete a parent while child tasks are still in-flight"`
 	AcceptPartialCoverage   bool     `json:"acceptPartialCoverage,omitempty" jsonschema:"explicitly complete a survey while ledger modules remain unseen"`
+	AcceptMissingCriteria   []string `json:"acceptMissingCriteria,omitempty" jsonschema:"record exactly these registered acceptance criterion ids as unmet; must equal the missing set and the outcome can then only be partial"`
 	Workspace               string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -396,7 +397,7 @@ func (s *Server) register() {
 		"Run verification after editing, passing actor when a change lease is active. Prefer typed claimSpecs with an explicit surface and exact contract (verifier may default from surface). Repository-configured commands require trusted-launcher CORTEX_APPROVE_COMMANDS=1 or produce blocked receipts. Runs relevant checks and scope-drift detection; an unverified claim is never passed.",
 		toolBehavior{openWorld: true, sharedEnvelope: true}), s.handleVerify)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_remember", "Preserve the task outcome",
-		"Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome.",
+		"Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome. Registered acceptance criteria are never bypassed by those flags: prove them, or pass acceptMissingCriteria with exactly the missing criterion ids to record them as unmet.",
 		toolBehavior{idempotent: true, openWorld: true, sharedEnvelope: true}), s.handleRemember)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_status", "Read task status",
 		"Report a task's canonical verification outcome, bounded claimProofs for stable claim ids, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health plus discovery index readiness (index/fixCommand).",
@@ -570,7 +571,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	env, err := k.Remember(ctx, kernel.RememberInput{
 		TaskID: in.TaskID, Outcome: in.Outcome, Importance: in.Importance,
 		Tags: in.Tags, VerificationNotPossible: in.VerificationNotPossible,
-		AcceptFailed: in.AcceptFailed, AcceptOpenChildren: in.AcceptOpenChildren, AcceptPartialCoverage: in.AcceptPartialCoverage,
+		AcceptFailed: in.AcceptFailed, AcceptOpenChildren: in.AcceptOpenChildren, AcceptPartialCoverage: in.AcceptPartialCoverage, CriteriaUnmetAcknowledged: in.AcceptMissingCriteria,
 	})
 	return result(env, err)
 }
