@@ -1,0 +1,66 @@
+schema_version: 1
+id: retry-idempotency
+repository:
+  fixture: testrepos/retry-idempotency
+  digest: sha256:814d03eafa3f11ec1faaf7fe26b2808ae433bb2661830fed9e07becd0d81b35e
+goal: >-
+  Our HTTP retry wrapper has caused duplicate side effects: a POST that came back 503 was sent a
+  second time and created the record twice, and when a server answers 429 or 503 with a
+  `Retry-After: N` header (N whole seconds) the wrapper ignores it and hammers the server after
+  only 100ms. For example `go run ./cmd/retrysim -method POST -script 503,200` makes two
+  attempts, and `go run ./cmd/retrysim -method GET -script 503/3,200` waits 100ms instead of 3
+  seconds. Two rules are needed. First, only idempotent methods (GET, HEAD, OPTIONS, TRACE, PUT
+  and DELETE) may be retried, for transport errors as well as for retryable statuses; any other
+  method, such as POST or PATCH, is sent exactly once and its first result returned. Second,
+  when a retried response carries a Retry-After value, the wait before the next attempt is the
+  larger of that value and the normal backoff; a missing, negative or non-numeric value means
+  the normal backoff applies, and a transport error has no response to read it from.
+  The fix belongs in internal/retry/policy.go and internal/retry/retry.go; add tests anywhere.
+acceptance:
+  - id: non_idempotent_sent_once
+    statement: Requests with a non-idempotent method (POST, PATCH) are sent exactly once, whether the first attempt fails with a retryable status or a transport error
+  - id: retry_after_honored
+    statement: When a retried response carries a numeric Retry-After in seconds, the next attempt waits at least that long, and a missing, negative or non-numeric value falls back to the normal backoff
+  - id: idempotent_still_retried
+    statement: Idempotent methods (including PUT and DELETE) are still retried with the normal exponential backoff, including after transport errors
+surfaces: [code, terminal]
+allowed_changes:
+  - internal/retry/policy.go
+  - internal/retry/retry.go
+  # Adding or editing tests is ordinary engineering, not scope drift. The hidden glyph
+  # oracle covers every criterion, so weakened visible tests cannot fake success.
+  - "*_test.go"
+  - "*/*_test.go"
+  - "*/*/*_test.go"
+model:
+  identifier: claude-haiku-5-5
+  build: claude-code-cli
+  temperature_unsupported_reason: claude code cli exposes no temperature flag
+  seed_unsupported_reason: claude code cli exposes no seed flag
+  context_budget_tokens: 200000
+arms:
+  - raw_tools
+  - cortex
+budget:
+  max_tool_calls: 40
+  max_wall_time: 10m
+  max_oracle_wall_time: 5m
+  max_trace_bytes: 16777216
+  max_estimated_cost_micros: 300000
+oracle:
+  protected_paths:
+    - cmd/retrysim/main.go
+    - internal/faketransport/faketransport.go
+    - internal/httpx/methods.go
+    - go.mod
+    - cortex.yaml
+  commands:
+    - id: go_tests
+      argv: [go, test, ./...]
+      claim_ids: [idempotent_still_retried]
+      timeout: 2m
+  glyphrun_specs:
+    - id: retry_rules_flow
+      path: oracles/retry-idempotency/retry-rules.yml
+      claim_ids: [non_idempotent_sent_once, retry_after_honored, idempotent_still_retried]
+      timeout: 2m
