@@ -30,8 +30,12 @@ type VerificationAssessment struct {
 	MissingRequired   []string            `json:"missingRequired,omitempty"`
 	SatisfiedCriteria []string            `json:"satisfiedCriteria,omitempty"`
 	MissingCriteria   []string            `json:"missingCriteria,omitempty"`
-	NonPassingClaims  []string            `json:"nonPassingClaims,omitempty"`
-	FailedClaims      []string            `json:"failedClaims,omitempty"`
+	// AttestedCriteria are process criteria satisfied by an evidence-backed
+	// agent attestation for the current workspace state — attested, not
+	// verifier-proven. They are never listed in SatisfiedCriteria.
+	AttestedCriteria []string `json:"attestedCriteria,omitempty"`
+	NonPassingClaims []string `json:"nonPassingClaims,omitempty"`
+	FailedClaims     []string `json:"failedClaims,omitempty"`
 }
 
 // assessVerification evaluates the latest receipt for each verifier run and
@@ -247,5 +251,52 @@ func dedupeSorted(values []string) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// currentAttestation returns the latest attestation for a process criterion
+// that matches its exact statement, is bound and evidence-backed, and observed
+// the same HEAD and dirty tree as the current verification batch. An
+// attestation about an older workspace state never carries forward.
+func currentAttestation(receipts, currentBatch []domain.VerificationRecord, criterion domain.AcceptanceCriterion) (domain.VerificationRecord, bool) {
+	if criterion.Kind != domain.CriterionKindProcess || len(currentBatch) == 0 {
+		return domain.VerificationRecord{}, false
+	}
+	revision := currentBatch[len(currentBatch)-1].Revision
+	digest := currentBatch[len(currentBatch)-1].DirtyDigest
+	batch := currentBatch[len(currentBatch)-1].BatchID
+	for i := len(receipts) - 1; i >= 0; i-- {
+		receipt := receipts[i]
+		if receipt.EffectivePurpose() != domain.VerificationPurposeAttestation || receipt.ClaimID != criterion.ID {
+			continue
+		}
+		sameState := receipt.Revision == revision && receipt.DirtyDigest == digest && digest != ""
+		if !sameState && (digest != "" || receipt.BatchID != batch) {
+			return domain.VerificationRecord{}, false
+		}
+		if receipt.Claim != criterion.Statement || !receipt.Attested() {
+			return domain.VerificationRecord{}, false
+		}
+		return receipt, true
+	}
+	return domain.VerificationRecord{}, false
+}
+
+// currentAttestations returns the latest attestation per claim id recorded
+// for the current verification state.
+func currentAttestations(receipts, currentBatch []domain.VerificationRecord) []domain.VerificationRecord {
+	seen := make(map[string]bool)
+	var out []domain.VerificationRecord
+	for i := len(receipts) - 1; i >= 0; i-- {
+		receipt := receipts[i]
+		if receipt.EffectivePurpose() != domain.VerificationPurposeAttestation || seen[receipt.ClaimID] {
+			continue
+		}
+		seen[receipt.ClaimID] = true
+		criterion := domain.AcceptanceCriterion{ID: receipt.ClaimID, Statement: receipt.Claim, Kind: domain.CriterionKindProcess}
+		if current, ok := currentAttestation(receipts, currentBatch, criterion); ok && current.ID == receipt.ID {
+			out = append([]domain.VerificationRecord{receipt}, out...)
+		}
+	}
 	return out
 }

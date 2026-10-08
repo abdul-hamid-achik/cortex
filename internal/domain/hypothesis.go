@@ -41,7 +41,7 @@ func (h Hypothesis) Validate() error {
 		return errValidation("hypothesis has no statement")
 	}
 	if !h.DisproveBy.Declared() {
-		return errValidation("hypothesis " + h.ID + " has no disproof path (set disproveBy)")
+		return errValidation("hypothesis " + h.ID + " has no disproof path (set disproveBy; CLI --disprove or \"statement :: disproof\")")
 	}
 	return nil
 }

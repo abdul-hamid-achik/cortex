@@ -22,7 +22,16 @@ const (
 type AcceptanceCriterion struct {
 	ID        string `json:"id"`
 	Statement string `json:"statement"`
+	// Kind is empty for an ordinary (behavioral) criterion that only a verifier
+	// receipt can prove. CriterionKindProcess marks a process rule (no commit
+	// was made, a baseline was recorded) that an evidence-backed agent
+	// attestation may satisfy. It is fixed at registration like the statement.
+	Kind string `json:"kind,omitempty"`
 }
+
+// CriterionKindProcess marks an acceptance criterion about how the work was
+// done rather than what the code does.
+const CriterionKindProcess = "process"
 
 // Validate enforces the durable, transport-independent criterion bounds.
 func (c AcceptanceCriterion) Validate() error {
@@ -37,6 +46,9 @@ func (c AcceptanceCriterion) Validate() error {
 	}
 	if len(c.Statement) > MaxAcceptanceCriterionStatementBytes {
 		return fmt.Errorf("acceptance criterion statement exceeds %d bytes", MaxAcceptanceCriterionStatementBytes)
+	}
+	if c.Kind != "" && c.Kind != CriterionKindProcess {
+		return fmt.Errorf("acceptance criterion kind must be empty or %q", CriterionKindProcess)
 	}
 	return nil
 }

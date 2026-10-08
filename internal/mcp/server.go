@@ -154,6 +154,14 @@ type openTaskInput struct {
 type acceptanceCriterionArg struct {
 	ID        string `json:"id" jsonschema:"stable non-secret criterion id; use the same id in verify.claimSpecs"`
 	Statement string `json:"statement" jsonschema:"the exact success statement that verification must prove"`
+	Kind      string `json:"kind,omitempty" jsonschema:"empty for a behavioral criterion that needs verifier proof; process for a rule about how the work was done (e.g. no commit made) that verify.attestations may satisfy"`
+}
+
+type attestationArg struct {
+	ID        string   `json:"id" jsonschema:"the registered process criterion id"`
+	Statement string   `json:"statement,omitempty" jsonschema:"optional; must equal the registered statement exactly"`
+	Evidence  []string `json:"evidence" jsonschema:"evidence ids in this task that support the attestation (e.g. from cortex_note)"`
+	Note      string   `json:"note,omitempty" jsonschema:"short explanation of how the evidence shows the rule held"`
 }
 
 type beginChangeInput struct {
@@ -217,6 +225,7 @@ type verifyInput struct {
 	NoOpAcknowledged  bool                   `json:"noOpAcknowledged,omitempty" jsonschema:"explicitly acknowledge that this change task intentionally produced no diff"`
 	FromPlan          bool                   `json:"fromPlan,omitempty" jsonschema:"materialize typed claims from acceptance criteria and planned verification requirements when claimSpecs are omitted"`
 	DriftAcknowledged bool                   `json:"driftAcknowledged,omitempty" jsonschema:"acknowledge unexpected files on a high-risk change so verification may proceed"`
+	Attestations      []attestationArg       `json:"attestations,omitempty" jsonschema:"evidence-backed attestations for process acceptance criteria only; never verifier proof"`
 	Workspace         string                 `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -229,6 +238,7 @@ type rememberInput struct {
 	AcceptFailed            bool     `json:"acceptFailed,omitempty" jsonschema:"explicitly acknowledge and preserve a canonical failed verification assessment"`
 	AcceptOpenChildren      bool     `json:"acceptOpenChildren,omitempty" jsonschema:"explicitly complete a parent while child tasks are still in-flight"`
 	AcceptPartialCoverage   bool     `json:"acceptPartialCoverage,omitempty" jsonschema:"explicitly complete a survey while ledger modules remain unseen"`
+	AcceptMissingCriteria   []string `json:"acceptMissingCriteria,omitempty" jsonschema:"record exactly these registered acceptance criterion ids as unmet; must equal the missing set and the outcome can then only be partial"`
 	Workspace               string   `json:"workspace,omitempty" jsonschema:"repository directory; defaults to the server working directory"`
 }
 
@@ -396,7 +406,7 @@ func (s *Server) register() {
 		"Run verification after editing, passing actor when a change lease is active. Prefer typed claimSpecs with an explicit surface and exact contract (verifier may default from surface). Repository-configured commands require trusted-launcher CORTEX_APPROVE_COMMANDS=1 or produce blocked receipts. Runs relevant checks and scope-drift detection; an unverified claim is never passed.",
 		toolBehavior{openWorld: true, sharedEnvelope: true}), s.handleVerify)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_remember", "Preserve the task outcome",
-		"Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome.",
+		"Persist a concise outcome and complete the task. Normal completion requires the canonical assessment to be verified; verificationNotPossible explicitly accepts partial/unverified completion, while acceptFailed explicitly accepts a failed outcome. Registered acceptance criteria are never bypassed by those flags: prove them, or pass acceptMissingCriteria with exactly the missing criterion ids to record them as unmet.",
 		toolBehavior{idempotent: true, openWorld: true, sharedEnvelope: true}), s.handleRemember)
 	sdkmcp.AddTool(s.srv, s.tool("cortex_status", "Read task status",
 		"Report a task's canonical verification outcome, bounded claimProofs for stable claim ids, unresolved hypotheses, scope drift, missing verification, and (with detail=full) tool health plus discovery index readiness (index/fixCommand).",
@@ -558,6 +568,7 @@ func (s *Server) handleVerify(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 		NoOpAcknowledged:  in.NoOpAcknowledged,
 		FromPlan:          in.FromPlan,
 		DriftAcknowledged: in.DriftAcknowledged,
+		Attestations:      toAttestations(in.Attestations),
 	})
 	return result(env, err)
 }
@@ -570,7 +581,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	env, err := k.Remember(ctx, kernel.RememberInput{
 		TaskID: in.TaskID, Outcome: in.Outcome, Importance: in.Importance,
 		Tags: in.Tags, VerificationNotPossible: in.VerificationNotPossible,
-		AcceptFailed: in.AcceptFailed, AcceptOpenChildren: in.AcceptOpenChildren, AcceptPartialCoverage: in.AcceptPartialCoverage,
+		AcceptFailed: in.AcceptFailed, AcceptOpenChildren: in.AcceptOpenChildren, AcceptPartialCoverage: in.AcceptPartialCoverage, CriteriaUnmetAcknowledged: in.AcceptMissingCriteria,
 	})
 	return result(env, err)
 }
@@ -765,7 +776,7 @@ func toSurfaces(ss []string) []domain.Surface {
 func toAcceptanceCriteria(criteria []acceptanceCriterionArg) []domain.AcceptanceCriterion {
 	out := make([]domain.AcceptanceCriterion, 0, len(criteria))
 	for _, criterion := range criteria {
-		out = append(out, domain.AcceptanceCriterion{ID: criterion.ID, Statement: criterion.Statement})
+		out = append(out, domain.AcceptanceCriterion{ID: criterion.ID, Statement: criterion.Statement, Kind: criterion.Kind})
 	}
 	return out
 }
@@ -848,4 +859,12 @@ func errResult(msg string) *sdkmcp.CallToolResult {
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "Error: " + msg}},
 		IsError: true,
 	}
+}
+
+func toAttestations(args []attestationArg) []kernel.AttestationInput {
+	out := make([]kernel.AttestationInput, 0, len(args))
+	for _, arg := range args {
+		out = append(out, kernel.AttestationInput{ClaimID: arg.ID, Statement: arg.Statement, Evidence: arg.Evidence, Note: arg.Note})
+	}
+	return out
 }

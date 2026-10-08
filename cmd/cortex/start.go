@@ -24,7 +24,8 @@ var startCmd = &cobra.Command{
 		risk, _ := cmd.Flags().GetString("risk")
 		surfaces, _ := cmd.Flags().GetStringArray("surface")
 		criterionFlags, _ := cmd.Flags().GetStringArray("criterion")
-		criteria, err := parseAcceptanceCriteria(criterionFlags)
+		processFlags, _ := cmd.Flags().GetStringArray("process-criterion")
+		criteria, err := parseAcceptanceCriteria(criterionFlags, processFlags)
 		if err != nil {
 			return err
 		}
@@ -47,19 +48,31 @@ func init() {
 	startCmd.Flags().String("risk", "medium", "low | medium | high")
 	startCmd.Flags().StringArray("surface", nil, "user-visible surface (repeatable): code, browser, terminal, artifact, secret")
 	startCmd.Flags().StringArray("criterion", nil, "immutable acceptance criterion as id=statement (repeatable)")
+	startCmd.Flags().StringArray("process-criterion", nil, "immutable process criterion as id=statement (repeatable); satisfiable by an evidence-backed verify --attest instead of a verifier")
 	rootCmd.AddCommand(startCmd)
 }
 
-func parseAcceptanceCriteria(values []string) ([]domain.AcceptanceCriterion, error) {
-	criteria := make([]domain.AcceptanceCriterion, 0, len(values))
-	for _, value := range values {
+func parseAcceptanceCriteria(values, processValues []string) ([]domain.AcceptanceCriterion, error) {
+	criteria := make([]domain.AcceptanceCriterion, 0, len(values)+len(processValues))
+	add := func(value, kind string) error {
 		id, statement, ok := strings.Cut(value, "=")
 		if !ok || strings.TrimSpace(id) == "" || strings.TrimSpace(statement) == "" {
-			return nil, fmt.Errorf("criterion must use id=statement with non-empty values")
+			return fmt.Errorf("criterion must use id=statement with non-empty values")
 		}
 		criteria = append(criteria, domain.AcceptanceCriterion{
-			ID: strings.TrimSpace(id), Statement: strings.TrimSpace(statement),
+			ID: strings.TrimSpace(id), Statement: strings.TrimSpace(statement), Kind: kind,
 		})
+		return nil
+	}
+	for _, value := range values {
+		if err := add(value, ""); err != nil {
+			return nil, err
+		}
+	}
+	for _, value := range processValues {
+		if err := add(value, domain.CriterionKindProcess); err != nil {
+			return nil, err
+		}
 	}
 	if err := domain.ValidateAcceptanceCriteria(criteria); err != nil {
 		return nil, err

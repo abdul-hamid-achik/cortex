@@ -30,6 +30,7 @@ type StatusReport struct {
 	VerificationOutcome  VerificationOutcome     `json:"verificationOutcome"`
 	SatisfiedCriteria    []string                `json:"satisfiedCriteria,omitempty"`
 	MissingCriteria      []string                `json:"missingCriteria,omitempty"`
+	AttestedCriteria     []string                `json:"attestedCriteria,omitempty"`
 	ClaimProofs          []ClaimProof            `json:"claimProofs,omitempty"`
 	ClaimProofTotal      int                     `json:"claimProofTotal"`
 	ClaimProofsTruncated bool                    `json:"claimProofsTruncated,omitempty"`
@@ -141,6 +142,7 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	rep.MissingVerification = assessment.MissingRequired
 	rep.SatisfiedCriteria = assessment.SatisfiedCriteria
 	rep.MissingCriteria = assessment.MissingCriteria
+	rep.AttestedCriteria = assessment.AttestedCriteria
 	rep.ClaimProofs, rep.ClaimProofTotal = claimProofsForCase(c.ID, c, freshReceipts)
 	rep.ClaimProofsTruncated = rep.ClaimProofTotal > len(rep.ClaimProofs)
 	rep.Actions = hydrateDecisionActions(c, structuredNextForCaseAt(c, k.now().UTC(), assessment), decisions)
@@ -228,6 +230,7 @@ func (k *Kernel) redactStatusReport(rep *StatusReport) {
 	rep.MissingVerification = k.redactStrings(rep.MissingVerification)
 	rep.SatisfiedCriteria = k.redactStrings(rep.SatisfiedCriteria)
 	rep.MissingCriteria = k.redactStrings(rep.MissingCriteria)
+	rep.AttestedCriteria = k.redactStrings(rep.AttestedCriteria)
 	for i := range rep.ClaimProofs {
 		proof := &rep.ClaimProofs[i]
 		proof.ClaimID = k.red.String(proof.ClaimID)
@@ -440,7 +443,7 @@ func (k *Kernel) attachLongRunningStatus(ctx context.Context, rep *StatusReport,
 			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d evidence record(s) describe files that changed since they were recorded — re-investigate before relying on them", len(stale)))
 		}
 	}
-	if jobs, err := k.repairedJobs(c.ID); err == nil {
+	if jobs, err := k.repairedJobsCtx(ctx, c.ID); err == nil {
 		for _, j := range jobs {
 			if !j.Status.Terminal() {
 				rep.Jobs = append(rep.Jobs, j)

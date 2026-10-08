@@ -63,6 +63,11 @@ type VerificationPurpose string
 const (
 	VerificationPurposeVerifierRun VerificationPurpose = "verifier_run"
 	VerificationPurposeNamedClaim  VerificationPurpose = "named_claim"
+	// VerificationPurposeAttestation records an agent's evidence-backed claim
+	// that a process acceptance criterion held. It is never verifier proof:
+	// Proven, Failed, and Definitive are false for it, and it can satisfy only a
+	// criterion registered with CriterionKindProcess.
+	VerificationPurposeAttestation VerificationPurpose = "agent_attestation"
 )
 
 // VerificationBinding states whether a verifier batch was proven to observe
@@ -119,7 +124,7 @@ func (v VerificationRecord) Validate() error {
 	if v.Status == "" {
 		return errValidation("verification record has no status")
 	}
-	if v.Purpose != "" && v.Purpose != VerificationPurposeVerifierRun && v.Purpose != VerificationPurposeNamedClaim {
+	if v.Purpose != "" && v.Purpose != VerificationPurposeVerifierRun && v.Purpose != VerificationPurposeNamedClaim && v.Purpose != VerificationPurposeAttestation {
 		return errValidation("verification record has invalid purpose")
 	}
 	if v.Binding != "" && v.Binding != VerificationBound && v.Binding != VerificationUnbound {
@@ -131,14 +136,22 @@ func (v VerificationRecord) Validate() error {
 // Proven reports whether the record is an affirmative pass bound to a stable
 // workspace state. Legacy records with an empty binding retain compatibility.
 func (v VerificationRecord) Proven() bool {
-	return v.Status == VerifyPassed && v.Binding != VerificationUnbound
+	return v.Purpose != VerificationPurposeAttestation && v.Status == VerifyPassed && v.Binding != VerificationUnbound
 }
 
 // Failed reports whether the record is a definitive failure bound to a stable
 // workspace state. An unbound failure is inconclusive: the verifier may have
 // observed an intermediate revision while another actor was editing.
 func (v VerificationRecord) Failed() bool {
-	return v.Status == VerifyFailed && v.Binding != VerificationUnbound
+	return v.Purpose != VerificationPurposeAttestation && v.Status == VerifyFailed && v.Binding != VerificationUnbound
+}
+
+// Attested reports whether the record is a bound, evidence-backed agent
+// attestation. It satisfies only a process acceptance criterion and is never
+// verifier proof.
+func (v VerificationRecord) Attested() bool {
+	return v.Purpose == VerificationPurposeAttestation && v.Status == VerifyPassed &&
+		v.Binding != VerificationUnbound && len(v.Evidence) > 0
 }
 
 // Definitive reports whether the record carries a stable pass/fail verdict.

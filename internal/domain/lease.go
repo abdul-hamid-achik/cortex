@@ -91,3 +91,27 @@ func (l *ChangeLease) Release(actor string, now time.Time) error {
 	*l = next
 	return nil
 }
+
+// RenewExpired extends an expired, unreleased lease for its own actor while
+// now is still inside the grace window after expiry. Nobody else may revive
+// it, and a lease another actor has since replaced carries that actor's name,
+// so a stale owner can never come back after a takeover.
+func (l *ChangeLease) RenewExpired(actor string, now time.Time, ttl, grace time.Duration) error {
+	if l == nil {
+		return errors.New("change lease does not exist")
+	}
+	if actor != l.Actor {
+		return fmt.Errorf("change lease belongs to %q", l.Actor)
+	}
+	if !l.Expired(now) || !now.Before(l.ExpiresAt.Add(grace)) {
+		return errors.New("change lease is outside the renewal grace window")
+	}
+	next := *l
+	next.RenewedAt = now
+	next.ExpiresAt = now.Add(ttl)
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	*l = next
+	return nil
+}

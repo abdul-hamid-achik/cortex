@@ -2,6 +2,7 @@
 
 import { spawn } from 'node:child_process';
 import { DEV_TASKS } from './registry.js';
+import { isDeckRepo, withoutApprovals } from './trust.js';
 
 const MAX_LINES = 4000;
 
@@ -11,8 +12,12 @@ const MAX_LINES = 4000;
  *
  * Only ids present in DEV_TASKS may run — the deck never executes a free-form
  * shell string, so a compromised renderer cannot become a shell.
+ *
+ * `task` and `go` execute code from the workspace (Taskfile, test files), so
+ * tasks only run when the workspace is the cortex checkout this deck ships
+ * from (`repoRoot`). Opening any other repository never runs its build tooling.
  */
-export function createRunner({ getWorkspace, emit }) {
+export function createRunner({ getWorkspace, emit, repoRoot = '' }) {
   const runs = new Map();
   let seq = 1;
   const byId = new Map(DEV_TASKS.map((t) => [t.id, t]));
@@ -28,6 +33,9 @@ export function createRunner({ getWorkspace, emit }) {
     if (!task) return { error: `unknown task: ${taskId}` };
     const workspace = getWorkspace();
     if (!workspace) return { error: 'no workspace selected' };
+    if (!isDeckRepo(workspace, repoRoot)) {
+      return { error: 'dev tasks only run in the cortex repository this app was launched from; the selected workspace is not it' };
+    }
 
     const run = {
       id: `run_${seq++}`,
@@ -50,7 +58,7 @@ export function createRunner({ getWorkspace, emit }) {
       child = spawn(task.cmd, task.args, {
         cwd: workspace,
         windowsHide: true,
-        env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
+        env: { ...withoutApprovals(), NO_COLOR: '1', FORCE_COLOR: '0' },
       });
     } catch (err) {
       run.state = 'error';

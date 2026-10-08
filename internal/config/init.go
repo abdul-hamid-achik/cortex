@@ -1,18 +1,35 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
+// maxRunnerFileBytes caps how much of a Taskfile, Makefile, or justfile init
+// reads when scanning for task names. Larger files are scanned only up to the
+// cap, so a hostile or generated file cannot make init read unbounded input.
+const maxRunnerFileBytes = 256 << 10
+
 // VerifierSuggestion is one command verifier that `cortex init` detected from
-// the workspace's project markers. Argv is built from a fixed, known-safe
-// template per ecosystem — never from user-supplied text — so init can show it
-// for review. This is the deliberate exception to `cortex config` hiding argv:
-// config masks user-written commands that may carry sensitive local paths,
-// while init only ever emits templates it generated itself.
+// the workspace's project markers. Argv is built from a fixed template per
+// ecosystem or task runner — only the runner name and a recognized target name
+// (test, build, lint) are ever emitted, never text copied from the repository —
+// so init can show it for review. This is the deliberate exception to
+// `cortex config` hiding argv: config masks user-written commands that may
+// carry sensitive local paths, while init only ever emits templates it
+// generated itself.
+//
+// A fixed template is not a safety guarantee. `task`, `make`, and `just`
+// execute repository-authored recipe code, so those suggestions are not
+// known-safe; the boundary is the trusted launcher's CORTEX_APPROVE_COMMANDS=1
+// (or the out-of-repo digest grant from `cortex setup --trust-commands`), which
+// repository configuration can never provide for itself.
 type VerifierSuggestion struct {
 	Name    string   `json:"name"`
 	Argv    []string `json:"argv"`
@@ -96,12 +113,21 @@ func Init(workspace string, force bool) (InitResult, error) {
 }
 
 // DetectVerifiers inspects the workspace root for well-known project markers
-// and returns a command verifier per detected test runner. A single detected
-// ecosystem is named "unit" (the ergonomic default); several are named by
-// ecosystem so their verifier names stay distinct. Detection is deliberately
-// shallow — marker files only — so it never reads file contents or runs
-// anything.
+// and returns command verifiers for the detected checks. A task runner file
+// (Taskfile.yml/yaml, Makefile, justfile) that defines a `test` task takes
+// precedence over ecosystem markers, and `build`/`lint` tasks of the same
+// runner yield `build`/`lint` verifiers. Without a runner test task, a single
+// detected ecosystem is named "unit" (the ergonomic default); several are named
+// by ecosystem so their verifier names stay distinct. Detection is read-only:
+// marker files are checked, and runner files get a bounded text scan for task
+// names. Nothing is ever executed.
 func DetectVerifiers(workspace string) []VerifierSuggestion {
+	runner := detectRunner(workspace)
+	if runner.targets["test"] {
+		out := []VerifierSuggestion{runner.suggestion("unit", "unit_test", "test")}
+		return append(out, runner.extras()...)
+	}
+
 	type candidate struct {
 		eco    string
 		argv   []string
@@ -124,7 +150,7 @@ func DetectVerifiers(workspace string) []VerifierSuggestion {
 	// Godot projects are detected (project.godot) but no verifier is emitted —
 	// Cortex recognizes .gd as code but does not exec the Godot binary.
 
-	out := make([]VerifierSuggestion, 0, len(found))
+	out := make([]VerifierSuggestion, 0, len(found)+2)
 	for _, c := range found {
 		name := c.eco
 		if len(found) == 1 {
@@ -138,6 +164,162 @@ func DetectVerifiers(workspace string) []VerifierSuggestion {
 			Timeout: "5m",
 			Reason:  c.reason,
 		})
+	}
+	return append(out, runner.extras()...)
+}
+
+// runnerInfo is the task runner file init found and the recognized targets
+// (test, build, lint) it defines.
+type runnerInfo struct {
+	binary  string // task | make | just
+	file    string // file name the targets were read from
+	targets map[string]bool
+}
+
+// suggestion builds a verifier that runs `<binary> <target>`.
+func (r runnerInfo) suggestion(name, kind, target string) VerifierSuggestion {
+	return VerifierSuggestion{
+		Name:    name,
+		Argv:    []string{r.binary, target},
+		Kind:    kind,
+		Surface: "code",
+		Timeout: "5m",
+		Reason:  r.file + " defines " + r.targetNoun() + " " + target,
+	}
+}
+
+func (r runnerInfo) targetNoun() string {
+	switch r.binary {
+	case "make":
+		return "target"
+	case "just":
+		return "recipe"
+	default:
+		return "task"
+	}
+}
+
+// extras returns the build and lint verifiers the runner defines.
+func (r runnerInfo) extras() []VerifierSuggestion {
+	var out []VerifierSuggestion
+	if r.targets["build"] {
+		out = append(out, r.suggestion("build", "build", "build"))
+	}
+	if r.targets["lint"] {
+		out = append(out, r.suggestion("lint", "lint", "lint"))
+	}
+	return out
+}
+
+// runnerTargets are the only target names init looks for. Anything else (for
+// example `check`) is deliberately not guessed at.
+var runnerTargets = []string{"test", "build", "lint"}
+
+// detectRunner returns the first task runner file, in precedence order
+// Taskfile, Makefile, justfile, that defines at least one recognized target.
+func detectRunner(workspace string) runnerInfo {
+	for _, spec := range []struct {
+		binary string
+		files  []string
+		scan   func([]byte) map[string]bool
+	}{
+		{"task", []string{"Taskfile.yml", "Taskfile.yaml"}, taskfileTargets},
+		{"make", []string{"Makefile", "makefile", "GNUmakefile"}, makefileTargets},
+		{"just", []string{"justfile", "Justfile"}, justfileTargets},
+	} {
+		for _, name := range spec.files {
+			data, ok := readBounded(filepath.Join(workspace, name))
+			if !ok {
+				continue
+			}
+			if targets := spec.scan(data); len(targets) > 0 {
+				return runnerInfo{binary: spec.binary, file: name, targets: targets}
+			}
+		}
+	}
+	return runnerInfo{}
+}
+
+// readBounded reads at most maxRunnerFileBytes of a regular file.
+func readBounded(path string) ([]byte, bool) {
+	if !isFile(path) {
+		return nil, false
+	}
+	f, err := os.Open(path) // #nosec G304 -- fixed marker names under the workspace root.
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxRunnerFileBytes))
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// taskfileTargets parses a Taskfile and reports which recognized tasks it
+// defines under `tasks:`. Malformed or truncated YAML yields no targets.
+func taskfileTargets(data []byte) map[string]bool {
+	var doc struct {
+		Tasks map[string]yaml.Node `yaml:"tasks"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, name := range runnerTargets {
+		if _, ok := doc.Tasks[name]; ok {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// makefileTargets scans for rule lines (`test:`, `test lint:`) at the start of
+// a line. `.PHONY: test` only lists a prerequisite and does not define a rule,
+// and variable assignments (`test := x`) are not rules.
+func makefileTargets(data []byte) map[string]bool {
+	out := map[string]bool{}
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		text := string(line)
+		if text == "" || text[0] == '\t' || text[0] == ' ' || text[0] == '#' {
+			continue
+		}
+		colon := strings.IndexByte(text, ':')
+		if colon < 0 || strings.ContainsAny(text[:colon], "=$") {
+			continue
+		}
+		if strings.HasPrefix(text[colon+1:], "=") {
+			continue
+		}
+		for _, field := range strings.Fields(text[:colon]) {
+			for _, name := range runnerTargets {
+				if field == name {
+					out[name] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// justfileTargets scans for recipe lines (`test:`, `test arg:`, `@test:`) at
+// the start of a line. Assignments (`test := x`) are not recipes.
+func justfileTargets(data []byte) map[string]bool {
+	out := map[string]bool{}
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		text := strings.TrimPrefix(string(line), "@")
+		for _, name := range runnerTargets {
+			rest, ok := strings.CutPrefix(text, name)
+			if !ok || rest == "" || (rest[0] != ':' && rest[0] != ' ' && rest[0] != '\t') {
+				continue
+			}
+			colon := strings.IndexByte(rest, ':')
+			if colon < 0 || strings.HasPrefix(rest[colon+1:], "=") {
+				continue
+			}
+			out[name] = true
+		}
 	}
 	return out
 }
@@ -180,6 +362,11 @@ func RenderInitYAML(verifiers []VerifierSuggestion) string {
 	b.WriteString("# Command verifiers stay blocked until the trusted process launching Cortex\n")
 	b.WriteString("# sets CORTEX_APPROVE_COMMANDS=1; repository configuration cannot approve\n")
 	b.WriteString("# itself. Review the argv below before enabling it.\n")
+	if usesTaskRunner(verifiers) {
+		b.WriteString("#\n")
+		b.WriteString("# task, make, and just execute recipe code written in this repository, so\n")
+		b.WriteString("# those verifiers run whatever the recipe says; read it before approving.\n")
+	}
 	if len(verifiers) == 0 {
 		b.WriteString("#\n")
 		b.WriteString("# No known test runner was detected. Add a verifier by hand, e.g.:\n")
@@ -200,6 +387,19 @@ func RenderInitYAML(verifiers []VerifierSuggestion) string {
 		b.WriteString("    timeout: " + v.Timeout + "\n")
 	}
 	return b.String()
+}
+
+// usesTaskRunner reports whether any verifier invokes task, make, or just.
+func usesTaskRunner(verifiers []VerifierSuggestion) bool {
+	for _, v := range verifiers {
+		if len(v.Argv) > 0 {
+			switch v.Argv[0] {
+			case "task", "make", "just":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // renderArgv renders a flow-style YAML sequence with each element double-quoted.

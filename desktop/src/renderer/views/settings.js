@@ -89,7 +89,7 @@ export const settingsRoute = {
         ],
       }),
 
-      card({ title: 'Cortex binary', sub: 'resolution order: this setting → <workspace>/bin/cortex → <cwd>/bin/cortex → PATH', iconName: 'cpu' },
+      card({ title: 'Cortex binary', sub: 'resolution order: this setting → PATH (the workspace binary only when trusted below)', iconName: 'cpu' },
         h('div', { class: 'setting-row' },
           h('div', {}, h('div', { class: 'setting-name', text: 'Binary path' }), h('div', { class: 'setting-desc', text: 'Absolute path to a cortex executable. Leave empty to auto-resolve; task build produces ./bin/cortex.' })),
           h('div', { class: 'setting-control' },
@@ -101,6 +101,38 @@ export const settingsRoute = {
             h('div', { class: 'row', style: { gap: '8px', marginTop: '4px' } },
               button('Re-probe', { size: 'sm', iconName: 'refresh', onClick: async () => { await refreshEnvironment(); navigate('settings', {}, { force: true }); } }),
               button('Build ./bin/cortex', { size: 'sm', iconName: 'wrench', onClick: () => navigate('dev', { task: 'build' }) }),
+            ),
+          ),
+        ),
+        h('div', { class: 'setting-row' },
+          h('div', {},
+            h('div', { class: 'setting-name', text: 'Trust <workspace>/bin/cortex' }),
+            h('div', { class: 'setting-desc', text: 'Off by default: a repository you open can ship its own bin/cortex, and the deck would execute it. Turn on only for workspaces you built yourself.' }),
+          ),
+          h('div', { class: 'setting-control' },
+            h('label', { class: 'switch', for: 'trust-workspace-binary' },
+              h('input', {
+                type: 'checkbox',
+                id: 'trust-workspace-binary',
+                checked: settings.trustWorkspaceBinary === true,
+                onchange: async (event) => {
+                  const next = event.target.checked;
+                  if (next) {
+                    const ok = await confirmDialog({
+                      title: 'Trust the workspace binary?',
+                      body: 'The deck will execute <workspace>/bin/cortex for whichever workspace is selected, including repositories you did not build.',
+                      danger: true,
+                      confirmLabel: 'Trust it',
+                    });
+                    if (!ok) { event.target.checked = false; return; }
+                  }
+                  await save({ trustWorkspaceBinary: next }, `workspace binary: ${next ? 'trusted' : 'not trusted'}`);
+                  await refreshEnvironment();
+                  navigate('settings', {}, { force: true });
+                },
+              }),
+              h('span', { class: 'switch-track' }),
+              h('span', { class: 'switch-text', text: settings.trustWorkspaceBinary === true ? 'trusted' : 'not trusted' }),
             ),
           ),
         ),

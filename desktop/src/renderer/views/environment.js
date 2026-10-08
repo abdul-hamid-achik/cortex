@@ -63,7 +63,7 @@ export const environmentRoute = {
 
 function binaryCard() {
   const probe = state.probe;
-  return card({ title: 'Cortex binary', sub: 'resolved by settings → <workspace>/bin/cortex → cwd/bin/cortex → PATH', iconName: 'cpu' },
+  return card({ title: 'Cortex binary', sub: 'resolved by settings → PATH (workspace bin/ only when trusted in Settings)', iconName: 'cpu' },
     kv([
       ['Path', h('span', { class: 'mono-sm', text: probe?.path ?? '—' })],
       ['Found via', probe?.source ?? '—'],

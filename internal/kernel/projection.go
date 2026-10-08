@@ -58,6 +58,7 @@ func redactSessionView(view *SessionView) {
 	view.VerificationAssessment.MissingRequired = redactSlice(r, view.VerificationAssessment.MissingRequired)
 	view.VerificationAssessment.SatisfiedCriteria = redactSlice(r, view.VerificationAssessment.SatisfiedCriteria)
 	view.VerificationAssessment.MissingCriteria = redactSlice(r, view.VerificationAssessment.MissingCriteria)
+	view.VerificationAssessment.AttestedCriteria = redactSlice(r, view.VerificationAssessment.AttestedCriteria)
 	view.VerificationAssessment.NonPassingClaims = redactSlice(r, view.VerificationAssessment.NonPassingClaims)
 	view.VerificationAssessment.FailedClaims = redactSlice(r, view.VerificationAssessment.FailedClaims)
 	view.StaleVerification = redactSlice(r, view.StaleVerification)

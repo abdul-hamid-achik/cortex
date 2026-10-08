@@ -31,6 +31,14 @@ type Job struct {
 	Modules  []string  `json:"modules,omitempty"` // survey fan-out: one bounded round per module
 	Status   JobStatus `json:"status"`
 	PID      int       `json:"pid,omitempty"`
+	// Token is a random per-job value handed to the detached worker through
+	// its environment. The worker refuses to run when its token does not
+	// match, so a stale or foreign `job run` cannot adopt another job record.
+	Token string `json:"token,omitempty"`
+	// ProcessStart is the worker's OS process start time. With PID it forms
+	// the worker identity: a pid whose current start time differs was reused
+	// by an unrelated process and must never be signaled.
+	ProcessStart *time.Time `json:"processStart,omitempty"`
 	// Progress counts completed rounds so a long fan-out is observable.
 	RoundsDone  int        `json:"roundsDone,omitempty"`
 	RoundsTotal int        `json:"roundsTotal,omitempty"`

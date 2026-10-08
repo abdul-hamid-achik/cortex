@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, Menu, protocol, session } from 'electron';
 import { createSettings } from './settings.js';
 import { registerIpc } from './ipc.js';
+import { cortexRepoRoot } from './trust.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(here, '..', 'renderer');
@@ -36,11 +37,7 @@ let services = null;
 
 function repoRootGuess() {
   // Packaged builds have no repository around them; unpacked runs sit in desktop/.
-  const candidate = path.resolve(appRoot, '..');
-  try {
-    if (fs.statSync(path.join(candidate, 'go.mod')).isFile()) return candidate;
-  } catch { /* not the repo */ }
-  return '';
+  return cortexRepoRoot(appRoot);
 }
 
 function createMainWindow() {
@@ -298,7 +295,7 @@ if (!gotLock) {
       settings.update({ workspace: process.env.CORTEX_DECK_WORKSPACE });
     }
 
-    services = registerIpc({ settings, mainWindow: () => win });
+    services = registerIpc({ settings, mainWindow: () => win, repoRoot: repoRootGuess() });
     buildMenu();
     createMainWindow();
 

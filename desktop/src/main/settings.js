@@ -5,6 +5,7 @@ import path from 'node:path';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   binaryPath: '',
+  trustWorkspaceBinary: false,
   workspace: '',
   theme: 'dark',
   density: 'comfortable',
@@ -100,6 +101,7 @@ export function normalize(settings) {
   for (const key of ['binaryPath', 'workspace', 'theme', 'density', 'defaultActor', 'lastView']) {
     if (typeof src[key] === 'string') out[key] = src[key];
   }
+  out.trustWorkspaceBinary = src.trustWorkspaceBinary === true;
   if (!['dark', 'light'].includes(out.theme)) out.theme = 'dark';
   if (!['compact', 'comfortable'].includes(out.density)) out.density = 'comfortable';
   if (Array.isArray(src.recentWorkspaces)) {

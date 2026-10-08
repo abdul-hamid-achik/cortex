@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,5 +83,34 @@ func TestInvestigateBudgetDefaultApplied(t *testing.T) {
 	}
 	if rem := time.Until(cdl); rem > 21*time.Second {
 		t.Fatalf("long parent should be capped to quick budget, remaining=%s", rem)
+	}
+}
+
+// A hung semantic search must not starve the git-grep floor: discovery runs on
+// a stage deadline that reserves wall clock for the zero-dependency fallback,
+// which then finds real hits instead of stamping "git is unavailable" on an
+// already expired context (review 2026-10-07).
+func TestHungSemanticSearchLeavesTimeForGitGrepFallback(t *testing.T) {
+	ws := testRepo(t)
+	hung := &fakeAdapter{name: "vecgrep", caps: []adapters.Capability{adapters.CapabilityDiscover},
+		byOp: map[string]adapters.Result{}, delay: 10 * time.Second,
+		result: adapters.Result{Status: adapters.StatusAuthoritative}}
+	k := newTestKernel(t, ws, hung)
+	started, _ := k.StartTask(context.Background(), StartInput{Goal: "find the callback", Mode: "investigate"})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	env, err := k.Investigate(ctx, InvestigateInput{TaskID: started.TaskID, Question: "where is HandleCallback", Depth: "quick"})
+	if err != nil || !env.OK {
+		t.Fatalf("investigate: %+v %v", env, err)
+	}
+	found := false
+	for _, fact := range env.Facts {
+		if strings.Contains(fact.Claim, "unavailable") && strings.Contains(fact.Claim, "git") {
+			t.Fatalf("git never ran out of time on its own; it must not be reported unavailable: %+v", fact)
+		}
+		found = found || strings.Contains(fact.Claim, "src/callback.go")
+	}
+	if !found {
+		t.Fatalf("the git-grep floor should still find the callback: %+v", env.Facts)
 	}
 }

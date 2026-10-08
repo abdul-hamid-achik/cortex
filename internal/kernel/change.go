@@ -115,6 +115,10 @@ func validateVerificationLease(c *domain.CaseFile, actor string, now time.Time) 
 		return fmt.Errorf("change lease was released; reacquire with begin-change before verification")
 	}
 	if c.ChangeLease.Expired(now) {
+		if now.Before(c.ChangeLease.ExpiresAt.Add(ChangeLeaseRenewGrace)) {
+			return fmt.Errorf("change lease expired; its owner %q can still renew it with `cortex lease renew %s --actor %s` until %s, otherwise reacquire with begin-change before verification",
+				c.ChangeLease.Actor, c.ID, c.ChangeLease.Actor, c.ChangeLease.ExpiresAt.Add(ChangeLeaseRenewGrace).Format(time.RFC3339))
+		}
 		return fmt.Errorf("change lease expired; reacquire with begin-change before verification")
 	}
 	actor = strings.TrimSpace(actor)

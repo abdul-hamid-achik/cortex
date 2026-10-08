@@ -159,6 +159,12 @@ Completion uses the canonical assessment. Common blockers:
   the failed outcome explicitly (it will not be labeled as verified)
 - some proof passed but a requirement/named claim remains unmet → outcome is `partial`; run the
   missing exact verifier/contract, or use `--unverified` to explicitly acknowledge incomplete proof
+- registered acceptance criteria lack proof → neither `--unverified` nor `--accept-failed` bypasses
+  them. Prove them with `verify`, or pass `--accept-missing-criteria` with exactly the missing ids to
+  record them as unmet; the summary names every unproven criterion
+- a configured command verifier was blocked → it was not approved to run. Grant it once with
+  `cortex setup --trust-commands` (digests stored outside the repo) or launch with
+  `CORTEX_APPROVE_COMMANDS=1`
 
 `--unverified` / `--accept-failed` are not shortcuts; they permanently label the outcome so it can
 never masquerade as a clean pass later.

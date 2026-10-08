@@ -24,7 +24,8 @@ var openCmd = &cobra.Command{
 		parent, _ := cmd.Flags().GetString("parent")
 		key, _ := cmd.Flags().GetString("idempotency-key")
 		criterionFlags, _ := cmd.Flags().GetStringArray("criterion")
-		criteria, err := parseAcceptanceCriteria(criterionFlags)
+		processFlags, _ := cmd.Flags().GetStringArray("process-criterion")
+		criteria, err := parseAcceptanceCriteria(criterionFlags, processFlags)
 		if err != nil {
 			return err
 		}
@@ -49,6 +50,7 @@ func init() {
 	openCmd.Flags().String("parent", "", "parent task ID for delegated work")
 	openCmd.Flags().String("idempotency-key", "", "stable retry key; an exact match returns the existing task, even after completion")
 	openCmd.Flags().StringArray("criterion", nil, "immutable acceptance criterion as id=statement (repeatable)")
+	openCmd.Flags().StringArray("process-criterion", nil, "immutable process criterion as id=statement (repeatable); satisfiable by an evidence-backed verify --attest instead of a verifier")
 	openCmd.Flags().StringArray("seed", nil, "note/packet file to stamp into orientation evidence (repeatable, max 8)")
 	rootCmd.AddCommand(openCmd)
 }

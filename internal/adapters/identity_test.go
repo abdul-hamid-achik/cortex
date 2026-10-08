@@ -102,3 +102,37 @@ func TestExecRetriesShareOneDeadline(t *testing.T) {
 		}
 	}
 }
+
+// Vecgrep names code chunks by their qualified FQN ("kernel.validateLease")
+// while codemap reports the bare symbol plus that FQN on the selector. The
+// exactness check must accept either spelling of the same definition, or every
+// discovery→structural expansion collapses into "the selected definition
+// changed" (review 2026-10-07).
+func TestCodemapExactImpactAcceptsQualifiedDiscoveryNames(t *testing.T) {
+	for _, name := range []string{"validateLease", "kernel.validateLease"} {
+		t.Run(name, func(t *testing.T) {
+			target := Request{Input: map[string]any{"symbol": name, "file": "kernel/change.go", "start_line": 110, "fqn": "kernel.validateLease", "kind": "function"}}
+			runner := &countingArgsRunner{onCall: func([]string) (string, string, int) {
+				return `{"indexed":true,"freshness":{"checked":true,"stale":false},"results":[
+     {"found":true,"symbol":"validateLease","call_graph":"resolved","selector":{"file":"kernel/change.go","start_line":110,"fqn":"kernel.validateLease","kind":"function"},"blast_radius":[],"tests":[]}]}`, "", 0
+			}}
+			tool := fakeTool("", "", 0)
+			tool.run = runner
+			got, err := (&Codemap{tool: tool}).Execute(context.Background(), Request{Operation: "impact", Input: map[string]any{"targets": []Request{target}}})
+			if err != nil || got.Status != StatusAuthoritative || len(got.Facts) == 0 {
+				t.Fatalf("qualified discovery name must resolve: %+v err=%v", got, err)
+			}
+		})
+	}
+	target := Request{Input: map[string]any{"symbol": "kernel.otherLease", "file": "kernel/change.go", "start_line": 110}}
+	runner := &countingArgsRunner{onCall: func([]string) (string, string, int) {
+		return `{"indexed":true,"freshness":{"checked":true,"stale":false},"results":[
+     {"found":true,"symbol":"validateLease","call_graph":"resolved","selector":{"file":"kernel/change.go","start_line":110,"fqn":"kernel.validateLease","kind":"function"},"blast_radius":[],"tests":[]}]}`, "", 0
+	}}
+	tool := fakeTool("", "", 0)
+	tool.run = runner
+	got, _ := (&Codemap{tool: tool}).Execute(context.Background(), Request{Operation: "impact", Input: map[string]any{"targets": []Request{target}}})
+	if got.Status == StatusAuthoritative {
+		t.Fatalf("a different definition at the same line must still be rejected: %+v", got)
+	}
+}

@@ -8,8 +8,22 @@
   "payload": {
     "ok": false,
     "taskId": "$TASK_ID_1",
-    "summary": "plan rejected: hypothesis $HYPOTHESIS_ID_1 has no disproof path (set disproveBy)",
+    "summary": "plan rejected: hypothesis $HYPOTHESIS_ID_1 has no disproof path (set disproveBy; CLI --disprove or \"statement :: disproof\")",
+    "actions": [
+      {
+        "tool": "cortex_plan",
+        "command": "cortex -C $WORKSPACE plan $TASK_ID_1 --hypothesis 'callback is wrong' --disprove DISPROOF --file src/callback.go --uncertainty unknown",
+        "reason": "give every hypothesis a disproof path: the observation that would show it wrong",
+        "arguments": {
+          "taskId": "$TASK_ID_1",
+          "workspace": "$WORKSPACE"
+        },
+        "inputs": [
+          "hypotheses"
+        ]
+      }
+    ],
     "rawAvailable": false,
-    "error": "plan rejected: hypothesis $HYPOTHESIS_ID_1 has no disproof path (set disproveBy)"
+    "error": "plan rejected: hypothesis $HYPOTHESIS_ID_1 has no disproof path (set disproveBy; CLI --disprove or \"statement :: disproof\")"
   }
 }

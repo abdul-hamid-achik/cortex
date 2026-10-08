@@ -168,7 +168,7 @@ func TestCLIAgentHelpMatchesExposedContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"17 focused", "24-tool", "open_task", "begin_change", "same actor"} {
+	for _, want := range []string{"23 focused", "30-tool", "open_task", "begin_change", "same actor"} {
 		if !strings.Contains(serve, want) {
 			t.Errorf("serve help missing %q:\n%s", want, serve)
 		}

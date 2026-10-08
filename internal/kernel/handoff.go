@@ -314,6 +314,15 @@ func completionProofClosure(receipts []domain.VerificationRecord) handoffReceipt
 			appendReceipt(claim)
 		}
 	}
+	// Process-criterion attestations depend on no verifier batch; carry the
+	// current ones (non-sensitive) so a receiver sees what was attested.
+	for _, attestation := range currentAttestations(receipts, current) {
+		if attestation.Sensitive {
+			markSensitive(attestation)
+			continue
+		}
+		appendReceipt(attestation)
+	}
 
 	projection := handoffReceiptProjection{
 		receipts: projected, sensitiveOmitted: len(sensitive),

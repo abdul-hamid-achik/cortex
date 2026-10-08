@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/abdul-hamid-achik/cortex/internal/adapters"
 	"github.com/abdul-hamid-achik/cortex/internal/domain"
+	"github.com/abdul-hamid-achik/cortex/internal/store/casefs"
 )
 
 // InvestigateInput parameterizes Investigate.
@@ -28,6 +30,9 @@ type InvestigateInput struct {
 	// job marks a round run by a detached worker; it skips the case-level round
 	// budget note (the job already bounds itself).
 	job bool
+	// baseNotes snapshots the case notes as loaded, so a round that loses the
+	// case CAS can re-apply only its own note changes onto a fresher snapshot.
+	baseNotes []string
 }
 
 // Investigate routes a question through the appropriate discovery and
@@ -74,6 +79,7 @@ func (k *Kernel) investigateRound(ctx context.Context, in InvestigateInput) (dom
 	if err != nil {
 		return errEnvelope(in.TaskID, err.Error()), nil
 	}
+	in.baseNotes = append([]string(nil), c.Notes...)
 	in.Question = strings.TrimSpace(in.Question)
 	if in.Question == "" {
 		return k.errEnvelopeActions(in.TaskID, "investigate needs a question", domain.NextAction{
@@ -243,7 +249,12 @@ func (k *Kernel) investigateRound(ctx context.Context, in InvestigateInput) (dom
 	// The steps are independent adapter calls — step N's result does not feed
 	// step N+1's input here — so they fan out; evidence stamping runs
 	// sequentially after, serializing store writes.
-	results := k.runStepsParallel(ctx, c.ID, steps)
+	// Discovery runs on a stage deadline that keeps a slice of the wall clock
+	// for the git-grep floor: a hung semantic search must not leave the
+	// zero-dependency fallback an already expired context.
+	stageCtx, cancelStage := withFallbackReserve(ctx)
+	results := k.runStepsParallel(stageCtx, c.ID, steps)
+	cancelStage()
 	var sErr error
 	facts, warnings, degraded, sErr = k.stampResults(c, results, discoveryBudget, discoveryStageLabel(discoveryBudget, budget), facts, warnings, nil)
 	if sErr != nil {
@@ -380,7 +391,7 @@ func (k *Kernel) investigateRound(ctx context.Context, in InvestigateInput) (dom
 		c.Notes = setDiscoveryFloorNote(c.Notes)
 	}
 
-	if err := k.store.Save(c); err != nil {
+	if err := k.saveInvestigationRound(c, in.baseNotes); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
 
@@ -829,7 +840,7 @@ func (k *Kernel) investigateForReview(ctx context.Context, c *domain.CaseFile, i
 		}
 	}
 
-	if err := k.store.Save(c); err != nil {
+	if err := k.saveInvestigationRound(c, in.baseNotes); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
 
@@ -896,7 +907,7 @@ func (k *Kernel) investigateGitGrepFloor(ctx context.Context, c *domain.CaseFile
 			}
 		}
 	}
-	if err := k.store.Save(c); err != nil {
+	if err := k.saveInvestigationRound(c, in.baseNotes); err != nil {
 		return errEnvelope(c.ID, err.Error()), err
 	}
 	summary := fmt.Sprintf("investigated %q via git-grep floor: %s recorded (specialist indexes not ready; route would have been %s→%s)",
@@ -1297,4 +1308,110 @@ func batchStructuralSteps(steps []step) []step {
 		targets = append(targets, req)
 	}
 	return []step{{tool: "codemap", op: "impact", input: map[string]any{"targets": targets}}}
+}
+
+// investigateSaveRetries bounds how often a round re-applies its case delta
+// after losing the snapshot CAS to a concurrent writer.
+const investigateSaveRetries = 4
+
+// saveInvestigationRound persists the case after a round. The round's
+// evidence is already durable in the ledger, so losing the snapshot CAS to a
+// concurrent writer (a note, decision, lease renewal, or job) must not fail the
+// round or invite a retry that records the same evidence twice. On conflict it
+// reloads the fresh case and re-applies only what the round changed: one
+// investigation round and the round's own note additions/removals.
+func (k *Kernel) saveInvestigationRound(c *domain.CaseFile, baseNotes []string) error {
+	err := k.store.Save(c)
+	if !errors.Is(err, casefs.ErrRevisionConflict) {
+		return err
+	}
+	added, removed := noteDelta(baseNotes, c.Notes)
+	for attempt := 0; attempt < investigateSaveRetries; attempt++ {
+		fresh, loadErr := k.store.Load(c.ID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if fresh.Status != domain.PhaseInvestigating && fresh.Status != domain.PhasePlanned {
+			// A concurrent writer moved the case on (aborted, completed, began
+			// changing); do not graft this round onto it.
+			return err
+		}
+		fresh.InvestigationRounds++
+		fresh.Notes = applyNoteDelta(fresh.Notes, added, removed)
+		if err = k.store.Save(fresh); err == nil {
+			*c = *fresh
+			return nil
+		}
+		if !errors.Is(err, casefs.ErrRevisionConflict) {
+			return err
+		}
+	}
+	return err
+}
+
+// noteDelta reports the notes present only in after (added) and only in
+// before (removed).
+func noteDelta(before, after []string) (added, removed []string) {
+	inBefore := make(map[string]bool, len(before))
+	for _, note := range before {
+		inBefore[note] = true
+	}
+	inAfter := make(map[string]bool, len(after))
+	for _, note := range after {
+		inAfter[note] = true
+		if !inBefore[note] {
+			added = append(added, note)
+		}
+	}
+	for _, note := range before {
+		if !inAfter[note] {
+			removed = append(removed, note)
+		}
+	}
+	return added, removed
+}
+
+func applyNoteDelta(notes, added, removed []string) []string {
+	drop := make(map[string]bool, len(removed))
+	for _, note := range removed {
+		drop[note] = true
+	}
+	out := make([]string, 0, len(notes)+len(added))
+	present := make(map[string]bool, len(notes))
+	for _, note := range notes {
+		if drop[note] {
+			continue
+		}
+		present[note] = true
+		out = append(out, note)
+	}
+	for _, note := range added {
+		if !present[note] {
+			out = append(out, note)
+		}
+	}
+	return out
+}
+
+// maxFallbackReserve caps the wall clock held back from discovery for the
+// git-grep floor; a literal grep over tracked files is fast.
+const maxFallbackReserve = 5 * time.Second
+
+// withFallbackReserve derives the discovery-stage context: the same deadline
+// minus a reserve (a quarter of what remains, at most maxFallbackReserve) so a
+// fallback after a timed-out specialist still has time to run.
+func withFallbackReserve(ctx context.Context) (context.Context, context.CancelFunc) {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	remaining := time.Until(dl)
+	reserve := remaining / 4
+	if reserve > maxFallbackReserve {
+		reserve = maxFallbackReserve
+	}
+	if reserve <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, dl.Add(-reserve))
 }

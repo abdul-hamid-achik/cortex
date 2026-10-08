@@ -116,7 +116,7 @@ func TestChangeLeaseStaleRecovery(t *testing.T) {
 	if !got.OK {
 		t.Fatalf("acquire: %+v", got)
 	}
-	now = now.Add(time.Second)
+	now = now.Add(time.Second + ChangeLeaseRenewGrace)
 	got, _ = k.RenewChangeLease(ChangeLeaseInput{TaskID: taskID, Actor: "agent-a", TTL: time.Minute})
 	if got.OK || !strings.Contains(got.Error, "expired") {
 		t.Fatalf("expired lease renewed: %+v", got)
@@ -195,5 +195,47 @@ func TestChangeLeaseGuards(t *testing.T) {
 		if got.OK {
 			t.Errorf("invalid lease input accepted: %+v", input)
 		}
+	}
+}
+
+// A long verification gate can outlive the lease between the fix and verify
+// (dogfooding 2026-08-29). The same actor may renew an expired lease inside a
+// short grace window as long as nobody replaced it; other actors and stale
+// owners past the window still have to reacquire.
+func TestExpiredLeaseGraceRenewalIsSameActorOnly(t *testing.T) {
+	k, _ := sharedLeaseKernels(t)
+	taskID := plannedChangeTask(t, k)
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	k.now = func() time.Time { return now }
+	if got, _ := k.AcquireChangeLease(ChangeLeaseInput{TaskID: taskID, Actor: "agent-a", TTL: time.Minute}); !got.OK {
+		t.Fatalf("acquire: %+v", got)
+	}
+	now = now.Add(time.Minute + ChangeLeaseRenewGrace/2)
+	if got, _ := k.RenewChangeLease(ChangeLeaseInput{TaskID: taskID, Actor: "agent-b", TTL: time.Minute}); got.OK {
+		t.Fatalf("another actor must not renew someone else's expired lease: %+v", got)
+	}
+	got, _ := k.RenewChangeLease(ChangeLeaseInput{TaskID: taskID, Actor: "agent-a", TTL: time.Minute})
+	if !got.OK {
+		t.Fatalf("the owner should renew inside the grace window: %+v", got)
+	}
+	c, _ := k.Store().Load(taskID)
+	if c.ChangeLease.Actor != "agent-a" || !c.ChangeLease.ExpiresAt.Equal(now.Add(time.Minute)) || !c.ChangeLease.Active(now) {
+		t.Fatalf("grace renewal did not extend the lease: %+v", c.ChangeLease)
+	}
+}
+
+func TestExpiredLeaseReplacedByAnotherActorCannotBeRevived(t *testing.T) {
+	k, _ := sharedLeaseKernels(t)
+	taskID := plannedChangeTask(t, k)
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	k.now = func() time.Time { return now }
+	_, _ = k.AcquireChangeLease(ChangeLeaseInput{TaskID: taskID, Actor: "agent-a", TTL: time.Second})
+	now = now.Add(2 * time.Second)
+	if got, _ := k.AcquireChangeLease(ChangeLeaseInput{TaskID: taskID, Actor: "agent-b", TTL: time.Second}); !got.OK {
+		t.Fatalf("replacement: %+v", got)
+	}
+	now = now.Add(2 * time.Second)
+	if got, _ := k.RenewChangeLease(ChangeLeaseInput{TaskID: taskID, Actor: "agent-a", TTL: time.Minute}); got.OK {
+		t.Fatalf("a replaced owner must not revive itself: %+v", got)
 	}
 }

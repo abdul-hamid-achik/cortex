@@ -116,7 +116,7 @@ The recommended change path is retry-safe and makes change ownership explicit:
 | `plan` | investigating → planned | every hypothesis has a **disproof path**; change tasks declare a **boundary**; uncertainty stated |
 | `begin-change` | planned → changing | an actor acquires the bounded, expiring lease; competing actors lose the CAS race |
 | `verify` | changing → verifying | typed claim→surface→verifier/contract receipts; registered IDs require their exact stored statement; leased tasks require the owner actor; no-diff changes require an explicit no-op acknowledgment |
-| `remember` | verifying → persisting → complete | normal completion requires `verified`; registered criteria always require current bound proof; legacy tasks may preserve non-green outcomes explicitly |
+| `remember` | verifying → persisting → complete | normal completion requires `verified`; registered criteria require current bound proof unless `--accept-missing-criteria` names exactly the missing set (never verified, recorded in `summary.md`); legacy tasks may preserve non-green outcomes explicitly |
 | `status` / `show` | — | canonical `verified / partial / failed / unverified` assessment, bounded claim-proof manifest, decisions, lease, scope, and structured actions; `status --detail full` also reports discovery index readiness (`index` / `fixCommand`) |
 
 These are structural invariants (see `internal/domain/case.go` `transitions`, and the `Validate`
@@ -137,7 +137,8 @@ snapshot, and marks it bound only if case/owner/HEAD/diff stay stable. Status an
 bounded evidence projections; Show retains bounded recent ledgers plus exact totals from one
 task-locked composite snapshot. Transaction recovery runs before public evidence/receipt/raw reads,
 and behavioral annotations occur only after a bound bundle wins. A
-released or expired lease may be replaced. `cortex note`, `decision
+released or expired lease may be replaced; until another actor does, its owner may renew an expired
+lease within `ChangeLeaseRenewGrace` (15m). `cortex note`, `decision
 request|answer|resume`, and `handoff` preserve provenance, bounded human choices, and transfer state
 without treating prose as verification. Structured continuation actions always carry the case
 workspace and render workspace-pinned, shell-safe human commands; begin-change actions also carry
@@ -222,6 +223,10 @@ cd desktop && npm run smoke              # headless render+bridge smoke; screens
   terminal, artifact, secret, or general behavioral verification. Raw output is case-only when
   adapter policy permits and is never model-visible by default. Preserve digest-based retry
   identity so open/resume does not duplicate equivalent context.
+- Agent attestations (`verify --attest`, purpose `agent_attestation`) satisfy only acceptance
+  criteria registered with `kind: process`, must cite existing non-placeholder evidence, bind to
+  the current HEAD/diff like any receipt, and are reported as `attestedCriteria`. The domain makes
+  `Proven`/`Failed`/`Definitive` false for them, so they can never stand in for verifier proof.
 - Bob plan checks warn on owned, reserved, manifest-controlled, or unsafe paths and stay silent for
   human-owned extension points. They do not rewrite or reject the plan automatically. Structured
   `bob_path` actions carry `{workspace,path}` and exact path argv; `bob_playbook` carries only a
@@ -237,7 +242,10 @@ cd desktop && npm run smoke              # headless render+bridge smoke; screens
   arrays declared under `verifiers:` in `cortex.yaml` may run. They use no shell, accept only
   `unit_test|build|lint` on the `code` surface, and fail configuration closed. Configured argv is
   arbitrary local code and remains blocked unless the trusted launcher sets
-  `CORTEX_APPROVE_COMMANDS=1`; repository configuration cannot approve itself.
+  `CORTEX_APPROVE_COMMANDS=1` or an operator grants it interactively with `cortex setup
+  --trust-commands` (agents never pass `--yes`); repository configuration cannot approve itself.
+  Once a `unit_test` command verifier is configured it is the code proof: `codemap_review` still
+  runs but is advisory and is no longer a default or medium/high-risk requirement.
 - Cross-case recall embedding endpoints are loopback-only by default. A non-loopback
   `recall.embed_url` requires `CORTEX_APPROVE_REMOTE_RECALL=1` from the trusted launching
   environment; repository configuration cannot approve its own egress. Endpoint URLs containing
@@ -408,8 +416,11 @@ Each of these cost a real debugging session. They extend the Architecture Notes 
   confidence — never a high-confidence FAILED verdict. See `behavioralStatus`.
 - **Acceptance criteria are immutable case identity.** `open`/`start` may register up to 64 stable
   ID + exact-statement pairs. Store saves and transactions reject later mutation; verification
-  must reuse the exact ID/statement, and non-green completion acknowledgments cannot bypass
-  missing criterion proof. Status exposes only a bounded proof manifest; full statements stay in
+  must reuse the exact ID/statement, and `--unverified`/`--accept-failed` cannot bypass missing
+  criterion proof. The only exception is `--accept-missing-criteria` with exactly the missing ids:
+  the outcome stays partial and every unproven criterion is named. `verify --from-plan` never binds
+  a criterion to the structural `codemap_review` and refuses ambiguous or cross-surface choices. A
+  claim id may be rebound to another verifier only while none of its receipts reached a verdict. Status exposes only a bounded proof manifest; full statements stay in
   `case.json`.
 - **Complete handoffs must fit local-agent honestly.** General packets retain the 128 KiB cap, but
   a complete verified packet measures the actual pretty MCP JSON against 90 KiB and keeps every

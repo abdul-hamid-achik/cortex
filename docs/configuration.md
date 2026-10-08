@@ -113,6 +113,37 @@ Bind a typed claim to the exact check with MCP `verifier: "command:unit", contra
 the matching CLI `--claim-verifier command:unit --claim-contract unit` flags. Command verifiers can
 prove code checks; they cannot satisfy browser, terminal, artifact, or secret claims.
 
+Once a `unit_test` command verifier is configured, the repository's own tests are the code proof:
+the structural `codemap_review` still runs on every diff and leaves a receipt, but it is advisory
+and no longer a default requirement, including for `medium`/`high` risk changes (verify still warns
+when a risky diff did not pass review). Without a test command, `codemap_review` remains the
+required code verifier. A blocked command verifier names the approval path and leads the next
+actions with `cortex setup --trust-commands`.
+
+### What `cortex init` detects
+
+`cortex init` writes a starter `cortex.yaml` from what it finds at the workspace root. Detection is
+read-only: it checks marker files and scans task runner files as text for task names, and never
+executes anything.
+
+- A **task runner** that defines a `test` task takes precedence over language markers:
+  `Taskfile.yml`/`Taskfile.yaml` (parsed as YAML, looking under `tasks:`) gives `["task", "test"]`,
+  a `Makefile` with a `test:` rule gives `["make", "test"]`, and a `justfile`/`Justfile` with a
+  `test` recipe gives `["just", "test"]`. When several exist, Taskfile wins over Makefile, which wins
+  over justfile. A `.PHONY: test` line alone is not a rule, and a name like `check` is never guessed.
+- The same runner also yields a `build` verifier (kind `build`) and a `lint` verifier (kind `lint`)
+  when it defines tasks with exactly those names.
+- Without a runner `test` task, init falls back to `go.mod` (`go test ./...`), `Cargo.toml`
+  (`cargo test`), `package.json` (`bun`/`pnpm`/`yarn`/`npm test` by lockfile), or Python markers
+  (`python -m pytest`).
+- Runner files are read up to 256 KiB, and a malformed Taskfile simply falls back to the next
+  detection.
+
+Review the generated argv before enabling it. `task`, `make`, and `just` run recipes written in your
+repository, so they are not a fixed, known-safe command: the real boundary is the launcher approval
+described above (`CORTEX_APPROVE_COMMANDS=1` or `cortex setup --trust-commands`), which repository
+configuration cannot grant itself.
+
 ## Where sessions live (XDG)
 
 By default Cortex stores every session in a **central, XDG-organized** location, so all your work

@@ -15,6 +15,9 @@ const (
 	MaxChangeLeaseTTL     = time.Hour
 	minChangeLeaseTTL     = time.Second
 	maxLeaseCASAttempts   = 5
+	// ChangeLeaseRenewGrace lets the owner renew a lease that lapsed during a
+	// long verification gate, as long as no other actor replaced it.
+	ChangeLeaseRenewGrace = 15 * time.Minute
 )
 
 // ChangeLeaseInput identifies the case, owner, and requested lease duration.
@@ -69,9 +72,10 @@ func (k *Kernel) AcquireChangeLease(in ChangeLeaseInput) (domain.Envelope, error
 	return k.leaseEnvelope(c, fmt.Sprintf("change lease acquired by %s until %s", actor, c.ChangeLease.ExpiresAt.Format(time.RFC3339))), nil
 }
 
-// RenewChangeLease extends an unexpired lease owned by the same actor. Once a
-// lease expires it must be reacquired, which makes stale-owner recovery
-// explicit and prevents an old worker from reviving itself after replacement.
+// RenewChangeLease extends a lease owned by the same actor. An expired lease
+// may be renewed only by its owner within ChangeLeaseRenewGrace and only while
+// no other actor has replaced it; past that it must be reacquired, which keeps
+// stale-owner recovery explicit and prevents an old worker reviving itself.
 func (k *Kernel) RenewChangeLease(in ChangeLeaseInput) (domain.Envelope, error) {
 	actor, err := k.changeLeaseActor(in.Actor)
 	if err != nil {
@@ -90,6 +94,12 @@ func (k *Kernel) RenewChangeLease(in ChangeLeaseInput) (domain.Envelope, error) 
 			return leaseRuleError("change lease does not exist")
 		}
 		if c.ChangeLease.Expired(now) {
+			if c.ChangeLease.Actor == actor && now.Before(c.ChangeLease.ExpiresAt.Add(ChangeLeaseRenewGrace)) {
+				if err := c.ChangeLease.RenewExpired(actor, now, ttl, ChangeLeaseRenewGrace); err != nil {
+					return leaseRuleError(err.Error())
+				}
+				return nil
+			}
 			return leaseRuleError("change lease expired; acquire a new lease")
 		}
 		if c.ChangeLease.ReleasedAt != nil {

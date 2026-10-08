@@ -50,6 +50,7 @@ success rule; the same id and exact statement must later appear in a typed verif
 | `--parent` | — | parent task ID for same-workspace delegated work |
 | `--idempotency-key` | — | stable, non-secret retry identity |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
+| `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 `mode=review` biases later `investigate` rounds toward git changed-files + `codemap review`
@@ -71,6 +72,7 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 | `--risk` | `medium` | `low` \| `medium` \| `high` |
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
+| `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 ### `cortex investigate <taskId> <question>`
@@ -219,6 +221,10 @@ cortex lease renew task_06FK… --actor agent-auth --ttl 30m
 cortex lease release task_06FK… --actor agent-auth
 ```
 
+The owner may also renew a lease that expired during a long verification gate, for up to 15
+minutes after expiry, provided no other actor has acquired it in the meantime. After that, or after
+a takeover, the work must be reacquired with `begin-change`.
+
 An expired lease cannot be renewed; reacquire with `begin-change`. Completion and abort release an
 active lease while retaining its audit record.
 
@@ -252,8 +258,9 @@ cortex verify task_06FK… \
 | `--secret-project` | tvault project for a value-free capability claim |
 | `--no-auto-specs` | disable automatic selection of covering browser/terminal specs |
 | `--no-op` | acknowledge that a change task intentionally produced no diff; does not create a pass |
-| `--from-plan` | materialize typed claims from registered acceptance criteria and the plan's verification requirements |
+| `--from-plan` | materialize typed claims from registered acceptance criteria and the plan's verification requirements. Criteria bind to the single runnable verifier (a `unit_test` command wins); they are never proven implicitly by the structural `codemap_review`, and an ambiguous choice is refused with an explicit `--claim-spec` continuation |
 | `--ack-drift` | acknowledge unexpected files on a `risk: high` change so verification may proceed |
+| `--attest` (repeatable) | `id=evidence-id[,evidence-id…][|note]` for a **process** criterion only; cites evidence from this case (e.g. a `cortex note`), goes stale when the workspace changes, and is reported as attested, never as verifier proof |
 | `--actor` | change-lease owner; defaults to the active lease owner when the task is leased |
 
 `--claim-spec` bundles a whole typed claim into one value (recognized keys `id`, `surface`,
@@ -291,6 +298,7 @@ cortex remember task_06FK… "returnTo was dropped; fixed and browser-verified" 
 | `--tag` (repeatable) | tags for recall |
 | `--unverified` | explicitly accept a `partial` or `unverified` completion when adequate proof could not be completed |
 | `--accept-failed` | explicitly accept a `failed` completion — records a failed outcome, not a green one |
+| `--accept-missing-criteria` | record registered acceptance criteria as unmet; must list exactly the missing ids, and the outcome can then only be partial |
 | `--accept-open-children` | complete a parent while child tasks are still in-flight |
 | `--accept-partial-coverage` | complete a survey while coverage-ledger modules remain unseen |
 
@@ -515,7 +523,7 @@ verification receipts — merged and time-sorted. Central sessions work from any
 | `cortex metrics [taskId]` | observability: per-task outcome + evidence trail (incl. **time-in-phase**), or the workspace aggregate |
 | `cortex list` (`ls`) | all tasks in the **current workspace**, newest first (for cross-repo, use `cortex sessions`) |
 | `cortex doctor` | environment + a **cross-repo session snapshot** + specialist tool health (JSON with `--json`) |
-| `cortex init` | write a starter `cortex.yaml`, detecting your test runner (Go/Rust/Node/Python) as a command verifier; refuses to clobber an existing config unless `--force` |
+| `cortex init` | write a starter `cortex.yaml`, detecting your test runner (Taskfile/Makefile/justfile `test` task, else Go/Rust/Node/Python) as a command verifier, plus `build`/`lint` tasks; refuses to clobber an existing config unless `--force` |
 | `cortex setup` | read-only readiness check — git repo, `cortex.yaml`, and whether codemap/vecgrep are installed **and indexed** (via cheap native `status` probes: vecgrep `--lightweight`, codemap `--skip-stale`, not dummy search). Reports `ready` / `stale` / `needs_index` / `error` honestly — drift is `stale` (still queryable), not `needs_index`; `--trust-commands` grants configured verifier argv outside the repo |
 | `cortex config` | resolved workspace/storage paths, budget, recall policy, safe verifier metadata (argv omitted), redaction count, and applied `cortex.yaml` sources |
 | `cortex abort <taskId> <reason>` | stop a task without deleting evidence |
