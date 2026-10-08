@@ -236,3 +236,16 @@ func TestParseOptionsValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamRecordsMCPStatusAndToolNames(t *testing.T) {
+	p := newStreamParser(10, nil)
+	_, _ = p.Write([]byte(`{"type":"system","subtype":"init","model":"m","mcp_servers":[{"name":"cortex","status":"connected"}]}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Bash"},{"type":"tool_use","id":"b","name":"mcp__cortex__cortex_open_task"}]}}` + "\n"))
+	state := p.snapshot()
+	if len(state.MCPServers) != 1 || state.MCPServers[0].Status != "connected" {
+		t.Fatalf("mcp servers = %+v", state.MCPServers)
+	}
+	if state.ToolNames["Bash"] != 1 || state.ToolNames["mcp__cortex__cortex_open_task"] != 1 {
+		t.Fatalf("tool names = %+v", state.ToolNames)
+	}
+}

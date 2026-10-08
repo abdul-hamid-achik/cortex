@@ -431,7 +431,9 @@ func TestAgentFailureModes(t *testing.T) {
 
 func TestDeadlineKillsTheWholeProcessGroup(t *testing.T) {
 	old := minAgentDeadline
-	minAgentDeadline = 300 * time.Millisecond
+	// Generous enough that toolchain probes (which count against the deadline)
+	// never kill the agent before it records its child pid.
+	minAgentDeadline = 2 * time.Second
 	t.Cleanup(func() { minAgentDeadline = old })
 
 	r := newRig(t)

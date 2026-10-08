@@ -5,8 +5,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -20,6 +22,13 @@ const maxStreamLine = 8 << 20
 type streamContentBlock struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// streamMCPServer is one MCP server status reported in the init event.
+type streamMCPServer struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
 }
 
 type streamUsage struct {
@@ -30,10 +39,11 @@ type streamUsage struct {
 }
 
 type streamEvent struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
-	Model   string `json:"model"`
-	Message *struct {
+	Type       string            `json:"type"`
+	Subtype    string            `json:"subtype"`
+	Model      string            `json:"model"`
+	MCPServers []streamMCPServer `json:"mcp_servers"`
+	Message    *struct {
 		Content []streamContentBlock `json:"content"`
 	} `json:"message"`
 	IsError      bool         `json:"is_error"`
@@ -67,15 +77,17 @@ type streamParser struct {
 	toolCalls int
 	capped    bool
 
-	sawInit   bool
-	initModel string
-	result    *resultEvent
-	malformed int
-	oversized int
+	sawInit    bool
+	initModel  string
+	mcpServers []streamMCPServer
+	toolNames  map[string]int
+	result     *resultEvent
+	malformed  int
+	oversized  int
 }
 
 func newStreamParser(maxCalls int, onCap func()) *streamParser {
-	return &streamParser{maxCalls: maxCalls, onCap: onCap, seenTools: map[string]bool{}}
+	return &streamParser{maxCalls: maxCalls, onCap: onCap, seenTools: map[string]bool{}, toolNames: map[string]int{}}
 }
 
 func (p *streamParser) Write(data []byte) (int, error) {
@@ -141,6 +153,7 @@ func (p *streamParser) handleLine(line []byte) {
 		if event.Subtype == "init" && !p.sawInit {
 			p.sawInit = true
 			p.initModel = event.Model
+			p.mcpServers = append([]streamMCPServer(nil), event.MCPServers...)
 		}
 	case "assistant":
 		p.countToolUses(event)
@@ -175,6 +188,7 @@ func (p *streamParser) countToolUses(event streamEvent) {
 			return
 		}
 		p.toolCalls++
+		p.toolNames[block.Name]++
 	}
 }
 
@@ -202,6 +216,11 @@ func (p *streamParser) snapshot() streamState {
 		ToolCalls: p.toolCalls, Capped: p.capped, SawInit: p.sawInit, InitModel: p.initModel,
 		Malformed: p.malformed, Oversized: p.oversized,
 	}
+	state.MCPServers = append([]streamMCPServer(nil), p.mcpServers...)
+	state.ToolNames = make(map[string]int, len(p.toolNames))
+	for name, count := range p.toolNames {
+		state.ToolNames[name] = count
+	}
 	if p.result != nil {
 		copied := *p.result
 		state.Result = &copied
@@ -217,6 +236,10 @@ type streamState struct {
 	Result    *resultEvent
 	Malformed int
 	Oversized int
+	// MCPServers and ToolNames are diagnostic instrumentation: whether the
+	// cortex server connected and which tools the agent actually used.
+	MCPServers []streamMCPServer
+	ToolNames  map[string]int
 }
 
 var completionLine = regexp.MustCompile(`^COMPLETION:\s*(verified|unverified|failed|incomplete)\s*$`)
@@ -230,4 +253,25 @@ func parseCompletion(text string) baseeval.CompletionLabel {
 		return baseeval.CompletionLabel(match[1])
 	}
 	return baseeval.CompletionIncomplete
+}
+
+// logStreamUsage reports MCP server status and per-tool call counts to
+// stderr so an operator can tell "the agent ignored Cortex" from "the Cortex
+// server never connected". It never echoes tool inputs or model text.
+func logStreamUsage(state streamState, logf func(string, ...any)) {
+	for _, server := range state.MCPServers {
+		logf("mcp server %s: %s", server.Name, server.Status)
+	}
+	names := make([]string, 0, len(state.ToolNames))
+	for name := range state.ToolNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s=%d", name, state.ToolNames[name]))
+	}
+	if len(parts) > 0 {
+		logf("tool calls by name: %s", strings.Join(parts, ", "))
+	}
 }

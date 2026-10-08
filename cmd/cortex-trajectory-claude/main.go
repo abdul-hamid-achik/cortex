@@ -138,6 +138,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	status, reported := classify(request, outcome, func(message string) { logf("%s", message) })
 	result.Status, result.ReportedCompletion = status, reported
 	result.ToolCalls = min(outcome.Stream.ToolCalls, request.Budget.MaxToolCalls)
+	logStreamUsage(outcome.Stream, logf)
 	if outcome.Stream.Malformed > 0 || outcome.Stream.Oversized > 0 {
 		logf("ignored %d malformed and %d oversized stream lines", outcome.Stream.Malformed, outcome.Stream.Oversized)
 	}
