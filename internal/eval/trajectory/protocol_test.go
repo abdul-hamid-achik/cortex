@@ -21,7 +21,7 @@ func validLauncherResult(t *testing.T) ([]byte, string) {
 	result := LauncherResult{
 		SchemaVersion: 1, RequestDigest: digest, Status: RunCompleted,
 		ReportedCompletion: baseeval.CompletionUnverified,
-		EffectiveModel:     Model{Identifier: "model", Build: "build", Temperature: 0, Seed: int64Pointer(1), ContextBudgetTokens: 1},
+		EffectiveModel:     Model{Identifier: "model", Build: "build", Temperature: float64Pointer(0), Seed: int64Pointer(1), ContextBudgetTokens: 1},
 		Toolchain:          testToolchain(t, "go"),
 		SelectedVerifiers:  []string{"go_tests"},
 		Receipts: []ReceiptObservation{{
@@ -109,7 +109,7 @@ func TestReceiptVerifierMustCoverItsClaim(t *testing.T) {
 			{ID: "code_test", ClaimIDs: []string{"code_claim"}},
 			{ID: "terminal_test", ClaimIDs: []string{"terminal_claim"}},
 		}},
-		Model:  Model{Identifier: "model", Build: "build", Temperature: 0, Seed: int64Pointer(1), ContextBudgetTokens: 1},
+		Model:  Model{Identifier: "model", Build: "build", Temperature: float64Pointer(0), Seed: int64Pointer(1), ContextBudgetTokens: 1},
 		Budget: Budget{MaxToolCalls: 10},
 	}
 	result := LauncherResult{
@@ -172,4 +172,5 @@ func testToolchain(t *testing.T, names ...string) []ToolchainProvenance {
 	return result
 }
 
-func int64Pointer(value int64) *int64 { return &value }
+func int64Pointer(value int64) *int64       { return &value }
+func float64Pointer(value float64) *float64 { return &value }

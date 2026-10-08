@@ -79,6 +79,14 @@ func (k *Kernel) PlanContext(ctx context.Context, in PlanInput) (domain.Envelope
 	if len(boundary.Symbols) > 0 && len(boundary.Files) == 0 {
 		return errEnvelope(in.TaskID, "plan rejected: symbol-only change boundaries are not supported yet; include the owning file paths so scope drift can be checked"), nil
 	}
+	if outside := filesOutsideAllowedPaths(c.AllowedPaths, boundary.Files); len(outside) > 0 {
+		retry := planRetryAction(c, PlanInput{Hypotheses: in.Hypotheses, Verification: in.Verification, Uncertainty: in.Uncertainty},
+			"declare only files the task owner allowed; widening the registered path contract needs a new task", "changeBoundary")
+		retry.Candidates = map[string][]string{"allowedPaths": append([]string(nil), c.AllowedPaths...)}
+		return k.errEnvelopeActions(in.TaskID, fmt.Sprintf(
+			"plan rejected: the change boundary includes files outside the owner's allowed paths (%s); allowed: %s",
+			strings.Join(clipList(outside, 5), ", "), strings.Join(c.AllowedPaths, ", ")), retry), nil
+	}
 	timeouts, err := normalizeTimeoutOverrides(in.TimeoutOverrides)
 	if err != nil {
 		return errEnvelope(in.TaskID, "plan rejected: "+err.Error()), nil

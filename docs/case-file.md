@@ -167,8 +167,8 @@ that run through a required exact `contract`. The commit and dirty digest bind p
 workspace state; a later edit makes it stale. One verify call commits one `batchId`. Its receipts
 are `bound` only when the case, owner, HEAD, and dirty tree remain stable throughout the run;
 otherwise definitive results become inconclusive and that latest unbound batch masks older proof.
-Status, metrics, sessions, review, remember, Show, and
-Studio all interpret current receipts through the same `verified | partial | failed | unverified`
+Status, metrics, sessions, review, remember, and Show
+all interpret current receipts through the same `verified | partial | failed | unverified`
 assessment. `cortex status --json` adds a bounded `claimProofs` manifest for these stable claim
 IDs, including statement digests, receipt/batch binding, revision/diff identity, and safe evidence
 references. Full criterion statements remain in `case.json`; the proof projection is sized for

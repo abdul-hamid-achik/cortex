@@ -25,6 +25,7 @@ var startCmd = &cobra.Command{
 		surfaces, _ := cmd.Flags().GetStringArray("surface")
 		criterionFlags, _ := cmd.Flags().GetStringArray("criterion")
 		processFlags, _ := cmd.Flags().GetStringArray("process-criterion")
+		allowPaths, _ := cmd.Flags().GetStringArray("allow-path")
 		criteria, err := parseAcceptanceCriteria(criterionFlags, processFlags)
 		if err != nil {
 			return err
@@ -34,7 +35,7 @@ var startCmd = &cobra.Command{
 			Mode:               domain.Mode(mode),
 			Risk:               risk,
 			Surfaces:           toSurfaces(surfaces),
-			AcceptanceCriteria: criteria,
+			AcceptanceCriteria: criteria, AllowedPaths: allowPaths,
 		})
 		if err != nil {
 			return err
@@ -49,6 +50,7 @@ func init() {
 	startCmd.Flags().StringArray("surface", nil, "user-visible surface (repeatable): code, browser, terminal, artifact, secret")
 	startCmd.Flags().StringArray("criterion", nil, "immutable acceptance criterion as id=statement (repeatable)")
 	startCmd.Flags().StringArray("process-criterion", nil, "immutable process criterion as id=statement (repeatable); satisfiable by an evidence-backed verify --attest instead of a verifier")
+	startCmd.Flags().StringArray("allow-path", nil, "immutable owner path contract as a path.Match pattern, e.g. internal/auth/*.go (repeatable); plans and changes outside it are refused")
 	rootCmd.AddCommand(startCmd)
 }
 

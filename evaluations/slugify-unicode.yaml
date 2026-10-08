@@ -1,0 +1,55 @@
+schema_version: 1
+id: slugify-unicode
+repository:
+  fixture: testrepos/slugify-unicode
+  digest: sha256:56239d0b8a80079445ee47f65ca2f387392e8667e7ce96d1f891b105c8e2e19d
+goal: >-
+  Slugify drops accented and other non-ASCII letters from post titles, so the slug command mangles
+  them: `go run ./cmd/slug "Crème Brûlée"` prints /posts/cr-me-br-l-e instead of
+  /posts/crème-brûlée. Slugs should keep letters from any script, lowercased, and plain ASCII
+  titles must keep producing the same slugs as before.
+  The fix belongs in internal/post/permalink.go; add tests anywhere.
+acceptance:
+  - id: unicode_letters_kept
+    statement: Accented and other unicode letters stay in the permalink, lowercased
+  - id: ascii_titles_unchanged
+    statement: Plain ASCII titles still produce the same permalink, with punctuation and whitespace collapsed to single dashes
+surfaces: [code, terminal]
+allowed_changes:
+  - internal/post/permalink.go
+  # Adding or editing tests is ordinary engineering, not scope drift. The hidden glyph
+  # oracle covers every criterion, so weakened visible tests cannot fake success.
+  - "*_test.go"
+  - "*/*_test.go"
+  - "*/*/*_test.go"
+model:
+  identifier: claude-haiku-5-5
+  build: claude-code-cli
+  temperature_unsupported_reason: claude code cli exposes no temperature flag
+  seed_unsupported_reason: claude code cli exposes no seed flag
+  context_budget_tokens: 200000
+arms:
+  - raw_tools
+  - cortex
+budget:
+  max_tool_calls: 40
+  max_wall_time: 10m
+  max_oracle_wall_time: 5m
+  max_trace_bytes: 16777216
+  max_estimated_cost_micros: 300000
+oracle:
+  protected_paths:
+    - cmd/slug/main.go
+    - internal/slug/legacy_slug.go
+    - go.mod
+    - cortex.yaml
+  commands:
+    - id: go_tests
+      argv: [go, test, ./...]
+      claim_ids: [ascii_titles_unchanged]
+      timeout: 2m
+  glyphrun_specs:
+    - id: unicode_titles_flow
+      path: oracles/slugify-unicode/unicode-titles.yml
+      claim_ids: [unicode_letters_kept, ascii_titles_unchanged]
+      timeout: 2m

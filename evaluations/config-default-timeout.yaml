@@ -1,0 +1,57 @@
+schema_version: 1
+id: config-default-timeout
+repository:
+  fixture: testrepos/config-default-timeout
+  digest: sha256:cb2aed073ecd922db715e77517475f697808d61adf6601b185bdad2ef1f89a40
+goal: >-
+  Services whose fetchd config omits the `timeout` key end up with a zero request timeout, which
+  our HTTP layer treats as "wait forever", so stalled upstreams hang requests indefinitely. The
+  documented default is 30 seconds. `client.Client.Timeout()` should report 30s for a config
+  without `timeout`, and `fetchd -config FILE` should show the same value, while an explicit
+  `timeout = 5s` keeps working.
+  The fix belongs in internal/config/config.go; add tests anywhere.
+acceptance:
+  - id: omitted_timeout_defaults_to_30s
+    statement: A config file that omits timeout loads with the documented 30 second default
+  - id: explicit_timeout_still_wins
+    statement: An explicit timeout in the config file still overrides the default
+surfaces: [code, terminal]
+allowed_changes:
+  - internal/config/config.go
+  # Adding or editing tests is ordinary engineering, not scope drift. The hidden glyph
+  # oracle covers every criterion, so weakened visible tests cannot fake success.
+  - "*_test.go"
+  - "*/*_test.go"
+  - "*/*/*_test.go"
+model:
+  identifier: claude-haiku-5-5
+  build: claude-code-cli
+  temperature_unsupported_reason: claude code cli exposes no temperature flag
+  seed_unsupported_reason: claude code cli exposes no seed flag
+  context_budget_tokens: 200000
+arms:
+  - raw_tools
+  - cortex
+budget:
+  max_tool_calls: 40
+  max_wall_time: 10m
+  max_oracle_wall_time: 5m
+  max_trace_bytes: 16777216
+  max_estimated_cost_micros: 300000
+oracle:
+  protected_paths:
+    - cmd/fetchd/main.go
+    - internal/client/client.go
+    - internal/util/duration.go
+    - go.mod
+    - cortex.yaml
+  commands:
+    - id: go_tests
+      argv: [go, test, ./...]
+      claim_ids: [omitted_timeout_defaults_to_30s, explicit_timeout_still_wins]
+      timeout: 2m
+  glyphrun_specs:
+    - id: omitted_timeout_flow
+      path: oracles/config-default-timeout/omitted-timeout.yml
+      claim_ids: [omitted_timeout_defaults_to_30s, explicit_timeout_still_wins]
+      timeout: 2m

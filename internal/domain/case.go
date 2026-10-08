@@ -137,7 +137,12 @@ type CaseFile struct {
 	// case creation. Legacy cases omit it and retain their historical named-
 	// claim semantics.
 	AcceptanceCriteria []AcceptanceCriterion `json:"acceptanceCriteria,omitempty"`
-	ChangeBoundary     ChangeBoundary        `json:"changeBoundary,omitempty"`
+	// AllowedPaths is an optional immutable path contract registered by the task
+	// owner at creation (path.Match patterns). When set, a plan may not declare
+	// files outside it and verify refuses changes outside it; nothing the agent
+	// passes later can widen it.
+	AllowedPaths   []string       `json:"allowedPaths,omitempty"`
+	ChangeBoundary ChangeBoundary `json:"changeBoundary,omitempty"`
 	// VerificationRequired names the verifier claims a task must satisfy before
 	// it can be considered complete (populated at plan time).
 	VerificationRequired []string `json:"verificationRequired,omitempty"`

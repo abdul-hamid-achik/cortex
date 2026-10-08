@@ -56,7 +56,7 @@ identity, diffs, scope drift, and revision-bound verification. The specialist to
 Both are the same kernel; pick by who's driving:
 
 - **CLI** — for humans and shell scripts. Add `--json` to non-interactive read commands for machine
-  output; Studio is interactive and directs machines to `sessions --json` / `show --json`.
+  output; use `sessions --json` / `show --json` for cross-session views.
 - **MCP server** (`cortex serve`) — for agent harnesses. The model calls `cortex_open_task`,
   `cortex_investigate`, etc. as tools. See [MCP](/mcp).
 
@@ -218,14 +218,15 @@ hypotheses, current assessment, recent evidence, decisions, and structured next 
 
 ### Is there a UI?
 
-The Studio terminal board is not shipped in the CLI for now. Inspect sessions with the CLI:
+The CLI has no interactive board. Inspect sessions with:
 
 ```bash
 cortex sessions --json
 cortex show <taskId> --json
 ```
 
-See [Surfaces](/studio) for the current CLI + MCP split.
+The repository also contains Cortex Deck (`desktop/`), an experimental Electron operator console
+that runs from a clone; it reads the same case files and calls the same CLI and MCP surfaces.
 
 ## State, privacy, and secrets
 

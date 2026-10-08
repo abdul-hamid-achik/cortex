@@ -1,0 +1,37 @@
+version: 1
+name: trajectory-config-omitted-timeout
+intent: |
+    A fetchd config file that does not set timeout must load with the documented 30 second default,
+    while an explicit timeout is still honored.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-c"
+        - 'd=$(mktemp -d); printf "addr = db.internal:5432\nretries = 2\n" > "$d/omitted.conf"; printf "addr = db.internal:5432\ntimeout = 5s\n" > "$d/explicit.conf"; for f in omitted explicit; do echo "== $f"; go run ./cmd/fetchd -config "$d/$f.conf"; done; rm -rf "$d"; echo FINISHED'
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 40
+    profile: xterm-256color
+steps:
+    - wait:
+        screen:
+            contains: "FINISHED"
+        timeoutMs: 90000
+    - snapshot: timeouts
+outcomes:
+    - id: omitted_timeout_is_default
+      description: a config without timeout reports the 30 second default
+      verify:
+        screen:
+            contains: "timeout: 30s"
+    - id: omitted_timeout_is_not_zero
+      description: no config reports a zero timeout
+      verify:
+        screen:
+            notContains: "timeout: 0s"
+    - id: explicit_timeout_is_honored
+      description: an explicit timeout still wins over the default
+      verify:
+        screen:
+            contains: "timeout: 5s"

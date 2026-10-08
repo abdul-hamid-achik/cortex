@@ -8,8 +8,8 @@
   "payload": {
     "ok": false,
     "taskId": "$TASK_ID_1",
-    "summary": "idempotency key already identifies a task with different acceptance criteria",
+    "summary": "idempotency key already identifies a task with different acceptance criteria or allowed paths",
     "rawAvailable": false,
-    "error": "idempotency key already identifies a task with different acceptance criteria"
+    "error": "idempotency key already identifies a task with different acceptance criteria or allowed paths"
   }
 }

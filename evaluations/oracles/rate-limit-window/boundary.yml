@@ -1,0 +1,57 @@
+version: 1
+name: trajectory-rate-limit-window-boundary
+intent: |
+    A request made exactly one window after an earlier request no longer counts that earlier request,
+    so the limiter admits it, reports the capacity it frees up, and never rejects with a zero wait.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-c"
+        - 'echo "== A"; go run ./cmd/ratelimit -limit 2 -window 1000 0 500 "?1000" 1000 "?1000" 1100 "?1500" 1500; echo "== B"; go run ./cmd/ratelimit -limit 1 -window 250 10 259 260; echo "== C"; go run ./cmd/ratelimit -limit 3 -window 60000 0 0 0 60000 60000 60000 60000; echo FINISHED'
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 50
+    profile: xterm-256color
+steps:
+    - wait:
+        screen:
+            contains: "FINISHED"
+        timeoutMs: 90000
+    - snapshot: boundary
+outcomes:
+    - id: capacity_freed_at_exact_boundary
+      description: a query made exactly one window after the oldest request counts it as expired
+      verify:
+        screen:
+            contains: "t=1000 remaining=1"
+    - id: query_matches_next_admission
+      description: the capacity reported just before an exact-boundary request agrees with the admission that follows
+      verify:
+        screen:
+            contains: "t=1500 remaining=1"
+    - id: request_at_boundary_is_admitted
+      description: a request exactly one window after the request that filled the limit is allowed
+      verify:
+        screen:
+            contains: "t=260 allow remaining=0"
+    - id: large_window_burst_reopens
+      description: a burst that fills the limit is fully available again exactly one window later
+      verify:
+        screen:
+            contains: "t=60000 allow remaining=2"
+    - id: retry_after_is_exact
+      description: a rejection one millisecond early waits exactly one millisecond
+      verify:
+        screen:
+            contains: "t=259 deny retry-after=1"
+    - id: no_rejection_with_zero_wait
+      description: no request is ever rejected while also reporting that it may retry immediately
+      verify:
+        screen:
+            notContains: "retry-after=0"
+    - id: still_denies_inside_window
+      description: a request inside the window is still rejected with the remaining wait
+      verify:
+        screen:
+            contains: "t=1100 deny retry-after=400"

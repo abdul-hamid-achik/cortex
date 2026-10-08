@@ -1,0 +1,42 @@
+version: 1
+name: trajectory-pagination-exact-multiple
+intent: |
+    Paging through a list whose length is an exact multiple of the page size must end on the last
+    full page, without a trailing empty page, and a single exact-fit page must also end cleanly.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-c"
+        - 'for a in "-total 6 -size 3" "-total 4 -size 4" "-total 0 -size 3"; do echo "== $a"; go run ./cmd/pager $a; done; echo FINISHED'
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 40
+    profile: xterm-256color
+steps:
+    - wait:
+        screen:
+            contains: "FINISHED"
+        timeoutMs: 90000
+    - snapshot: pagination
+outcomes:
+    - id: exact_multiple_has_two_pages
+      description: six items with a page size of three produce exactly two pages
+      verify:
+        screen:
+            contains: "pages: 2"
+    - id: exact_multiple_has_no_trailing_page
+      description: no page is ever reported as empty
+      verify:
+        screen:
+            notContains: "(empty)"
+    - id: single_exact_page_ends
+      description: four items with a page size of four produce one page
+      verify:
+        screen:
+            contains: "page 1: item-1 item-2 item-3 item-4"
+    - id: empty_list_has_no_pages
+      description: an empty list produces zero pages
+      verify:
+        screen:
+            contains: "pages: 0"

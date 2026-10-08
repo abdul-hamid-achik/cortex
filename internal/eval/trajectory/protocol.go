@@ -290,8 +290,11 @@ func validateInstrumentedObservation(observation LauncherObservation) error {
 }
 
 func modelsEqual(got, want Model) bool {
-	if got.Identifier != want.Identifier || got.Build != want.Build || got.Temperature != want.Temperature ||
+	if got.Identifier != want.Identifier || got.Build != want.Build || got.TemperatureUnsupportedReason != want.TemperatureUnsupportedReason ||
 		got.SeedUnsupportedReason != want.SeedUnsupportedReason || got.ContextBudgetTokens != want.ContextBudgetTokens {
+		return false
+	}
+	if (got.Temperature == nil) != (want.Temperature == nil) || (got.Temperature != nil && *got.Temperature != *want.Temperature) {
 		return false
 	}
 	if got.Seed == nil || want.Seed == nil {

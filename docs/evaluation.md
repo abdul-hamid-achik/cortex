@@ -42,8 +42,9 @@ pins:
 
 - a repository fixture and its SHA-256 tree digest;
 - the goal, acceptance criteria, behavioral surfaces, and allowed changed paths;
-- model identifier and build, temperature, seed (or why the provider cannot seed), and context
-  budget;
+- model identifier and build, temperature and seed (or, for each, why the agent runtime cannot
+  set it: `temperature_unsupported_reason` / `seed_unsupported_reason`), and context budget. A
+  launcher must never report a sampling setting it did not control;
 - the selected arms and tool, wall-time, oracle, trace, and cost ceilings;
 - exact command-oracle `argv` arrays and Glyphrun specs, each mapped to acceptance criteria.
 
@@ -110,6 +111,47 @@ timeout kills the child and descendants that remain in that group; execution fai
 platforms where that containment is not available. A hostile same-user child that deliberately
 creates a new session remains outside this trusted-harness containment model. Manifest validation
 remains read-only on those platforms.
+
+## Reference launcher: Claude Code
+
+`cmd/cortex-trajectory-claude` is a reference arm launcher that drives the Claude Code CLI
+headlessly. It supports the `raw_tools` and `cortex` arms and reports anything else as `blocked`.
+It is evaluation infrastructure only and is not part of release archives.
+
+- **Isolation.** Each arm runs `claude --bare --strict-mcp-config --setting-sources ""` with a
+  fresh private `HOME`, an allowlisted environment, and a `PATH` built from a shim directory that
+  holds only the declared tools. The operator's `CLAUDE.md`, hooks, plugins, memory, and MCP
+  servers never load, and `cortex` is never reachable from `raw_tools`. `--bare` authenticates only
+  with `ANTHROPIC_API_KEY`; without it the arm is `blocked` rather than run unisolated.
+- **Parity.** Both arms get the same prompt. The only difference is the MCP configuration: the
+  `cortex` arm gets `cortex serve` with that arm's isolated roots and `CORTEX_APPROVE_COMMANDS=1`,
+  so a fixture's committed `cortex.yaml` unit verifier can run. With `--cortex-instructions`, the
+  `cortex` arm also receives the deployed instruction snippet (the `CLAUDE.md` block from the
+  [Quick Start](/quick-start)) through `--append-system-prompt-file`; its digest is logged in the
+  arm trace. Without it the arm measures MCP availability alone, which agents often ignore.
+- **Honesty.** The CLI cannot set temperature or seed, so manifests for this launcher must use
+  `temperature_unsupported_reason` and `seed_unsupported_reason`; a pinned value is refused as
+  `blocked`. A model in the stream that differs from the manifest fails the arm. Completion is read
+  from a final `COMPLETION: …` line, tool calls are capped at the budget, and cost and tokens come
+  from the CLI's result event as observed.
+
+Operator configuration (outside the repository):
+
+```yaml
+schema_version: 1
+argv:
+  - /absolute/path/to/cortex-trajectory-claude
+  - --agent
+  - /absolute/path/to/claude
+  - --cortex
+  - /absolute/path/to/cortex
+  - --cortex-instructions
+  - /absolute/path/to/cortex-agent-instructions.md
+  - --tool
+  - git=/usr/bin/git
+  - --tool
+  - go=/absolute/path/to/go
+```
 
 ## Validate and run
 

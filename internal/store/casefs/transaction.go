@@ -485,6 +485,9 @@ func (s *Store) currentCaseForUpdateUnlocked(expected *domain.CaseFile) (domain.
 	if !reflect.DeepEqual(current.AcceptanceCriteria, expected.AcceptanceCriteria) {
 		return current, actual, errors.New("acceptance criteria are immutable after case creation")
 	}
+	if !reflect.DeepEqual(current.AllowedPaths, expected.AllowedPaths) {
+		return current, actual, errors.New("allowed paths are immutable after case creation")
+	}
 	return current, actual, nil
 }
 

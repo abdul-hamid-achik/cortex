@@ -1,0 +1,80 @@
+version: 1
+name: trajectory-csv-quoted-fields-rfc4180
+intent: |
+    Fields containing commas, double quotes, or line breaks are wrapped in double quotes, embedded
+    double quotes are doubled (not backslash-escaped), and every other field is emitted verbatim.
+    Line breaks in the output are displayed as ~ (LF) and ^ (CR) so each record stays on one line.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-c"
+        - |
+          B=$(mktemp -d)/csvexport
+          go build -o "$B" ./cmd/csvexport || exit 1
+          t() { printf '%s [' "$1"; shift; o=$("$B" "$@"); printf '%s' "$o" | tr '\r\n' '^~'; echo ']'; }
+          t q 'say "hi"' b
+          t c 'a,b' c
+          t n "$(printf 'l1\nl2')" z
+          t r "$(printf 'x\ry')" z
+          t w "$(printf 'x\r\ny')" z
+          t p plain 'two words' ''
+          t o '"'
+          t m 'he said "a,b"' tail
+          echo FINISHED
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 40
+    profile: xterm-256color
+steps:
+    - wait:
+        screen:
+            contains: "FINISHED"
+        timeoutMs: 90000
+    - snapshot: records
+outcomes:
+    - id: embedded_quotes_are_doubled
+      description: a field with double quotes is wrapped and each embedded quote is doubled
+      verify:
+        screen:
+            contains: 'q ["say ""hi""",b]'
+    - id: lone_quote_is_escaped
+      description: a field that is a single double quote becomes four double quotes
+      verify:
+        screen:
+            contains: 'o [""""]'
+    - id: quote_and_comma_combine
+      description: a field with both a comma and quotes is wrapped once and its quotes are doubled
+      verify:
+        screen:
+            contains: 'm ["he said ""a,b""",tail]'
+    - id: no_backslash_escapes
+      description: backslash escaping is never emitted
+      verify:
+        screen:
+            notContains: '\"'
+    - id: lf_field_is_quoted
+      description: a field containing a line feed is wrapped in double quotes
+      verify:
+        screen:
+            contains: 'n ["l1~l2",z]'
+    - id: cr_field_is_quoted
+      description: a field containing a carriage return is wrapped in double quotes
+      verify:
+        screen:
+            contains: 'r ["x^y",z]'
+    - id: crlf_field_is_quoted
+      description: a field containing a CRLF pair is wrapped in double quotes
+      verify:
+        screen:
+            contains: 'w ["x^~y",z]'
+    - id: comma_fields_stay_quoted
+      description: fields with commas keep being quoted
+      verify:
+        screen:
+            contains: 'c ["a,b",c]'
+    - id: plain_and_empty_fields_unchanged
+      description: plain, spaced, and empty fields are emitted verbatim without quotes
+      verify:
+        screen:
+            contains: 'p [plain,two words,]'

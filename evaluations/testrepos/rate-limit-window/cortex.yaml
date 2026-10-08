@@ -1,0 +1,6 @@
+verifiers:
+  unit:
+    argv: [go, test, ./...]
+    kind: unit_test
+    surface: code
+    timeout: 2m

@@ -17,6 +17,9 @@ type ScopeReport struct {
 	Risk            string   `json:"risk"`
 	Action          string   `json:"action,omitempty"`
 	ChangedFiles    []string `json:"changedFiles,omitempty"`
+	// OutsideAllowedPaths lists changed files the owner's immutable path
+	// contract does not allow; verify refuses while any remain.
+	OutsideAllowedPaths []string `json:"outsideAllowedPaths,omitempty"`
 }
 
 // detectScopeDrift compares the working-tree diff against the case's boundary.
@@ -24,6 +27,12 @@ type ScopeReport struct {
 // path or an explicit one-level/recursive glob. Plan normalizes absolute paths
 // inside the workspace, so suffix matching would only hide same-name drift.
 func (k *Kernel) detectScopeDrift(ctx context.Context, c *domain.CaseFile, changed []string) ScopeReport {
+	report := k.boundaryDrift(c, changed)
+	report.OutsideAllowedPaths = filesOutsideAllowedPaths(c.AllowedPaths, normalizePaths(changed))
+	return report
+}
+
+func (k *Kernel) boundaryDrift(c *domain.CaseFile, changed []string) ScopeReport {
 	if !c.ChangeBoundary.Declared() {
 		return ScopeReport{Scope: "no_boundary", Risk: "unknown", ChangedFiles: changed,
 			Action: "no change boundary was declared; declare one at plan time to detect drift"}
@@ -87,6 +96,14 @@ func mergeChangedFiles(gitFiles, hints []string) []string {
 			seen[file] = true
 			out = append(out, file)
 		}
+	}
+	return out
+}
+
+func normalizePaths(files []string) []string {
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		out = append(out, normalizePath(f))
 	}
 	return out
 }

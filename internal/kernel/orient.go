@@ -19,11 +19,14 @@ type StartInput struct {
 	Mode               domain.Mode
 	Surfaces           []domain.Surface
 	AcceptanceCriteria []domain.AcceptanceCriterion
-	Risk               string
-	BaseRef            string // diff base for a review task (empty = working-tree diff)
-	Actor              string
-	ParentTaskID       string
-	IdempotencyKey     string
+	// AllowedPaths is the owner's immutable path contract (path.Match
+	// patterns); empty means unrestricted.
+	AllowedPaths   []string
+	Risk           string
+	BaseRef        string // diff base for a review task (empty = working-tree diff)
+	Actor          string
+	ParentTaskID   string
+	IdempotencyKey string
 	// SeedPaths are optional note/packet files (vault or workspace) whose
 	// bounded contents are stamped as orientation evidence on create.
 	SeedPaths []string
@@ -64,6 +67,10 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 	if err != nil {
 		return errEnvelope("", err.Error()), nil
 	}
+	allowedPaths, err := normalizeAllowedPaths(in.AllowedPaths)
+	if err != nil {
+		return errEnvelope("", err.Error()), nil
+	}
 	actor, parentTaskID, idempotencyKey, err := k.normalizeTaskMetadata(in.Actor, in.ParentTaskID, in.IdempotencyKey)
 	if err != nil {
 		return errEnvelope("", err.Error()), nil
@@ -92,6 +99,7 @@ func (k *Kernel) StartTask(ctx context.Context, in StartInput) (domain.Envelope,
 		Risk:               risk,
 		Surfaces:           surfaces,
 		AcceptanceCriteria: criteria,
+		AllowedPaths:       allowedPaths,
 		Workspace:          domain.Workspace{Root: k.cfg.Workspace, Repository: filepath.Base(k.cfg.Workspace), BaseRef: in.BaseRef},
 		Actor:              actor,
 		ParentTaskID:       parentTaskID,

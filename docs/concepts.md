@@ -75,8 +75,8 @@ disk and increments only on success. Lease and parent-link updates reload after 
 so concurrent processes cannot silently overwrite a newer case or both acquire an empty lease.
 Verifier facts, bounded raw output, receipts, and the verifying case revision commit as one
 recoverable bundle; behavioral annotations happen only after that bundle is bound. Status and
-handoff stream evidence instead of loading an unbounded history. Auto-refreshing Show and Studio
-retain the 200 newest evidence/command/phase records plus exact totals from one task-locked
+handoff stream evidence instead of loading an unbounded history. Auto-refreshing Show
+retains the 200 newest evidence/command/phase records plus exact totals from one task-locked
 composite snapshot; explicit evidence and timeline commands remain the drill-down path.
 
 ## Core objects

@@ -163,6 +163,19 @@ func (k *Kernel) Verify(ctx context.Context, in VerifyInput) (domain.Envelope, e
 			Candidates: map[string][]string{"unexpectedFiles": append([]string(nil), scope.UnexpectedFiles...)},
 		}), nil
 	}
+	// The owner's path contract is not scope drift the agent may acknowledge:
+	// any change outside it blocks verification until it is reverted.
+	if outside := filesOutsideAllowedPaths(c.AllowedPaths, normalizePaths(changed)); len(outside) > 0 {
+		return k.errEnvelopeActions(c.ID, fmt.Sprintf(
+			"cannot verify: %d changed file(s) fall outside the owner's allowed paths (%s); revert them — the registered path contract cannot be acknowledged away",
+			len(outside), strings.Join(clipList(outside, 5), ", ")), domain.NextAction{
+			Tool: "cortex_verify", Command: cortexCommand(c, "verify", c.ID),
+			Reason:     "revert the listed files (git restore tracked files, delete new ones), then re-run verify",
+			Arguments:  knownActionArgs(c),
+			BlockedBy:  []string{"changes outside allowed paths"},
+			Candidates: map[string][]string{"outsideAllowedPaths": outside, "allowedPaths": append([]string(nil), c.AllowedPaths...)},
+		}), nil
+	}
 	if c.Mode == domain.ModeChange && c.Status == domain.PhasePlanned && (c.ChangeLease == nil || !c.ChangeLease.Active(k.now().UTC())) {
 		warnings = append(warnings, "verifying an unleased planned change uses the compatibility path; new agent flows should call begin-change first")
 	}

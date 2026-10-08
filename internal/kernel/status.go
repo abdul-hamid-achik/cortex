@@ -26,6 +26,7 @@ type StatusReport struct {
 	Surfaces             []domain.Surface        `json:"surfaces"`
 	UnresolvedHypotheses []domain.HypView        `json:"unresolvedHypotheses,omitempty"`
 	VerificationRequired []string                `json:"verificationRequired,omitempty"`
+	AllowedPaths         []string                `json:"allowedPaths,omitempty"`
 	VerificationDone     []string                `json:"verificationDone,omitempty"`
 	VerificationOutcome  VerificationOutcome     `json:"verificationOutcome"`
 	SatisfiedCriteria    []string                `json:"satisfiedCriteria,omitempty"`
@@ -104,6 +105,7 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 		PausedFrom:           c.PausedFrom,
 		ChangeLease:          c.ChangeLease,
 		VerificationRequired: c.VerificationRequired,
+		AllowedPaths:         c.AllowedPaths,
 		EvidenceCount:        snapshot.EvidenceTotal,
 		InvestigationRounds:  c.InvestigationRounds,
 		InvestigationBudget:  k.cfg.Budget.MaxInvestigationRounds,
@@ -148,8 +150,12 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 	rep.Actions = hydrateDecisionActions(c, structuredNextForCaseAt(c, k.now().UTC(), assessment), decisions)
 	k.attachLongRunningStatus(ctx, &rep, c, snapshot.Evidence)
 
-	// Scope drift for in-flight change tasks.
-	if c.Mode == domain.ModeChange && (c.Status == domain.PhaseChanging || c.Status == domain.PhaseVerifying) && k.git != nil {
+	// Scope drift for in-flight change tasks. A planned case with an owner path
+	// contract is checked too: edits can start before begin-change on the
+	// compatibility path, and the contract must be visible before verify refuses.
+	inFlight := c.Status == domain.PhaseChanging || c.Status == domain.PhaseVerifying ||
+		(c.Status == domain.PhasePlanned && len(c.AllowedPaths) > 0)
+	if c.Mode == domain.ModeChange && inFlight && k.git != nil {
 		changed, changedErr := k.git.ChangedFiles(ctx, k.cfg.Workspace, c.Workspace.BaseRef, false)
 		if changedErr != nil {
 			rep.Warnings = append(rep.Warnings, "could not evaluate scope drift: "+changedErr.Error())
@@ -158,6 +164,9 @@ func (k *Kernel) Status(ctx context.Context, taskID, detail string) (StatusRepor
 			rep.Scope = &sr
 			if sr.Scope == "drift_detected" {
 				rep.Warnings = append(rep.Warnings, "scope drift detected — see scope.unexpectedFiles")
+			}
+			if len(sr.OutsideAllowedPaths) > 0 {
+				rep.Warnings = append(rep.Warnings, "changes outside the owner's allowed paths — see scope.outsideAllowedPaths; verify refuses until they are reverted")
 			}
 		}
 	}

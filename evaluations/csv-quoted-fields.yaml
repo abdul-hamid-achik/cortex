@@ -1,0 +1,59 @@
+schema_version: 1
+id: csv-quoted-fields
+repository:
+  fixture: testrepos/csv-quoted-fields
+  digest: sha256:8351fcae19ad4d8d89d3f897c04c39451376f249e7bbab90067139958b432651
+goal: >-
+  Spreadsheet imports of our CSV export break on rows whose text contains quotes or line breaks.
+  `go run ./cmd/csvexport 'say "hi"' b` prints `"say \"hi\"",b`, and a field with a line break
+  inside it is written unquoted, which splits one record across two lines. The export must follow
+  RFC 4180: a field containing a comma, a double quote, a carriage return or a line feed is
+  wrapped in double quotes, a double quote inside such a field is written as two double quotes
+  (never with a backslash), and every other field is written exactly as given.
+  The fix belongs in internal/csvout/field.go; add tests anywhere.
+acceptance:
+  - id: embedded_quotes_doubled
+    statement: A field containing double quotes is wrapped in double quotes with every embedded quote doubled, and no backslash escapes are emitted
+  - id: line_breaks_quoted
+    statement: A field containing a line feed or carriage return is wrapped in double quotes so the record stays in one piece
+  - id: other_fields_unchanged
+    statement: Fields without special characters are emitted exactly as given and fields with commas stay quoted
+surfaces: [code, terminal]
+allowed_changes:
+  - internal/csvout/field.go
+  # Adding or editing tests is ordinary engineering, not scope drift. The hidden glyph
+  # oracle covers every criterion, so weakened visible tests cannot fake success.
+  - "*_test.go"
+  - "*/*_test.go"
+  - "*/*/*_test.go"
+model:
+  identifier: claude-haiku-5-5
+  build: claude-code-cli
+  temperature_unsupported_reason: claude code cli exposes no temperature flag
+  seed_unsupported_reason: claude code cli exposes no seed flag
+  context_budget_tokens: 200000
+arms:
+  - raw_tools
+  - cortex
+budget:
+  max_tool_calls: 40
+  max_wall_time: 10m
+  max_oracle_wall_time: 5m
+  max_trace_bytes: 16777216
+  max_estimated_cost_micros: 300000
+oracle:
+  protected_paths:
+    - cmd/csvexport/main.go
+    - internal/csvout/record.go
+    - go.mod
+    - cortex.yaml
+  commands:
+    - id: go_tests
+      argv: [go, test, ./...]
+      claim_ids: [other_fields_unchanged]
+      timeout: 2m
+  glyphrun_specs:
+    - id: rfc4180_flow
+      path: oracles/csv-quoted-fields/rfc4180.yml
+      claim_ids: [embedded_quotes_doubled, line_breaks_quoted, other_fields_unchanged]
+      timeout: 2m

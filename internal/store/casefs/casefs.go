@@ -121,6 +121,9 @@ func (s *Store) Create(c *domain.CaseFile) error {
 	if err := ValidateTaskID(c.ID); err != nil {
 		return err
 	}
+	if err := domain.ValidateAllowedPaths(c.AllowedPaths); err != nil {
+		return err
+	}
 	if err := domain.ValidateAcceptanceCriteria(c.AcceptanceCriteria); err != nil {
 		return err
 	}
@@ -167,6 +170,9 @@ func (s *Store) Save(c *domain.CaseFile) error {
 		if !slices.Equal(current.AcceptanceCriteria, c.AcceptanceCriteria) {
 			return errors.New("acceptance criteria are immutable after case creation")
 		}
+		if !slices.Equal(current.AllowedPaths, c.AllowedPaths) {
+			return errors.New("allowed paths are immutable after case creation")
+		}
 
 		next := *c
 		next.Revision = actual + 1
@@ -208,6 +214,9 @@ func (s *Store) Load(taskID string) (*domain.CaseFile, error) {
 	}
 	if err := domain.ValidateAcceptanceCriteria(c.AcceptanceCriteria); err != nil {
 		return nil, fmt.Errorf("case %s acceptance criteria: %w", taskID, err)
+	}
+	if err := domain.ValidateAllowedPaths(c.AllowedPaths); err != nil {
+		return nil, fmt.Errorf("case %s allowed paths: %w", taskID, err)
 	}
 	// Legacy v0.1 snapshots had no revision. Treat their implicit first
 	// snapshot as revision one; the next Save materializes revision two.

@@ -25,6 +25,7 @@ var openCmd = &cobra.Command{
 		key, _ := cmd.Flags().GetString("idempotency-key")
 		criterionFlags, _ := cmd.Flags().GetStringArray("criterion")
 		processFlags, _ := cmd.Flags().GetStringArray("process-criterion")
+		allowPaths, _ := cmd.Flags().GetStringArray("allow-path")
 		criteria, err := parseAcceptanceCriteria(criterionFlags, processFlags)
 		if err != nil {
 			return err
@@ -33,7 +34,7 @@ var openCmd = &cobra.Command{
 		env, err := k.OpenTask(cmd.Context(), kernel.OpenInput{StartInput: kernel.StartInput{
 			Goal: joinArgs(args), Mode: domain.Mode(mode), Risk: risk, Surfaces: toSurfaces(surfaces),
 			Actor: actor, ParentTaskID: parent, IdempotencyKey: key,
-			AcceptanceCriteria: criteria, SeedPaths: seeds,
+			AcceptanceCriteria: criteria, AllowedPaths: allowPaths, SeedPaths: seeds,
 		}})
 		if err != nil {
 			return err
@@ -51,6 +52,7 @@ func init() {
 	openCmd.Flags().String("idempotency-key", "", "stable retry key; an exact match returns the existing task, even after completion")
 	openCmd.Flags().StringArray("criterion", nil, "immutable acceptance criterion as id=statement (repeatable)")
 	openCmd.Flags().StringArray("process-criterion", nil, "immutable process criterion as id=statement (repeatable); satisfiable by an evidence-backed verify --attest instead of a verifier")
+	openCmd.Flags().StringArray("allow-path", nil, "immutable owner path contract as a path.Match pattern, e.g. internal/auth/*.go (repeatable); plans and changes outside it are refused")
 	openCmd.Flags().StringArray("seed", nil, "note/packet file to stamp into orientation evidence (repeatable, max 8)")
 	rootCmd.AddCommand(openCmd)
 }

@@ -88,12 +88,16 @@ type Repository struct {
 }
 
 type Model struct {
-	Identifier            string  `yaml:"identifier" json:"identifier"`
-	Build                 string  `yaml:"build" json:"build"`
-	Temperature           float64 `yaml:"temperature" json:"temperature"`
-	Seed                  *int64  `yaml:"seed,omitempty" json:"seed,omitempty"`
-	SeedUnsupportedReason string  `yaml:"seed_unsupported_reason,omitempty" json:"seedUnsupportedReason,omitempty"`
-	ContextBudgetTokens   int     `yaml:"context_budget_tokens" json:"contextBudgetTokens"`
+	Identifier  string   `yaml:"identifier" json:"identifier"`
+	Build       string   `yaml:"build" json:"build"`
+	Temperature *float64 `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+	// TemperatureUnsupportedReason replaces Temperature when the agent runtime
+	// cannot set sampling temperature (for example the Claude Code CLI). A
+	// launcher must never echo a temperature it did not control.
+	TemperatureUnsupportedReason string `yaml:"temperature_unsupported_reason,omitempty" json:"temperatureUnsupportedReason,omitempty"`
+	Seed                         *int64 `yaml:"seed,omitempty" json:"seed,omitempty"`
+	SeedUnsupportedReason        string `yaml:"seed_unsupported_reason,omitempty" json:"seedUnsupportedReason,omitempty"`
+	ContextBudgetTokens          int    `yaml:"context_budget_tokens" json:"contextBudgetTokens"`
 }
 
 type Budget struct {
@@ -273,7 +277,10 @@ func (m Model) validate() error {
 	if strings.TrimSpace(m.Identifier) == "" || strings.TrimSpace(m.Build) == "" {
 		return errors.New("model identifier and build are required")
 	}
-	if math.IsNaN(m.Temperature) || math.IsInf(m.Temperature, 0) || m.Temperature < 0 || m.Temperature > 2 {
+	if (m.Temperature == nil) == (strings.TrimSpace(m.TemperatureUnsupportedReason) == "") {
+		return errors.New("model must provide either a temperature or a temperature_unsupported_reason")
+	}
+	if t := m.Temperature; t != nil && (math.IsNaN(*t) || math.IsInf(*t, 0) || *t < 0 || *t > 2) {
 		return errors.New("model temperature must be finite and between 0 and 2")
 	}
 	if (m.Seed == nil) == (strings.TrimSpace(m.SeedUnsupportedReason) == "") {

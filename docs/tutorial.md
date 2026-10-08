@@ -316,7 +316,7 @@ It isn't a suggestion in a prompt — planning, changing, verification, and comp
 evidence to state a falsifiable hypothesis.
 You still cannot declare a normal completion until the canonical assessment is `verified`, and
 scope drift remains visible. The result is **auditable by construction** through `cortex show`,
-`cortex timeline`, Studio, or the case files in the central store.
+`cortex timeline`, or the case files in the central store.
 
 ## Where to go next
 

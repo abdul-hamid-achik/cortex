@@ -5,7 +5,22 @@ All notable changes to Cortex are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-08
+
 ### Added
+- Cortex Deck (`desktop/`): an experimental, clone-only Electron operator console over the CLI,
+  MCP server, and case store.
+- Owner path contract: `open/start --allow-path <pattern>` (MCP `allowedPaths`) registers immutable
+  `path.Match` patterns. Plans may not declare files outside them, verify refuses changes outside
+  them (no acknowledgment widens the contract), and status/handoff show the contract and any
+  `outsideAllowedPaths`.
+- Trajectory harness: `temperature_unsupported_reason` lets a manifest state that the agent
+  runtime cannot set sampling temperature (mirrors `seed_unsupported_reason`), and
+  `cmd/cortex-trajectory-claude` is a reference launcher that runs isolated `raw_tools` and
+  `cortex` arms through the Claude Code CLI (`--bare`, allowlisted env, shimmed `PATH`).
+- Quick Start "Connect your agent": `claude mcp add` registration and the recommended
+  `CLAUDE.md`/`AGENTS.md` instruction block; the trajectory launcher can append the same block in
+  the cortex arm (`--cortex-instructions`) and logs MCP server status and per-tool call counts.
 - `cortex init` detects Taskfile, Makefile, and justfile runners: a `test` task takes precedence
   over language markers (`task test`, `make test`, `just test`), and `build`/`lint` tasks yield
   `build`/`lint` verifiers. Detection is a bounded read-only text scan (Taskfile parsed as YAML);
@@ -17,7 +32,6 @@ All notable changes to Cortex are documented here. The format follows
   actor has acquired it; verify's expired-lease error names that renewal.
 - Plan rejections (missing disproof, missing boundary, unknown verifier) carry a retry action that
   rebuilds the CLI command; unknown verifiers list the valid requirements and offer `cortex init`.
-
 - Process acceptance criteria (`open --process-criterion`, MCP `kind: "process"`) for rules about
   how work was done, such as "no commit is made". `verify --attest id=ev_…[|note]` (MCP
   `attestations`) records an `agent_attestation` receipt that must cite evidence from the case,
@@ -37,6 +51,10 @@ All notable changes to Cortex are documented here. The format follows
   passed or failed receipt keeps its binding.
 - Remember acknowledgment messages name the CLI flags, and structured remember actions' commands
   include the matching flag. `cortex serve --help` reports the real 23/30 tool counts.
+
+### Removed
+- The stale `specs/studio.yml` E2E spec and remaining Studio references in the docs (Studio was
+  removed earlier; the FAQ now points at the CLI and Cortex Deck).
 
 ### Fixed
 - `verify --from-plan` no longer binds every acceptance criterion to the first planned verifier

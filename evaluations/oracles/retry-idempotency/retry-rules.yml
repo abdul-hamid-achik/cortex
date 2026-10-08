@@ -1,0 +1,99 @@
+version: 1
+name: trajectory-retry-idempotency-rules
+intent: |
+    Only idempotent methods are retried (GET, HEAD, OPTIONS, TRACE, PUT, DELETE), whatever the
+    failure. When a retried response carries a Retry-After value in seconds, the wait before the next
+    attempt is the larger of that value and the normal backoff; a missing, negative, or unparseable
+    value means the normal backoff. Every output line is prefixed with the case it belongs to.
+target:
+    cmd:
+        - "/bin/sh"
+        - "-c"
+        - |
+          B=$(mktemp -d)/retrysim
+          go build -o "$B" ./cmd/retrysim || exit 1
+          t() { l=$1; shift; "$B" "$@" | sed "s/^/$l /"; }
+          t post -method POST -script 503,200
+          t patch -method PATCH -script 502,200
+          t post429 -method POST -script 429/2,200
+          t posterr -method POST -script err,200
+          t put -method PUT -script 503,200
+          t del -method DELETE -script 504,504,200
+          t geterr -method GET -script err,200
+          t ra -method GET -script 503/3,200
+          t raput -method PUT -script 429/2,429/2,429/2,429/2
+          t zero -method GET -script 503/0,503,200
+          t bad -method GET -script 503/soon,503/-5,200
+          echo FINISHED
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 50
+    profile: xterm-256color
+steps:
+    - wait:
+        screen:
+            contains: "FINISHED"
+        timeoutMs: 90000
+    - snapshot: retries
+outcomes:
+    - id: post_is_not_retried
+      description: a POST that gets a retryable status is sent exactly once
+      verify:
+        screen:
+            contains: "post final: 503 attempts=1 waited=0ms"
+    - id: patch_is_not_retried
+      description: a PATCH that gets a retryable status is sent exactly once
+      verify:
+        screen:
+            contains: "patch final: 502 attempts=1 waited=0ms"
+    - id: post_ignores_retry_after
+      description: a POST rejected with 429 and Retry-After is still sent exactly once
+      verify:
+        screen:
+            contains: "post429 final: 429 attempts=1 waited=0ms"
+    - id: post_transport_error_is_not_retried
+      description: a POST that fails at the transport level is sent exactly once
+      verify:
+        screen:
+            contains: "posterr final: error attempts=1 waited=0ms"
+    - id: put_is_still_retried
+      description: PUT is idempotent and keeps its normal retry and backoff
+      verify:
+        screen:
+            contains: "put final: 200 attempts=2 waited=100ms"
+    - id: delete_is_still_retried
+      description: DELETE is idempotent and backs off 100ms then 200ms
+      verify:
+        screen:
+            contains: "del final: 200 attempts=3 waited=300ms"
+    - id: get_transport_error_is_retried
+      description: a GET that fails at the transport level is retried without crashing on the missing response
+      verify:
+        screen:
+            contains: "geterr final: 200 attempts=2 waited=100ms"
+    - id: retry_after_sets_wait
+      description: a Retry-After of three seconds makes the next attempt wait 3000ms
+      verify:
+        screen:
+            contains: "ra wait 3000ms"
+    - id: retry_after_total
+      description: the total wait reflects the Retry-After value
+      verify:
+        screen:
+            contains: "ra final: 200 attempts=2 waited=3000ms"
+    - id: retry_after_applies_to_every_attempt
+      description: each retryable response with Retry-After 2 waits 2000ms on idempotent methods
+      verify:
+        screen:
+            contains: "raput final: 429 attempts=4 waited=6000ms"
+    - id: retry_after_zero_keeps_backoff
+      description: a Retry-After of zero never shortens the normal backoff
+      verify:
+        screen:
+            contains: "zero final: 200 attempts=3 waited=300ms"
+    - id: bad_retry_after_falls_back
+      description: unparseable and negative Retry-After values fall back to the normal backoff
+      verify:
+        screen:
+            contains: "bad final: 200 attempts=3 waited=300ms"

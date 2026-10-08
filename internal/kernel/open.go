@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -45,6 +46,10 @@ func (k *Kernel) OpenTask(ctx context.Context, in OpenInput) (domain.Envelope, e
 	if err != nil {
 		return errEnvelope("", err.Error()), nil
 	}
+	allowedPaths, err := normalizeAllowedPaths(in.AllowedPaths)
+	if err != nil {
+		return errEnvelope("", err.Error()), nil
+	}
 	_, parentTaskID, key, err := k.normalizeTaskMetadata(in.Actor, in.ParentTaskID, in.IdempotencyKey)
 	if err != nil {
 		return errEnvelope("", err.Error()), nil
@@ -72,19 +77,20 @@ func (k *Kernel) OpenTask(ctx context.Context, in OpenInput) (domain.Envelope, e
 	in.Risk = risk
 	in.Surfaces = surfaces
 	in.AcceptanceCriteria = criteria
+	in.AllowedPaths = allowedPaths
 	identity := openCoordinationIdentity(k.cfg.Workspace, in.Goal, mode, branch, parentTaskID, key)
 	var result domain.Envelope
 	err = k.store.WithCoordinationLock(identity, func() error {
 		// Re-scan while holding the identity lock. This closes the classic
 		// check-then-create race across the per-call Store instances used by MCP.
-		candidates, candidateErr := k.openCandidates(in.Goal, mode, branch, parentTaskID, key, criteria)
+		candidates, candidateErr := k.openCandidates(in.Goal, mode, branch, parentTaskID, key, criteria, allowedPaths)
 		if candidateErr != nil {
 			return candidateErr
 		}
 		if len(candidates) > 0 {
 			c := candidates[0]
-			if key != "" && !acceptanceCriteriaEqual(c.AcceptanceCriteria, criteria) {
-				result = errEnvelope(c.ID, "idempotency key already identifies a task with different acceptance criteria")
+			if key != "" && (!acceptanceCriteriaEqual(c.AcceptanceCriteria, criteria) || !slices.Equal(c.AllowedPaths, allowedPaths)) {
+				result = errEnvelope(c.ID, "idempotency key already identifies a task with different acceptance criteria or allowed paths")
 				return nil
 			}
 			if c.Status == domain.PhaseNew || c.Status == domain.PhaseOrienting {
@@ -139,7 +145,7 @@ func openCoordinationIdentity(workspace, goal string, mode domain.Mode, branch, 
 	return "open-goal\x00" + workspace + "\x00" + branch + "\x00" + string(mode) + "\x00" + parentTaskID + "\x00" + normalizeGoal(goal)
 }
 
-func (k *Kernel) openCandidates(goal string, mode domain.Mode, branch, parentTaskID, key string, criteria []domain.AcceptanceCriterion) ([]*domain.CaseFile, error) {
+func (k *Kernel) openCandidates(goal string, mode domain.Mode, branch, parentTaskID, key string, criteria []domain.AcceptanceCriterion, allowedPaths []string) ([]*domain.CaseFile, error) {
 	ids, err := k.store.List()
 	if err != nil {
 		return nil, err
@@ -157,7 +163,7 @@ func (k *Kernel) openCandidates(goal string, mode domain.Mode, branch, parentTas
 			}
 			continue
 		}
-		if !acceptanceCriteriaEqual(c.AcceptanceCriteria, criteria) {
+		if !acceptanceCriteriaEqual(c.AcceptanceCriteria, criteria) || !slices.Equal(c.AllowedPaths, allowedPaths) {
 			continue
 		}
 		if c.Status.IsTerminal() || c.Mode != mode || c.ParentTaskID != parentTaskID || normalizeGoal(c.Goal) != normalizedGoal {

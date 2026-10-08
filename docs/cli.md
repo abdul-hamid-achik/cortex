@@ -51,6 +51,7 @@ success rule; the same id and exact statement must later appear in a typed verif
 | `--idempotency-key` | — | stable, non-secret retry identity |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
 | `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
+| `--allow-path` (repeatable) | — | immutable owner path contract (`path.Match` pattern, e.g. `internal/auth/*.go`); plans may not declare files outside it and verify refuses changes outside it — no acknowledgment flag widens it |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 `mode=review` biases later `investigate` rounds toward git changed-files + `codemap review`
@@ -73,6 +74,7 @@ cortex start "Fix post-login checkout redirect" --surface code --surface browser
 | `--surface` (repeatable) | `code` | `code`, `browser`, `terminal`, `artifact`, `secret` |
 | `--criterion` (repeatable) | — | immutable `id=statement` success rule; at most 64 |
 | `--process-criterion` (repeatable) | — | immutable `id=statement` process rule (e.g. no commit made); satisfiable by an evidence-backed `verify --attest` |
+| `--allow-path` (repeatable) | — | immutable owner path contract (`path.Match` pattern, e.g. `internal/auth/*.go`); plans may not declare files outside it and verify refuses changes outside it — no acknowledgment flag widens it |
 | `--seed` (repeatable) | — | note/packet path to stamp into orientation evidence (≤8 × 16 KiB) |
 
 ### `cortex investigate <taskId> <question>`
@@ -314,7 +316,7 @@ health plus discovery index readiness (`index` / `fixCommand` for vecgrep and co
 bounded `claimProofs` manifest with exact total/truncation metadata, receipt/batch identity,
 binding, revision/diff digest, and non-sensitive evidence references.
 
-`cortex show` and Studio use one task-locked composite projection. They retain the 200 newest
+`cortex show` uses one task-locked composite projection. It retains the 200 newest
 evidence, command, and phase ledger records and return exact `evidenceTotal` / `timelineTotal`
 counts plus a truncation warning; use `read-evidence` or `timeline` for older detail.
 
@@ -457,7 +459,7 @@ forgotten or stuck work. Add `--archived` to list retired sessions instead of ac
 ### `cortex archive <taskId>` / `cortex unarchive <taskId>`
 
 Retire a finished session — **move** it (a *terminal* session: complete / abandoned / blocked) out of
-the active tree into `$XDG_STATE_HOME/cortex/archive/`, so `sessions` / `overview` / `studio` stay
+the active tree into `$XDG_STATE_HOME/cortex/archive/`, so `sessions` / `overview` stay
 focused on live work as history accumulates. The data is preserved and reversible with `unarchive`;
 **nothing is deleted**, and in-flight sessions are refused. View the archive with
 `cortex sessions --archived`.

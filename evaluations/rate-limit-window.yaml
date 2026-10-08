@@ -1,0 +1,62 @@
+schema_version: 1
+id: rate-limit-window
+repository:
+  fixture: testrepos/rate-limit-window
+  digest: sha256:b12c260f4c9a4316bfb209dc47d596255da9585cf93afe8fd975269cefb5e056
+goal: >-
+  Our sliding-window rate limiter rejects requests that arrive exactly one window after the
+  request that filled its quota. For example `go run ./cmd/ratelimit -limit 1 -window 1000 0 1000`
+  denies the request at t=1000 (reporting `retry-after=0`, i.e. "wait zero milliseconds" while
+  still refusing), although the request at t=0 has by then left the window. An event stamped at
+  time T counts against the limit for the half-open span [T, T+window): it stops counting at
+  exactly T+window. Every limiter operation must agree on this boundary, including the
+  remaining-capacity query (`?TIMESTAMP` in the command), which must report the freed capacity at
+  the boundary just as the next request would be admitted.
+  The fix belongs in internal/clock/clock.go and internal/limit/limiter.go; add tests anywhere.
+acceptance:
+  - id: boundary_request_admitted
+    statement: A request made exactly one window after an earlier request is admitted once that earlier request has aged out, and a rejection never reports a zero wait
+  - id: remaining_agrees_at_boundary
+    statement: The remaining-capacity query at the exact window boundary reports the capacity that the next admission will use
+  - id: inside_window_still_limited
+    statement: Requests made strictly inside the window are still rejected with the exact wait until the oldest request expires
+surfaces: [code, terminal]
+allowed_changes:
+  - internal/clock/clock.go
+  - internal/limit/limiter.go
+  # Adding or editing tests is ordinary engineering, not scope drift. The hidden glyph
+  # oracle covers every criterion, so weakened visible tests cannot fake success.
+  - "*_test.go"
+  - "*/*_test.go"
+  - "*/*/*_test.go"
+model:
+  identifier: claude-haiku-5-5
+  build: claude-code-cli
+  temperature_unsupported_reason: claude code cli exposes no temperature flag
+  seed_unsupported_reason: claude code cli exposes no seed flag
+  context_budget_tokens: 200000
+arms:
+  - raw_tools
+  - cortex
+budget:
+  max_tool_calls: 40
+  max_wall_time: 10m
+  max_oracle_wall_time: 5m
+  max_trace_bytes: 16777216
+  max_estimated_cost_micros: 300000
+oracle:
+  protected_paths:
+    - cmd/ratelimit/main.go
+    - internal/limit/bucket.go
+    - go.mod
+    - cortex.yaml
+  commands:
+    - id: go_tests
+      argv: [go, test, ./...]
+      claim_ids: [inside_window_still_limited]
+      timeout: 2m
+  glyphrun_specs:
+    - id: boundary_flow
+      path: oracles/rate-limit-window/boundary.yml
+      claim_ids: [boundary_request_admitted, remaining_agrees_at_boundary, inside_window_still_limited]
+      timeout: 2m

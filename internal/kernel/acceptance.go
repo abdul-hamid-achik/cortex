@@ -276,3 +276,37 @@ func compactClaimProofText(value string, limit int) (string, bool) {
 	bounded, _ := boundedUTF8(value, limit)
 	return bounded, true
 }
+
+// normalizeAllowedPaths canonicalizes the owner's path contract (trimmed,
+// slash-separated, sorted, deduplicated) and validates it. Order is
+// presentation detail, so retries with a reordered list match.
+func normalizeAllowedPaths(input []string) ([]string, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(input))
+	for _, raw := range input {
+		out = append(out, strings.ReplaceAll(strings.TrimSpace(raw), `\`, "/"))
+	}
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if err := domain.ValidateAllowedPaths(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// filesOutsideAllowedPaths lists the files an owner path contract does not
+// allow. An empty contract allows everything.
+func filesOutsideAllowedPaths(patterns, files []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	var outside []string
+	for _, file := range files {
+		if !domain.PathAllowed(patterns, file) {
+			outside = append(outside, file)
+		}
+	}
+	return outside
+}
